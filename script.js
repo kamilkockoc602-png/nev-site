@@ -175,7 +175,11 @@ function correctDestinationName(name) {
   return correctDestinationNameWithPool(name, KNOWN_DESTINATIONS);
 }
 
-function correctDestinationNameWithPool(name, destinationPool = KNOWN_DESTINATIONS) {
+function correctDestinationNameWithPool(
+  name,
+  destinationPool = KNOWN_DESTINATIONS,
+  forcePoolMatch = false
+) {
   const raw = String(name || "").trim();
   if (!raw) {
     return raw;
@@ -203,6 +207,10 @@ function correctDestinationNameWithPool(name, destinationPool = KNOWN_DESTINATIO
   const rawLen = slugTr(raw).length;
   const maxAllowed = rawLen <= 5 ? 1 : 2;
   if (best && bestDistance <= maxAllowed) {
+    return toTurkishTitleCase(best);
+  }
+
+  if (forcePoolMatch && best) {
     return toTurkishTitleCase(best);
   }
 
@@ -260,17 +268,61 @@ function normalizeBusinessPrice(price) {
     n = n / 10;
   }
 
-  // OCR bazen sifir yutar: 16 -> 1600, 90 -> 900
-  while (n > 0 && n < 300) {
+  // OCR bazen sifir yutar: 16 -> 160, 90 -> 900
+  while (n > 0 && n < 100) {
     n = n * 10;
   }
 
-  if (n < 200 || n > 3500) {
+  if (n < 100 || n > 5000) {
     return "";
   }
 
-  const rounded = Math.round(n / 100) * 100;
-  return String(rounded);
+  return String(Math.round(n));
+}
+
+function parseOcrPriceToken(rawToken) {
+  let token = String(rawToken || "").trim();
+  if (!token) {
+    return "";
+  }
+
+  token = token.replace(/[^0-9,.-]/g, "");
+  if (!token) {
+    return "";
+  }
+
+  let normalized = token;
+  const hasComma = normalized.includes(",");
+  const hasDot = normalized.includes(".");
+
+  if (hasComma && hasDot) {
+    const lastComma = normalized.lastIndexOf(",");
+    const lastDot = normalized.lastIndexOf(".");
+    if (lastComma > lastDot) {
+      normalized = normalized.replace(/\./g, "").replace(/,/g, ".");
+    } else {
+      normalized = normalized.replace(/,/g, "");
+    }
+  } else if (hasComma) {
+    const parts = normalized.split(",");
+    if (parts.length === 2 && parts[1].length === 3) {
+      normalized = parts.join("");
+    } else {
+      normalized = normalized.replace(/,/g, ".");
+    }
+  } else if (hasDot) {
+    const parts = normalized.split(".");
+    if (parts.length === 2 && parts[1].length === 3) {
+      normalized = parts.join("");
+    }
+  }
+
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed)) {
+    return "";
+  }
+
+  return normalizeBusinessPrice(parsed);
 }
 
 function buildDestinationSlugSet(destinationPool = KNOWN_DESTINATIONS) {
@@ -346,7 +398,7 @@ function findDestinationInLine(line, destinationPool = KNOWN_DESTINATIONS) {
   }
 
   const beforeDigit = String(line).split(/\d/)[0] || "";
-  return correctDestinationNameWithPool(normalizeCity(beforeDigit), pool);
+  return correctDestinationNameWithPool(normalizeCity(beforeDigit), pool, true);
 }
 
 function findKnownDestinationInLine(line, destinationPool = KNOWN_DESTINATIONS) {
@@ -378,10 +430,10 @@ function isKnownDestinationName(name, destinationSlugSet = KNOWN_DESTINATION_SLU
 }
 
 function extractPriceCandidates(line) {
-  const matches = String(line).match(/\d{2,6}/g) || [];
+  const matches = String(line).match(/(?:\d{1,3}(?:[.,]\d{3})+|\d+)(?:[.,]\d{2})?/g) || [];
   const out = [];
   for (const m of matches) {
-    const price = normalizeBusinessPrice(normalizePrice(m));
+    const price = parseOcrPriceToken(m);
     if (price) {
       out.push(price);
     }
@@ -605,7 +657,11 @@ function applyReviewedRowsToOutput() {
 
     const rawDestination = tr.querySelector(".ocr-destination")?.value || "";
     const rawPrice = tr.querySelector(".ocr-price")?.value || "";
-    const destination = correctDestinationNameWithPool(normalizeCity(rawDestination), destinationPool);
+    const destination = correctDestinationNameWithPool(
+      normalizeCity(rawDestination),
+      destinationPool,
+      true
+    );
     const price = normalizeBusinessPrice(normalizePrice(rawPrice));
 
     if (!isLikelyRow(destination, price)) {
@@ -680,7 +736,13 @@ function parseA4SegmentWords(segmentWords, destinationPool = KNOWN_DESTINATIONS)
   }
 
   const text = segmentWords.map((w) => w.text).join(" ");
-  const destination = findKnownDestinationInLine(text, destinationPool);
+  const destination =
+    findKnownDestinationInLine(text, destinationPool) ||
+    correctDestinationNameWithPool(
+      normalizeCity(String(text).split(/\d/)[0] || ""),
+      destinationPool,
+      true
+    );
   if (!destination) {
     return null;
   }
@@ -947,7 +1009,6 @@ async function runOcrAndBuildTable() {
       ...pass3.pairs,
     ];
     const pairs = aggregateReliablePairs(mergedPairs, destinationSlugSet, destinationPool);
-    const suspiciousRows = buildSuspiciousRows(mergedPairs, pairs, destinationSlugSet);
 
     if (!pairs.length) {
       setOcrStatus("Satirlar ayrisamadi. Daha net ve dik cekim bir fotograf deneyin.", true);
@@ -957,10 +1018,10 @@ async function runOcrAndBuildTable() {
     state.lastOcrOrigin = origin;
     state.lastOcrDestinationPool = destinationPool;
     state.lastOcrPairs = pairs;
-    state.lastSuspiciousRows = suspiciousRows;
+    state.lastSuspiciousRows = [];
     dom.ocrOutput.value = toTsv(origin, pairs);
-    renderSuspiciousRows(suspiciousRows);
-    setOcrStatus(`${pairs.length} satir olusturuldu. Supheli satirlari duzenleyebilirsin.`);
+    renderSuspiciousRows([]);
+    setOcrStatus(`${pairs.length} satir otomatik duzeltildi ve TSV olusturuldu.`);
   } catch {
     setOcrStatus("Tarama sirasinda hata olustu.", true);
   }
