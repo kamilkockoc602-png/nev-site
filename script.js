@@ -42,7 +42,6 @@ const dom = {
   themeToggleBtn: document.getElementById("themeToggleBtn"),
   themeLabel: document.getElementById("themeLabel"),
   ocrOriginInput: document.getElementById("ocrOriginInput"),
-  ocrModeSelect: document.getElementById("ocrModeSelect"),
   ocrImageInput: document.getElementById("ocrImageInput"),
   ocrScanBtn: document.getElementById("ocrScanBtn"),
   ocrCopyBtn: document.getElementById("ocrCopyBtn"),
@@ -292,6 +291,23 @@ function extractPriceCandidates(line) {
   return out;
 }
 
+function parseLineToPair(line) {
+  const cleaned = String(line || "").replace(/[|]/g, " ").replace(/\s+/g, " ").trim();
+  if (!cleaned) {
+    return null;
+  }
+
+  const destination = findDestinationInLine(cleaned);
+  const priceCandidates = extractPriceCandidates(cleaned);
+  const price = priceCandidates[priceCandidates.length - 1] || "";
+
+  if (!isLikelyRow(destination, price)) {
+    return null;
+  }
+
+  return { destination, price };
+}
+
 function parseDestinationsAndPrices(text) {
   const lines = String(text || "")
     .split(/\r?\n/)
@@ -301,20 +317,10 @@ function parseDestinationsAndPrices(text) {
   const pairs = [];
 
   for (const line of lines) {
-    const cleaned = line.replace(/[|]/g, " ").replace(/\s+/g, " ").trim();
-    if (!cleaned) {
-      continue;
+    const pair = parseLineToPair(line);
+    if (pair) {
+      pairs.push(pair);
     }
-
-    const destination = findDestinationInLine(cleaned);
-    const priceCandidates = extractPriceCandidates(cleaned);
-    const price = priceCandidates[0] || "";
-
-    if (!isLikelyRow(destination, price)) {
-      continue;
-    }
-
-    pairs.push({ destination, price });
   }
 
   const seen = new Set();
@@ -453,6 +459,55 @@ function parseA4FromOcrData(ocrData) {
   return dedupePairs(pairs);
 }
 
+function parseStructuredRowsFromOcrData(ocrData) {
+  const rows = groupWordsByRow(ocrData?.words || []);
+  if (!rows.length) {
+    return [];
+  }
+
+  const pairs = [];
+  const gapThreshold = 48;
+
+  for (const row of rows) {
+    if (!row.words || !row.words.length) {
+      continue;
+    }
+
+    // Ayni satirdaki buyuk yatay bosluklar farkli kolonlar oldugunu gosterir.
+    const segments = [];
+    let current = [row.words[0]];
+
+    for (let i = 1; i < row.words.length; i += 1) {
+      const prev = row.words[i - 1];
+      const next = row.words[i];
+      const gap = next.x0 - prev.x1;
+      if (gap > gapThreshold) {
+        segments.push(current);
+        current = [next];
+      } else {
+        current.push(next);
+      }
+    }
+    segments.push(current);
+
+    for (const segment of segments) {
+      const text = segment.map((w) => w.text).join(" ");
+      const pair = parseLineToPair(text);
+      if (pair) {
+        pairs.push(pair);
+      }
+    }
+
+    const wholeRowText = row.words.map((w) => w.text).join(" ");
+    const rowPair = parseLineToPair(wholeRowText);
+    if (rowPair) {
+      pairs.push(rowPair);
+    }
+  }
+
+  return dedupePairs(pairs);
+}
+
 function collectTextBlocks(ocrData) {
   const blocks = [];
   if (ocrData?.text) {
@@ -537,7 +592,6 @@ async function runOcrAndBuildTable() {
 
   const file = dom.ocrImageInput.files && dom.ocrImageInput.files[0];
   const origin = dom.ocrOriginInput.value.trim() || "Patnos";
-  const mode = dom.ocrModeSelect?.value || "normal";
 
   if (!file) {
     setOcrStatus("Lutfen once bir fotograf sec.", true);
@@ -601,29 +655,18 @@ async function runOcrAndBuildTable() {
     const pass2 = await runPass(processedImage, "Tarama 2/3", 11);
     const pass3 = await runPass(file, "Tarama 3/3", 6);
 
-    let pairs = [];
-    if (mode === "a4") {
-      const a4Pairs = [
-        ...parseA4FromOcrData(pass1.ocrData),
-        ...parseA4FromOcrData(pass2.ocrData),
-        ...parseA4FromOcrData(pass3.ocrData),
-        ...pass1.pairs,
-        ...pass2.pairs,
-        ...pass3.pairs,
-      ];
-      pairs = dedupePairs(a4Pairs);
-    } else {
-      const byKey = new Map();
-      [pass1.pairs, pass2.pairs, pass3.pairs].forEach((list) => {
-        list.forEach((item) => {
-          const key = slugTr(item.destination);
-          if (!byKey.has(key)) {
-            byKey.set(key, item);
-          }
-        });
-      });
-      pairs = Array.from(byKey.values());
-    }
+    const mergedPairs = [
+      ...parseStructuredRowsFromOcrData(pass1.ocrData),
+      ...parseStructuredRowsFromOcrData(pass2.ocrData),
+      ...parseStructuredRowsFromOcrData(pass3.ocrData),
+      ...parseA4FromOcrData(pass1.ocrData),
+      ...parseA4FromOcrData(pass2.ocrData),
+      ...parseA4FromOcrData(pass3.ocrData),
+      ...pass1.pairs,
+      ...pass2.pairs,
+      ...pass3.pairs,
+    ];
+    const pairs = dedupePairs(mergedPairs);
 
     if (!pairs.length) {
       setOcrStatus("Satirlar ayrisamadi. Daha net ve dik cekim bir fotograf deneyin.", true);
