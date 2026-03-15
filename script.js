@@ -30,7 +30,6 @@ const dom = {
   loadingOverlay: document.getElementById("loadingOverlay"),
   routeTableBody: document.getElementById("routeTableBody"),
   tariffSearchInput: document.getElementById("tariffSearchInput"),
-  tariffSearchBtn: document.getElementById("tariffSearchBtn"),
   tariffResetBtn: document.getElementById("tariffResetBtn"),
   tariffLoadMoreBtn: document.getElementById("tariffLoadMoreBtn"),
   tariffSummary: document.getElementById("tariffSummary"),
@@ -67,6 +66,7 @@ const state = {
   tariffOffset: 0,
   tariffQuery: "",
   tariffPageSize: 50,
+  tariffSearchTimer: null,
   notifications: [],
   notifPollTimer: null,
   theme: localStorage.getItem(THEME_KEY) || "light",
@@ -1509,18 +1509,33 @@ dom.themeToggleBtn.addEventListener("click", () => {
   toggleTheme();
 });
 
-if (dom.tariffSearchBtn) {
-  dom.tariffSearchBtn.addEventListener("click", async () => {
-    await refreshTariffData(dom.tariffSearchInput?.value || "", false);
-  });
+function scheduleTariffSearch() {
+  if (!dom.tariffSearchInput) {
+    return;
+  }
+
+  if (state.tariffSearchTimer) {
+    clearTimeout(state.tariffSearchTimer);
+  }
+
+  state.tariffSearchTimer = setTimeout(() => {
+    refreshTariffData(dom.tariffSearchInput.value || "", false).catch(() => null);
+  }, 220);
 }
 
 if (dom.tariffSearchInput) {
+  dom.tariffSearchInput.addEventListener("input", () => {
+    scheduleTariffSearch();
+  });
+
   dom.tariffSearchInput.addEventListener("keydown", async (event) => {
     if (event.key !== "Enter") {
       return;
     }
     event.preventDefault();
+    if (state.tariffSearchTimer) {
+      clearTimeout(state.tariffSearchTimer);
+    }
     await refreshTariffData(dom.tariffSearchInput.value || "", false);
   });
 }
