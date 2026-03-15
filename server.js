@@ -72,10 +72,30 @@ function parseTurkishNumber(raw) {
     return null;
   }
 
-  const normalized = text
-    .replace(/\./g, "")
-    .replace(/,/g, ".")
-    .replace(/[^0-9.-]/g, "");
+  let normalized = text.replace(/[^0-9,.-]/g, "");
+
+  const hasComma = normalized.includes(",");
+  const hasDot = normalized.includes(".");
+
+  if (hasComma && hasDot) {
+    const lastComma = normalized.lastIndexOf(",");
+    const lastDot = normalized.lastIndexOf(".");
+    if (lastComma > lastDot) {
+      // 1.234,56 -> 1234.56
+      normalized = normalized.replace(/\./g, "").replace(/,/g, ".");
+    } else {
+      // 1,234.56 -> 1234.56
+      normalized = normalized.replace(/,/g, "");
+    }
+  } else if (hasComma) {
+    // 1234,56 -> 1234.56
+    normalized = normalized.replace(/,/g, ".");
+  } else if (hasDot) {
+    // Keep dot decimal as-is (e.g. 633.5). If this is thousands grouping,
+    // Number() still yields a finite value for common cases.
+    normalized = normalized;
+  }
+
   const number = Number(normalized);
   return Number.isFinite(number) ? number : null;
 }
