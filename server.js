@@ -20,20 +20,10 @@ const UPDATE_INTERVAL_MS = 10 * 60 * 1000;
 const PRICE_SOURCE_URL = process.env.PRICE_SOURCE_URL || "";
 const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || "admin").trim();
 const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || "1234").trim();
-const TARIFF_CSV_PATH = path.join(
-  __dirname,
-  "tariffs",
-  "BakanlikFiyatTarifesi_15.09.2025.csv"
-);
-const SUPPLEMENTARY_TARIFF_CSV_PATH = path.join(
-  __dirname,
-  "tariffs",
-  "KilisEkTarife.csv"
-);
 const PRIMARY_TARIFF_JSON_PATH = path.join(
   __dirname,
   "tariffs",
-  "bakanlik_data_guncel_eksikler_eklendi.json"
+  "bakanlik_yeni_guzergahlar_15.09.2025.json"
 );
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -165,105 +155,14 @@ function loadTariffRowsFromJson(jsonPath) {
 }
 
 function loadTariffRowsFromCsv() {
-  if (fs.existsSync(PRIMARY_TARIFF_JSON_PATH)) {
-    const rows = loadTariffRowsFromJson(PRIMARY_TARIFF_JSON_PATH);
-    rows.sort((a, b) => a.route.localeCompare(b.route, "tr"));
-    console.log(`Ana tarife JSON yüklendi: ${rows.length} satir`);
-    return rows;
-  }
-
-  if (!fs.existsSync(TARIFF_CSV_PATH)) {
-    console.warn(`Tarife CSV bulunamadi: ${TARIFF_CSV_PATH}`);
+  if (!fs.existsSync(PRIMARY_TARIFF_JSON_PATH)) {
+    console.warn(`Ana tarife JSON bulunamadi: ${PRIMARY_TARIFF_JSON_PATH}`);
     return [];
   }
 
-  const content = fs.readFileSync(TARIFF_CSV_PATH, "utf8").replace(/^\uFEFF/, "");
-  const lines = content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (lines.length < 2) {
-    return [];
-  }
-
-  const headers = lines[0].split(";").map((h) => h.trim());
-  const routeIndex = findColumnIndex(headers, ["kalkis-varis", "kalkis varis", "rota"]);
-  const tariffPriceIndex = findColumnIndex(headers, ["tarife fiyati", "tarife fiyat"]);
-  const discountedIndex = findColumnIndex(headers, ["tarife indirimli", "indirimli"]);
-
-  if (routeIndex < 0 || tariffPriceIndex < 0 || discountedIndex < 0) {
-    console.warn("Tarife CSV kolonlari beklenen formatta degil.");
-    return [];
-  }
-
-  const rows = [];
-  for (let i = 1; i < lines.length; i += 1) {
-    const cols = lines[i].split(";");
-    const routeRaw = String(cols[routeIndex] || "").trim();
-    const tariffPrice = parseTurkishNumber(cols[tariffPriceIndex]);
-    const discountedPrice = parseTurkishNumber(cols[discountedIndex]);
-    if (!routeRaw) {
-      continue;
-    }
-    const route = routeRaw;
-
-    rows.push({
-      route,
-      tariffPrice: tariffPrice == null ? 0 : tariffPrice,
-      discountedPrice: discountedPrice == null ? 0 : discountedPrice,
-      routeSearch: normalizeSearchText(route),
-    });
-  }
-
+  const rows = loadTariffRowsFromJson(PRIMARY_TARIFF_JSON_PATH);
   rows.sort((a, b) => a.route.localeCompare(b.route, "tr"));
-
-  if (fs.existsSync(SUPPLEMENTARY_TARIFF_CSV_PATH)) {
-    const supContent = fs
-      .readFileSync(SUPPLEMENTARY_TARIFF_CSV_PATH, "utf8")
-      .replace(/^\uFEFF/, "");
-    const supLines = supContent
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
-
-    const existing = new Set(rows.map((item) => normalizeSearchText(item.route)));
-    let added = 0;
-
-    for (const line of supLines) {
-      const cols = line.split(";");
-      if (cols.length < 3) {
-        continue;
-      }
-
-      const origin = String(cols[0] || "").trim();
-      const destination = String(cols[1] || "").trim();
-      const price = parseTurkishNumber(cols[2]);
-      if (!origin || !destination || price == null) {
-        continue;
-      }
-
-      const route = `${origin} - ${destination}`;
-      const key = normalizeSearchText(route);
-      if (existing.has(key)) {
-        continue;
-      }
-
-      rows.push({
-        route,
-        tariffPrice: price,
-        discountedPrice: price,
-        routeSearch: key,
-      });
-      existing.add(key);
-      added += 1;
-    }
-
-    console.log(`Ek tarife CSV yüklendi: ${added} yeni satir`);
-  }
-
-  rows.sort((a, b) => a.route.localeCompare(b.route, "tr"));
-  console.log(`Tarife CSV yuklendi: ${rows.length} satir`);
+  console.log(`Ana tarife JSON yüklendi: ${rows.length} satir`);
   return rows;
 }
 
