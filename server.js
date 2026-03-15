@@ -798,14 +798,27 @@ app.get("/api/admin/logs", requireAuth, requireAdmin, (req, res) => {
 });
 
 app.get("/api/prices", requireAuth, (req, res) => {
+  const prices = getPrices();
+  const avg =
+    prices.length > 0
+      ? Math.round(
+          prices.reduce((acc, item) => acc + item.economy + item.standard + item.vip, 0) /
+            (prices.length * 3)
         )
       : 0;
 
   res.json({
     prices: prices.map((item) => ({
       route: item.route,
-  const notifications = pricingNotifications
-    .map((n) => ({
+      economy: item.economy,
+      standard: item.standard,
+      vip: item.vip,
+      updatedAt: item.updated_at,
+    })),
+    avgFare: avg,
+    totalRoutes: prices.length,
+    updateCount: Number(getMeta("price_update_count", "1")) || 1,
+    lastUpdated: getMeta("last_price_update", "-"),
   });
 });
 
@@ -1073,34 +1086,20 @@ app.post("/api/admin/prices/refresh", requireAuth, requireAdmin, async (req, res
 });
 
 app.get("/api/notifications", requireAuth, (req, res) => {
-  const priceNotifications = db
-    .prepare(
-      "SELECT id, route, message, created_at, is_read FROM price_notifications ORDER BY id DESC LIMIT 100"
-    )
-    .all();
-
   const pricingNotifications = db
     .prepare(
       "SELECT id, username, message, created_at, is_read FROM pricing_notifications ORDER BY id DESC LIMIT 100"
     )
     .all();
 
-  const notifications = [
-    ...priceNotifications.map((n) => ({
-      id: `price-${n.id}`,
-      route: n.route,
-      message: n.message,
-      time: n.created_at,
-      isRead: Boolean(n.is_read),
-    })),
-    ...pricingNotifications.map((n) => ({
+  const notifications = pricingNotifications
+    .map((n) => ({
       id: `upload-${n.id}`,
       route: n.username,
       message: n.message,
       time: n.created_at,
       isRead: Boolean(n.is_read),
-    })),
-  ]
+    }))
     .sort((a, b) => String(b.time).localeCompare(String(a.time), "tr"))
     .slice(0, 120);
 
