@@ -221,7 +221,69 @@ CREATE TABLE IF NOT EXISTS app_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pricing_uploads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  uploaded_by_user_id TEXT NOT NULL,
+  uploaded_by_username TEXT NOT NULL,
+  direction_type TEXT NOT NULL,
+  valid_from TEXT NOT NULL,
+  valid_to TEXT NOT NULL,
+  source_file_name TEXT,
+  is_open INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pricing_upload_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  upload_id INTEGER NOT NULL,
+  route TEXT NOT NULL,
+  origin TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  demand_price REAL NOT NULL,
+  tariff_price REAL NOT NULL,
+  discounted_price REAL NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (upload_id) REFERENCES pricing_uploads(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS pricing_notifications (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL,
+  message TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  is_read INTEGER NOT NULL DEFAULT 0
+);
 `);
+
+const tariffRouteMap = new Map();
+for (const row of tariffRows) {
+  const key = normalizeSearchText(row.route);
+  const existing = tariffRouteMap.get(key);
+  if (!existing) {
+    tariffRouteMap.set(key, row);
+  }
+}
+
+function findTariffByRoute(origin, destination) {
+  const direct = normalizeSearchText(`${origin} ${destination}`);
+  const reverse = normalizeSearchText(`${destination} ${origin}`);
+  return tariffRouteMap.get(direct) || tariffRouteMap.get(reverse) || null;
+}
+
+function parsePriceNumber(raw) {
+  const value = Number(raw);
+  if (Number.isFinite(value)) {
+    return value;
+  }
+  return parseTurkishNumber(raw);
+}
+
+function addPricingNotification(username, message) {
+  db.prepare(
+    "INSERT INTO pricing_notifications (username, message, created_at, is_read) VALUES (?, ?, ?, 0)"
+  ).run(username, message, nowStamp());
+}
 
 function nowStamp() {
   return new Date().toLocaleString("tr-TR");
@@ -773,6 +835,181 @@ app.get("/api/tariff-prices", requireAuth, (req, res) => {
   });
 });
 
+app.get("/api/pricing-uploads", requireAuth, (req, res) => {
+  const uploads = db
+    .prepare(
+      "SELECT id, uploaded_by_username, direction_type, valid_from, valid_to, source_file_name, is_open, created_at FROM pricing_uploads ORDER BY id DESC LIMIT 50"
+    )
+    .all();
+
+  const itemQuery = db.prepare(
+    "SELECT route, demand_price, tariff_price, discounted_price FROM pricing_upload_items WHERE upload_id = ? ORDER BY id ASC"
+  );
+
+  res.json({
+    uploads: uploads.map((upload) => ({
+      id: upload.id,
+      uploadedBy: upload.uploaded_by_username,
+      directionType: upload.direction_type,
+      validFrom: upload.valid_from,
+      validTo: upload.valid_to,
+      sourceFileName: upload.source_file_name || "",
+      isOpen: Boolean(upload.is_open),
+      createdAt: upload.created_at,
+      items: itemQuery.all(upload.id).map((item) => ({
+        route: item.route,
+        demandPrice: Number(item.demand_price),
+        tariffPrice: Number(item.tariff_price),
+        discountedPrice: Number(item.discounted_price),
+      })),
+    })),
+  });
+});
+
+app.patch("/api/pricing-uploads/:id/toggle", requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  const isOpen = Boolean(req.body?.isOpen);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ message: "Gecersiz kayit." });
+    return;
+  }
+
+  const found = db.prepare("SELECT id FROM pricing_uploads WHERE id = ?").get(id);
+  if (!found) {
+    res.status(404).json({ message: "Kayit bulunamadi." });
+    return;
+  }
+
+  db.prepare("UPDATE pricing_uploads SET is_open = ? WHERE id = ?").run(isOpen ? 1 : 0, id);
+  res.json({ ok: true });
+});
+
+app.post("/api/pricing-uploads", requireAuth, (req, res) => {
+  const directionType = String(req.body?.directionType || "").trim();
+  const validFrom = String(req.body?.validFrom || "").trim();
+  const validTo = String(req.body?.validTo || "").trim();
+  const sourceFileName = String(req.body?.sourceFileName || "").trim();
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+
+  if (!directionType || !validFrom || !validTo) {
+    res.status(400).json({ message: "Fiyat tipi ve tarih araligi zorunlu." });
+    return;
+  }
+
+  if (!rows.length) {
+    res.status(400).json({ message: "Excel verisinde satir bulunamadi." });
+    return;
+  }
+
+  const startDate = new Date(validFrom);
+  const endDate = new Date(validTo);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || startDate > endDate) {
+    res.status(400).json({ message: "Tarih araligi gecersiz." });
+    return;
+  }
+
+  const accepted = [];
+  const rejected = [];
+
+  rows.forEach((row, index) => {
+    const origin = String(row?.origin || "").trim();
+    const destination = String(row?.destination || "").trim();
+    const demandPrice = parsePriceNumber(row?.demandPrice);
+    const rowNumber = Number(row?.rowNumber) || index + 1;
+
+    if (!origin || !destination) {
+      rejected.push({ rowNumber, reason: "Nereden/Nereye bos olamaz." });
+      return;
+    }
+
+    if (!Number.isFinite(demandPrice)) {
+      rejected.push({ rowNumber, reason: "Talep fiyati sayi olmali." });
+      return;
+    }
+
+    const tariff = findTariffByRoute(origin, destination);
+    if (!tariff) {
+      rejected.push({ rowNumber, reason: `${origin} - ${destination} icin bakanlik fiyat kaydi bulunamadi.` });
+      return;
+    }
+
+    const minPrice = Math.min(Number(tariff.discountedPrice), Number(tariff.tariffPrice));
+    const maxPrice = Math.max(Number(tariff.discountedPrice), Number(tariff.tariffPrice));
+    if (demandPrice < minPrice || demandPrice > maxPrice) {
+      rejected.push({
+        rowNumber,
+        reason: `${origin} - ${destination} icin talep fiyati ${minPrice} - ${maxPrice} araliginda olmali.`,
+      });
+      return;
+    }
+
+    accepted.push({
+      route: tariff.route,
+      origin,
+      destination,
+      demandPrice,
+      tariffPrice: Number(tariff.tariffPrice),
+      discountedPrice: Number(tariff.discountedPrice),
+    });
+  });
+
+  if (!accepted.length) {
+    res.status(400).json({
+      message: "Gecerli fiyat satiri yok. Lutfen aralik kurallarini kontrol et.",
+      rejected,
+    });
+    return;
+  }
+
+  const trx = db.transaction(() => {
+    const insertUpload = db.prepare(
+      "INSERT INTO pricing_uploads (uploaded_by_user_id, uploaded_by_username, direction_type, valid_from, valid_to, source_file_name, is_open, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)"
+    );
+    const result = insertUpload.run(
+      req.auth.user.id,
+      req.auth.user.username,
+      directionType,
+      validFrom,
+      validTo,
+      sourceFileName,
+      nowStamp()
+    );
+
+    const uploadId = Number(result.lastInsertRowid);
+    const insertItem = db.prepare(
+      "INSERT INTO pricing_upload_items (upload_id, route, origin, destination, demand_price, tariff_price, discounted_price, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    );
+
+    for (const row of accepted) {
+      insertItem.run(
+        uploadId,
+        row.route,
+        row.origin,
+        row.destination,
+        row.demandPrice,
+        row.tariffPrice,
+        row.discountedPrice,
+        nowStamp()
+      );
+    }
+
+    addPricingNotification(
+      req.auth.user.username,
+      `${req.auth.user.username} fiyat yukledi (${accepted.length} satir, ${directionType}, ${validFrom} - ${validTo})`
+    );
+
+    return uploadId;
+  });
+
+  const uploadId = trx();
+  res.json({
+    ok: true,
+    uploadId,
+    acceptedCount: accepted.length,
+    rejected,
+  });
+});
+
 app.post("/api/admin/prices/refresh", requireAuth, requireAdmin, async (req, res) => {
   try {
     const result = await refreshPrices("manual");
@@ -783,26 +1020,46 @@ app.post("/api/admin/prices/refresh", requireAuth, requireAdmin, async (req, res
 });
 
 app.get("/api/notifications", requireAuth, (req, res) => {
-  const notifications = db
+  const priceNotifications = db
     .prepare(
       "SELECT id, route, message, created_at, is_read FROM price_notifications ORDER BY id DESC LIMIT 100"
     )
     .all();
 
-  res.json({
-    notifications: notifications.map((n) => ({
-      id: n.id,
+  const pricingNotifications = db
+    .prepare(
+      "SELECT id, username, message, created_at, is_read FROM pricing_notifications ORDER BY id DESC LIMIT 100"
+    )
+    .all();
+
+  const notifications = [
+    ...priceNotifications.map((n) => ({
+      id: `price-${n.id}`,
       route: n.route,
       message: n.message,
       time: n.created_at,
       isRead: Boolean(n.is_read),
     })),
-    unreadCount: notifications.filter((n) => !n.is_read).length,
+    ...pricingNotifications.map((n) => ({
+      id: `upload-${n.id}`,
+      route: n.username,
+      message: n.message,
+      time: n.created_at,
+      isRead: Boolean(n.is_read),
+    })),
+  ]
+    .sort((a, b) => String(b.time).localeCompare(String(a.time), "tr"))
+    .slice(0, 120);
+
+  res.json({
+    notifications,
+    unreadCount: notifications.filter((n) => !n.isRead).length,
   });
 });
 
 app.post("/api/notifications/read-all", requireAuth, (req, res) => {
   db.prepare("UPDATE price_notifications SET is_read = 1 WHERE is_read = 0").run();
+  db.prepare("UPDATE pricing_notifications SET is_read = 1 WHERE is_read = 0").run();
   res.json({ ok: true });
 });
 

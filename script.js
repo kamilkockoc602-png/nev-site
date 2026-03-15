@@ -4,7 +4,7 @@ const THEME_KEY = "bus_theme_v1";
 const MENUS = [
   { key: "dashboard", label: "Genel Panel" },
   { key: "routes", label: "Bakanlik Fiyati" },
-  { key: "pricing", label: "Fiyat Politikasi" },
+  { key: "pricing", label: "Fiyat Yukleme" },
   { key: "reports", label: "Raporlar" },
   { key: "ocr", label: "Foto Tarama" },
   { key: "permissions", label: "Yetki Menusu" },
@@ -33,6 +33,16 @@ const dom = {
   tariffResetBtn: document.getElementById("tariffResetBtn"),
   tariffLoadMoreBtn: document.getElementById("tariffLoadMoreBtn"),
   tariffSummary: document.getElementById("tariffSummary"),
+  pricingUploadForm: document.getElementById("pricingUploadForm"),
+  pricingDirectionType: document.getElementById("pricingDirectionType"),
+  pricingValidFrom: document.getElementById("pricingValidFrom"),
+  pricingValidTo: document.getElementById("pricingValidTo"),
+  pricingExcelFile: document.getElementById("pricingExcelFile"),
+  pricingUploadBtn: document.getElementById("pricingUploadBtn"),
+  pricingUploadMsg: document.getElementById("pricingUploadMsg"),
+  pricingRejectedWrap: document.getElementById("pricingRejectedWrap"),
+  pricingRejectedList: document.getElementById("pricingRejectedList"),
+  pricingUploadsList: document.getElementById("pricingUploadsList"),
   avgFare: document.getElementById("avgFare"),
   totalRoutes: document.getElementById("totalRoutes"),
   updateCount: document.getElementById("updateCount"),
@@ -67,6 +77,7 @@ const state = {
   tariffQuery: "",
   tariffPageSize: 50,
   tariffSearchTimer: null,
+  pricingUploads: [],
   notifications: [],
   notifPollTimer: null,
   theme: localStorage.getItem(THEME_KEY) || "light",
@@ -930,7 +941,9 @@ async function apiFetch(url, options = {}) {
     if (!contentType.includes("application/json")) {
       throw new Error("API yaniti alinamadi. Sayfayi http://localhost:3000 adresinden ac.");
     }
-    throw new Error(data.message || "Islem basarisiz.");
+    const err = new Error(data.message || "Islem basarisiz.");
+    err.payload = data;
+    throw err;
   }
 
   return data;
@@ -1074,6 +1087,236 @@ async function refreshTariffData(query = "", append = false) {
   renderTariffRows(append);
 }
 
+function normalizeUploadHeader(value) {
+  return String(value || "")
+    .toLocaleLowerCase("tr-TR")
+    .replace(/ı/g, "i")
+    .replace(/ğ/g, "g")
+    .replace(/ü/g, "u")
+    .replace(/ş/g, "s")
+    .replace(/ö/g, "o")
+    .replace(/ç/g, "c")
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function findUploadHeaderIndex(headers, aliases) {
+  const normalized = headers.map((header) => normalizeUploadHeader(header));
+  return normalized.findIndex((header) => aliases.some((alias) => header.includes(alias)));
+}
+
+function parseClientPrice(raw) {
+  const text = String(raw ?? "").trim();
+  if (!text) {
+    return NaN;
+  }
+  const normalized = text
+    .replace(/\./g, "")
+    .replace(/,/g, ".")
+    .replace(/[^0-9.-]/g, "");
+  return Number(normalized);
+}
+
+async function readPricingRowsFromFile(file) {
+  const name = String(file?.name || "").toLowerCase();
+
+  if (name.endsWith(".csv")) {
+    const text = await file.text();
+    return text
+      .replace(/^\uFEFF/, "")
+      .split(/\r?\n/)
+      .map((line) => line.split(/[;,\t]/));
+  }
+
+  if (!window.XLSX) {
+    throw new Error("Excel kutuphanesi yuklenemedi.");
+  }
+
+  const buffer = await file.arrayBuffer();
+  const wb = window.XLSX.read(buffer, { type: "array" });
+  const first = wb.SheetNames[0];
+  if (!first) {
+    throw new Error("Excel sayfasi bulunamadi.");
+  }
+
+  const ws = wb.Sheets[first];
+  return window.XLSX.utils.sheet_to_json(ws, {
+    header: 1,
+    blankrows: false,
+    defval: "",
+    raw: false,
+  });
+}
+
+async function parsePricingUploadRows(file) {
+  const matrix = await readPricingRowsFromFile(file);
+  const rows = matrix
+    .map((row) => (Array.isArray(row) ? row.map((cell) => String(cell || "").trim()) : []))
+    .filter((row) => row.some((cell) => cell));
+
+  if (rows.length < 2) {
+    throw new Error("Excel satirlari okunamadi.");
+  }
+
+  let headerRowIndex = 0;
+  for (let i = 0; i < rows.length; i += 1) {
+    const line = rows[i].join(" ").toLocaleLowerCase("tr-TR");
+    if (line.includes("nereden") && line.includes("varis")) {
+      headerRowIndex = i;
+      break;
+    }
+  }
+
+  const headers = rows[headerRowIndex];
+  const originIndex = findUploadHeaderIndex(headers, ["nereden", "kalkis", "origin"]);
+  const destinationIndex = findUploadHeaderIndex(headers, ["varis", "nereye", "destination"]);
+  const demandIndex = findUploadHeaderIndex(headers, ["guncel bilet fiyati", "talep", "fiyat"]);
+
+  if (originIndex < 0 || destinationIndex < 0 || demandIndex < 0) {
+    throw new Error("Excel kolonlari eksik. Nereden, Varis, Guncel Bilet Fiyati olmali.");
+  }
+
+  const parsed = [];
+  for (let i = headerRowIndex + 1; i < rows.length; i += 1) {
+    const row = rows[i];
+    const origin = String(row[originIndex] || "").trim();
+    const destination = String(row[destinationIndex] || "").trim();
+    const demandRaw = row[demandIndex];
+
+    if (!origin && !destination && !String(demandRaw || "").trim()) {
+      continue;
+    }
+
+    parsed.push({
+      rowNumber: i + 1,
+      origin,
+      destination,
+      demandPrice: parseClientPrice(demandRaw),
+    });
+  }
+
+  return parsed;
+}
+
+function renderPricingRejectedRows(rejected) {
+  if (!dom.pricingRejectedWrap || !dom.pricingRejectedList) {
+    return;
+  }
+
+  const list = Array.isArray(rejected) ? rejected : [];
+  dom.pricingRejectedList.innerHTML = "";
+
+  if (!list.length) {
+    dom.pricingRejectedWrap.classList.add("hidden");
+    dom.pricingRejectedWrap.removeAttribute("open");
+    return;
+  }
+
+  list.forEach((item) => {
+    const li = document.createElement("li");
+    li.textContent = `Satir ${item.rowNumber}: ${item.reason}`;
+    dom.pricingRejectedList.appendChild(li);
+  });
+
+  dom.pricingRejectedWrap.classList.remove("hidden");
+  dom.pricingRejectedWrap.setAttribute("open", "open");
+}
+
+function renderPricingUploads() {
+  if (!dom.pricingUploadsList) {
+    return;
+  }
+
+  dom.pricingUploadsList.innerHTML = "";
+  if (!state.pricingUploads.length) {
+    dom.pricingUploadsList.innerHTML = '<p class="subtle">Henuz fiyat yuklemesi yok.</p>';
+    return;
+  }
+
+  state.pricingUploads.forEach((upload) => {
+    const detailsRows = (upload.items || [])
+      .slice(0, 200)
+      .map(
+        (item) =>
+          `<tr><td>${item.route}</td><td>${item.demandPrice} TL</td><td>${item.tariffPrice} TL</td><td>${item.discountedPrice} TL</td></tr>`
+      )
+      .join("");
+
+    const card = document.createElement("details");
+    card.className = "pricing-upload-card";
+    if (upload.isOpen) {
+      card.setAttribute("open", "open");
+    }
+
+    card.innerHTML = `
+      <summary>
+        <strong>${upload.uploadedBy}</strong> - ${upload.directionType} - ${upload.validFrom} / ${upload.validTo}
+        <span class="pricing-upload-meta">${upload.items.length} satir | ${upload.createdAt}</span>
+      </summary>
+      <div class="pricing-upload-body">
+        <div class="actions" style="margin-bottom:.5rem;">
+          <button class="btn btn-small btn-ghost toggleUploadBtn" type="button">${upload.isOpen ? "Kapat" : "Ac"}</button>
+        </div>
+        <table class="data-table">
+          <thead><tr><th>Rota</th><th>Talep</th><th>Tarife</th><th>Indirimli</th></tr></thead>
+          <tbody>${detailsRows || '<tr><td colspan="4">Detay yok.</td></tr>'}</tbody>
+        </table>
+      </div>
+    `;
+
+    card.querySelector(".toggleUploadBtn").addEventListener("click", async () => {
+      await apiFetch(`/api/pricing-uploads/${upload.id}/toggle`, {
+        method: "PATCH",
+        body: JSON.stringify({ isOpen: !upload.isOpen }),
+      });
+      await refreshPricingUploadsData();
+    });
+
+    dom.pricingUploadsList.appendChild(card);
+  });
+}
+
+async function refreshPricingUploadsData() {
+  const result = await apiFetch("/api/pricing-uploads");
+  state.pricingUploads = result.uploads || [];
+  renderPricingUploads();
+}
+
+async function submitPricingUpload() {
+  if (!dom.pricingUploadForm || !dom.pricingExcelFile?.files?.length) {
+    throw new Error("Excel dosyasi secmelisin.");
+  }
+
+  const file = dom.pricingExcelFile.files[0];
+  const rows = await parsePricingUploadRows(file);
+  if (!rows.length) {
+    throw new Error("Excel icinde gecerli satir yok.");
+  }
+
+  const payload = {
+    directionType: dom.pricingDirectionType?.value || "tek-yon",
+    validFrom: dom.pricingValidFrom?.value || "",
+    validTo: dom.pricingValidTo?.value || "",
+    sourceFileName: file.name,
+    rows,
+  };
+
+  const result = await apiFetch("/api/pricing-uploads", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+
+  renderPricingRejectedRows(result.rejected || []);
+  if (dom.pricingUploadMsg) {
+    dom.pricingUploadMsg.style.color = "#1f7a1f";
+    dom.pricingUploadMsg.textContent = `${result.acceptedCount || 0} satir yuklendi ve uygulandi.`;
+  }
+
+  await refreshPricingUploadsData();
+  await refreshNotificationsData();
+}
+
 function renderNotifications() {
   const unread = state.notifications.filter((n) => !n.isRead).length;
   dom.notifBadge.textContent = String(unread);
@@ -1139,6 +1382,14 @@ function activatePanel(menuKey) {
 
   if (menuKey === "logs") {
     renderLoginLogs();
+  }
+
+  if (menuKey === "pricing") {
+    refreshPricingUploadsData().catch((error) => {
+      if (dom.pricingUploadsList) {
+        dom.pricingUploadsList.innerHTML = `<p class="subtle">${error.message}</p>`;
+      }
+    });
   }
 
   if (menuKey === "routes") {
@@ -1555,6 +1806,28 @@ if (dom.tariffLoadMoreBtn) {
       return;
     }
     await refreshTariffData(state.tariffQuery, true);
+  });
+}
+
+if (dom.pricingUploadForm) {
+  dom.pricingUploadForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (dom.pricingUploadMsg) {
+      dom.pricingUploadMsg.style.color = "var(--muted)";
+      dom.pricingUploadMsg.textContent = "Excel okunuyor ve kontrol ediliyor...";
+    }
+
+    try {
+      await submitPricingUpload();
+      dom.pricingUploadForm.reset();
+    } catch (error) {
+      const rejected = error?.payload?.rejected || [];
+      renderPricingRejectedRows(rejected);
+      if (dom.pricingUploadMsg) {
+        dom.pricingUploadMsg.style.color = "#d64545";
+        dom.pricingUploadMsg.textContent = error.message || "Fiyat yukleme basarisiz.";
+      }
+    }
   });
 }
 

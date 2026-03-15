@@ -561,6 +561,71 @@ body[data-theme="dark"] .theme-thumb {
   margin-bottom: 0.45rem;
 }
 
+.pricing-uploader,
+.pricing-history {
+  margin-top: 0.9rem;
+  border: 1px solid var(--stroke);
+  border-radius: 14px;
+  background: var(--surface-soft);
+  padding: 0.9rem;
+}
+
+.pricing-upload-grid {
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: end;
+}
+
+.pricing-file-field {
+  grid-column: span 2;
+}
+
+.pricing-upload-grid button {
+  align-self: end;
+}
+
+.pricing-rejected {
+  margin-top: 0.6rem;
+  border-top: 1px dashed var(--stroke);
+  padding-top: 0.5rem;
+}
+
+.pricing-rejected ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.pricing-uploads-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.pricing-upload-card {
+  border: 1px solid var(--stroke);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.45);
+  padding: 0.5rem 0.7rem;
+}
+
+.pricing-upload-card summary {
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.pricing-upload-meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.pricing-upload-body {
+  margin-top: 0.65rem;
+}
+
 .route-search {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto;
@@ -741,6 +806,14 @@ body[data-theme="dark"] .theme-thumb {
 
   .stats-grid {
     grid-template-columns: 1fr;
+  }
+
+  .pricing-upload-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pricing-file-field {
+    grid-column: auto;
   }
 
   .route-search {
