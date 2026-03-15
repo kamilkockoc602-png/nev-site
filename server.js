@@ -311,11 +311,8 @@ function findTariffByRoute(origin, destination) {
 }
 
 function parsePriceNumber(raw) {
-  const value = Number(raw);
-  if (Number.isFinite(value)) {
-    return value;
-  }
-  return parseTurkishNumber(raw);
+  const parsed = parseTurkishNumber(raw);
+  return parsed == null ? NaN : parsed;
 }
 
 function addPricingNotification(username, message) {

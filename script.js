@@ -1114,10 +1114,37 @@ function parseClientPrice(raw) {
   if (!text) {
     return NaN;
   }
-  const normalized = text
-    .replace(/\./g, "")
-    .replace(/,/g, ".")
-    .replace(/[^0-9.-]/g, "");
+
+  let normalized = text.replace(/[^0-9,.-]/g, "");
+  const hasComma = normalized.includes(",");
+  const hasDot = normalized.includes(".");
+
+  if (hasComma && hasDot) {
+    const lastComma = normalized.lastIndexOf(",");
+    const lastDot = normalized.lastIndexOf(".");
+    if (lastComma > lastDot) {
+      // 1.234,56 -> 1234.56
+      normalized = normalized.replace(/\./g, "").replace(/,/g, ".");
+    } else {
+      // 1,234.56 -> 1234.56
+      normalized = normalized.replace(/,/g, "");
+    }
+  } else if (hasComma) {
+    // 1,000 (thousands) and 1000,50 (decimal) cases
+    const commaParts = normalized.split(",");
+    if (commaParts.length === 2 && commaParts[1].length === 3 && commaParts[0].length >= 1) {
+      normalized = commaParts.join("");
+    } else {
+      normalized = normalized.replace(/,/g, ".");
+    }
+  } else if (hasDot) {
+    // 1.000 (thousands) and 1000.50 (decimal) cases
+    const dotParts = normalized.split(".");
+    if (dotParts.length === 2 && dotParts[1].length === 3 && dotParts[0].length >= 1) {
+      normalized = dotParts.join("");
+    }
+  }
+
   return Number(normalized);
 }
 
