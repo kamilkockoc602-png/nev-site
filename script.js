@@ -398,7 +398,7 @@ function findDestinationInLine(line, destinationPool = KNOWN_DESTINATIONS) {
   }
 
   const beforeDigit = String(line).split(/\d/)[0] || "";
-  return correctDestinationNameWithPool(normalizeCity(beforeDigit), pool, true);
+  return correctDestinationNameWithPool(normalizeCity(beforeDigit), pool, false);
 }
 
 function findKnownDestinationInLine(line, destinationPool = KNOWN_DESTINATIONS) {
@@ -448,6 +448,11 @@ function parseLineToPair(line, destinationPool = KNOWN_DESTINATIONS) {
   }
 
   const destination = findDestinationInLine(cleaned, destinationPool);
+  const destinationSlugSet = buildDestinationSlugSet(destinationPool);
+  if (!isKnownDestinationName(destination, destinationSlugSet)) {
+    return null;
+  }
+
   const priceCandidates = extractPriceCandidates(cleaned);
   const price = priceCandidates[priceCandidates.length - 1] || "";
 
@@ -741,9 +746,14 @@ function parseA4SegmentWords(segmentWords, destinationPool = KNOWN_DESTINATIONS)
     correctDestinationNameWithPool(
       normalizeCity(String(text).split(/\d/)[0] || ""),
       destinationPool,
-      true
+      false
     );
   if (!destination) {
+    return null;
+  }
+
+  const destinationSlugSet = buildDestinationSlugSet(destinationPool);
+  if (!isKnownDestinationName(destination, destinationSlugSet)) {
     return null;
   }
 
@@ -852,6 +862,7 @@ function parseTabularRowsFromOcrData(ocrData, destinationPool = KNOWN_DESTINATIO
   }
 
   const pairs = [];
+  const destinationSlugSet = buildDestinationSlugSet(destinationPool);
   const headerHints = ["gidecegi", "yer", "fiyat", "tarife"];
 
   for (const row of rows) {
@@ -888,8 +899,12 @@ function parseTabularRowsFromOcrData(ocrData, destinationPool = KNOWN_DESTINATIO
       const destination = correctDestinationNameWithPool(
         normalizeCity(segment.destinationRaw),
         destinationPool,
-        true
+        false
       );
+
+      if (!isKnownDestinationName(destination, destinationSlugSet)) {
+        continue;
+      }
 
       if (!isLikelyRow(destination, segment.price)) {
         continue;
