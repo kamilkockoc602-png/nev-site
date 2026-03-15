@@ -7,7 +7,11 @@ const Database = require("better-sqlite3");
 const app = express();
 const PORT = process.env.PORT || 3000;
 const railwayMountPath = process.env.RAILWAY_VOLUME_MOUNT_PATH || "";
-const configuredDataDir = process.env.DATA_DIR || railwayMountPath;
+const rawDataDir = process.env.DATA_DIR || "";
+const dataDirLooksUnresolvedTemplate = rawDataDir.includes("${{");
+const configuredDataDir = dataDirLooksUnresolvedTemplate
+  ? railwayMountPath
+  : rawDataDir || railwayMountPath;
 const DATA_DIR = configuredDataDir
   ? path.resolve(configuredDataDir)
   : path.join(__dirname, "data");
@@ -22,6 +26,11 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 if (process.env.RAILWAY_PROJECT_ID && !configuredDataDir) {
   console.warn(
     "Railway volume algilanmadi. Veriler deploy sonrasi kaybolabilir."
+  );
+}
+if (dataDirLooksUnresolvedTemplate) {
+  console.warn(
+    "DATA_DIR degiskeni template olarak cozulmedi. RAILWAY_VOLUME_MOUNT_PATH kullaniliyor."
   );
 }
 console.log(`Veri klasoru: ${DATA_DIR}`);
