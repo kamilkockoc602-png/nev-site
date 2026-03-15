@@ -50,7 +50,8 @@ function normalizeSearchText(value) {
     .replace(/ş/g, "s")
     .replace(/ö/g, "o")
     .replace(/ç/g, "c")
-    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/[-_/]+/g, " ")
+    .replace(/[^a-z0-9\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -105,18 +106,15 @@ function loadTariffRowsFromCsv() {
   const rows = [];
   for (let i = 1; i < lines.length; i += 1) {
     const cols = lines[i].split(";");
-    const route = String(cols[routeIndex] || "").trim();
+    const routeRaw = String(cols[routeIndex] || "").trim();
     const tariffPrice = parseTurkishNumber(cols[tariffPriceIndex]);
     const discountedPrice = parseTurkishNumber(cols[discountedIndex]);
-
-    if (!route || tariffPrice == null || discountedPrice == null) {
-      continue;
-    }
+    const route = routeRaw || `(Rota bos satir ${i})`;
 
     rows.push({
       route,
-      tariffPrice,
-      discountedPrice,
+      tariffPrice: tariffPrice == null ? 0 : tariffPrice,
+      discountedPrice: discountedPrice == null ? 0 : discountedPrice,
       routeSearch: normalizeSearchText(route),
     });
   }
@@ -733,7 +731,8 @@ app.get("/api/prices", requireAuth, (req, res) => {
 
 app.get("/api/tariff-prices", requireAuth, (req, res) => {
   const query = String(req.query.q || "").trim();
-  const limit = Math.min(Math.max(Number(req.query.limit) || 300, 1), 2000);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 2000);
+  const offset = Math.max(Number(req.query.offset) || 0, 0);
   const queryNorm = normalizeSearchText(query);
   const queryTokens = queryNorm.split(" ").filter(Boolean);
 
@@ -746,7 +745,7 @@ app.get("/api/tariff-prices", requireAuth, (req, res) => {
       .map((item) => item.row);
   }
 
-  const rows = matched.slice(0, limit).map((row) => ({
+  const rows = matched.slice(offset, offset + limit).map((row) => ({
     route: row.route,
     tariffPrice: row.tariffPrice,
     discountedPrice: row.discountedPrice,
@@ -755,6 +754,8 @@ app.get("/api/tariff-prices", requireAuth, (req, res) => {
   res.json({
     query,
     total: matched.length,
+    offset,
+    limit,
     rows,
   });
 });

@@ -32,6 +32,7 @@ const dom = {
   tariffSearchInput: document.getElementById("tariffSearchInput"),
   tariffSearchBtn: document.getElementById("tariffSearchBtn"),
   tariffResetBtn: document.getElementById("tariffResetBtn"),
+  tariffLoadMoreBtn: document.getElementById("tariffLoadMoreBtn"),
   tariffSummary: document.getElementById("tariffSummary"),
   avgFare: document.getElementById("avgFare"),
   totalRoutes: document.getElementById("totalRoutes"),
@@ -63,6 +64,9 @@ const state = {
   prices: [],
   tariffRows: [],
   tariffTotal: 0,
+  tariffOffset: 0,
+  tariffQuery: "",
+  tariffPageSize: 50,
   notifications: [],
   notifPollTimer: null,
   theme: localStorage.getItem(THEME_KEY) || "light",
@@ -1019,13 +1023,18 @@ function renderPrices() {
   dom.lastPriceUpdate.textContent = `Son fiyat guncellemesi: ${state.lastUpdated || "-"}`;
 }
 
-function renderTariffRows() {
-  dom.routeTableBody.innerHTML = "";
+function renderTariffRows(append = false) {
+  if (!append) {
+    dom.routeTableBody.innerHTML = "";
+  }
 
   if (!state.tariffRows.length) {
     dom.routeTableBody.innerHTML = '<tr><td colspan="3">Sonuc bulunamadi.</td></tr>';
     if (dom.tariffSummary) {
       dom.tariffSummary.textContent = "Aramana uygun tarife kaydi bulunamadi.";
+    }
+    if (dom.tariffLoadMoreBtn) {
+      dom.tariffLoadMoreBtn.classList.add("hidden");
     }
     return;
   }
@@ -1041,20 +1050,28 @@ function renderTariffRows() {
   });
 
   if (dom.tariffSummary) {
-    const q = dom.tariffSearchInput ? dom.tariffSearchInput.value.trim() : "";
+    const q = state.tariffQuery;
     dom.tariffSummary.textContent = q
-      ? `Akilli arama: "${q}" icin ${state.tariffRows.length} sonuc (toplam eslesen: ${state.tariffTotal}).`
-      : `Toplam ${state.tariffTotal} bakanlik tarife satiri listeleniyor.`;
+      ? `Akilli arama: "${q}" icin ${state.tariffOffset} / ${state.tariffTotal} sonuc gosteriliyor.`
+      : `Toplam ${state.tariffOffset} / ${state.tariffTotal} bakanlik tarife satiri gosteriliyor.`;
+  }
+
+  if (dom.tariffLoadMoreBtn) {
+    dom.tariffLoadMoreBtn.classList.toggle("hidden", state.tariffOffset >= state.tariffTotal);
   }
 }
 
-async function refreshTariffData(query = "") {
+async function refreshTariffData(query = "", append = false) {
   const q = String(query || "").trim();
-  const url = `/api/tariff-prices?q=${encodeURIComponent(q)}&limit=500`;
+  const nextOffset = append ? state.tariffOffset : 0;
+  const url = `/api/tariff-prices?q=${encodeURIComponent(q)}&limit=${state.tariffPageSize}&offset=${nextOffset}`;
   const result = await apiFetch(url);
-  state.tariffRows = result.rows || [];
+  const incoming = result.rows || [];
+  state.tariffRows = incoming;
   state.tariffTotal = Number(result.total || 0);
-  renderTariffRows();
+  state.tariffOffset = nextOffset + incoming.length;
+  state.tariffQuery = q;
+  renderTariffRows(append);
 }
 
 function renderNotifications() {
@@ -1125,7 +1142,7 @@ function activatePanel(menuKey) {
   }
 
   if (menuKey === "routes") {
-    const query = dom.tariffSearchInput ? dom.tariffSearchInput.value : "";
+    const query = dom.tariffSearchInput ? dom.tariffSearchInput.value : state.tariffQuery;
     refreshTariffData(query).catch((error) => {
       dom.routeTableBody.innerHTML = `<tr><td colspan="3">${error.message}</td></tr>`;
       if (dom.tariffSummary) {
@@ -1494,7 +1511,7 @@ dom.themeToggleBtn.addEventListener("click", () => {
 
 if (dom.tariffSearchBtn) {
   dom.tariffSearchBtn.addEventListener("click", async () => {
-    await refreshTariffData(dom.tariffSearchInput?.value || "");
+    await refreshTariffData(dom.tariffSearchInput?.value || "", false);
   });
 }
 
@@ -1504,7 +1521,7 @@ if (dom.tariffSearchInput) {
       return;
     }
     event.preventDefault();
-    await refreshTariffData(dom.tariffSearchInput.value || "");
+    await refreshTariffData(dom.tariffSearchInput.value || "", false);
   });
 }
 
@@ -1513,7 +1530,16 @@ if (dom.tariffResetBtn) {
     if (dom.tariffSearchInput) {
       dom.tariffSearchInput.value = "";
     }
-    await refreshTariffData("");
+    await refreshTariffData("", false);
+  });
+}
+
+if (dom.tariffLoadMoreBtn) {
+  dom.tariffLoadMoreBtn.addEventListener("click", async () => {
+    if (state.tariffOffset >= state.tariffTotal) {
+      return;
+    }
+    await refreshTariffData(state.tariffQuery, true);
   });
 }
 
