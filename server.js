@@ -490,7 +490,7 @@ setInterval(() => {
 
 safeRefreshPrices("startup");
 
-app.use(express.json());
+app.use(express.json({ limit: "25mb" }));
 app.use(express.static(__dirname));
 
 function logAttempt({ username, status, reason, ip }) {
@@ -1061,6 +1061,20 @@ app.post("/api/notifications/read-all", requireAuth, (req, res) => {
   db.prepare("UPDATE price_notifications SET is_read = 1 WHERE is_read = 0").run();
   db.prepare("UPDATE pricing_notifications SET is_read = 1 WHERE is_read = 0").run();
   res.json({ ok: true });
+});
+
+app.use((error, req, res, next) => {
+  if (error && error.type === "entity.too.large") {
+    res.status(413).json({ message: "Excel dosyasi cok buyuk. Daha kucuk parcaya bolerek yukleyin." });
+    return;
+  }
+
+  if (error) {
+    res.status(500).json({ message: "Sunucu hatasi olustu." });
+    return;
+  }
+
+  next();
 });
 
 app.listen(PORT, () => {
