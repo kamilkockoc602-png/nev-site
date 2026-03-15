@@ -1162,22 +1162,24 @@ async function parsePricingUploadRows(file) {
     throw new Error("Excel satirlari okunamadi.");
   }
 
-  let headerRowIndex = 0;
+  // Upload sablonu B-C-D kolonlarina kilitli: B=Kalkis, C=Varis, D=Guncel Bilet Fiyati
+  const originIndex = 1;
+  const destinationIndex = 2;
+  const demandIndex = 3;
+
+  let headerRowIndex = -1;
   for (let i = 0; i < rows.length; i += 1) {
-    const line = normalizeUploadHeader(rows[i].join(" "));
-    if (line.includes("nereden") && line.includes("varis")) {
+    const b = normalizeUploadHeader(rows[i][originIndex] || "");
+    const c = normalizeUploadHeader(rows[i][destinationIndex] || "");
+    const d = normalizeUploadHeader(rows[i][demandIndex] || "");
+    if (b.includes("kalkis") && c.includes("varis") && d.includes("guncel bilet fiyati")) {
       headerRowIndex = i;
       break;
     }
   }
 
-  const headers = rows[headerRowIndex];
-  const originIndex = findUploadHeaderIndex(headers, ["nereden", "kalkis", "origin"]);
-  const destinationIndex = findUploadHeaderIndex(headers, ["varis", "nereye", "destination"]);
-  const demandIndex = findUploadHeaderIndex(headers, ["guncel bilet fiyati", "talep", "fiyat"]);
-
-  if (originIndex < 0 || destinationIndex < 0 || demandIndex < 0) {
-    throw new Error("Excel kolonlari eksik. Nereden, Varis, Guncel Bilet Fiyati olmali.");
+  if (headerRowIndex < 0) {
+    throw new Error("Excel sablonu gecersiz. B=Kalkis, C=Varis, D=Guncel Bilet Fiyati olmali.");
   }
 
   const parsed = [];
