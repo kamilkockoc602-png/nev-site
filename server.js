@@ -35,6 +35,11 @@ const PRIMARY_TARIFF_JSON_PATH = path.join(
   "tariffs",
   "bakanlik_yeni_guzergahlar_15.09.2025.json"
 );
+const SECONDARY_TARIFF_JSON_PATH = path.join(
+  __dirname,
+  "tariffs",
+  "bakanlik_data_guncel_eksikler_eklendi.json"
+);
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -166,10 +171,66 @@ function loadTariffRowsFromJson(jsonPath) {
 
 function loadTariffRowsFromCsv() {
   if (fs.existsSync(PRIMARY_TARIFF_JSON_PATH)) {
-    const jsonRows = loadTariffRowsFromJson(PRIMARY_TARIFF_JSON_PATH);
-    jsonRows.sort((a, b) => a.route.localeCompare(b.route, "tr"));
-    console.log(`Ana tarife JSON yüklendi: ${jsonRows.length} satir`);
-    return jsonRows;
+    const rows = loadTariffRowsFromJson(PRIMARY_TARIFF_JSON_PATH);
+    const byKey = new Set(rows.map((item) => item.routeSearch));
+
+    let addedFromSecondary = 0;
+    if (fs.existsSync(SECONDARY_TARIFF_JSON_PATH)) {
+      const secondaryRows = loadTariffRowsFromJson(SECONDARY_TARIFF_JSON_PATH);
+      for (const item of secondaryRows) {
+        if (byKey.has(item.routeSearch)) {
+          continue;
+        }
+        rows.push(item);
+        byKey.add(item.routeSearch);
+        addedFromSecondary += 1;
+      }
+    }
+
+    let addedFromSupplementary = 0;
+    if (fs.existsSync(SUPPLEMENTARY_TARIFF_CSV_PATH)) {
+      const supContent = fs
+        .readFileSync(SUPPLEMENTARY_TARIFF_CSV_PATH, "utf8")
+        .replace(/^\uFEFF/, "");
+      const supLines = supContent
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      for (const line of supLines) {
+        const cols = line.split(";");
+        if (cols.length < 3) {
+          continue;
+        }
+        const origin = String(cols[0] || "").trim();
+        const destination = String(cols[1] || "").trim();
+        const price = parseTurkishNumber(cols[2]);
+        if (!origin || !destination || price == null) {
+          continue;
+        }
+
+        const route = `${origin} - ${destination}`;
+        const key = normalizeSearchText(route);
+        if (byKey.has(key)) {
+          continue;
+        }
+
+        rows.push({
+          route,
+          tariffPrice: price,
+          discountedPrice: price,
+          routeSearch: key,
+        });
+        byKey.add(key);
+        addedFromSupplementary += 1;
+      }
+    }
+
+    rows.sort((a, b) => a.route.localeCompare(b.route, "tr"));
+    console.log(
+      `Ana tarife JSON yüklendi: ${rows.length} satir (ek eski JSON: ${addedFromSecondary}, ek CSV: ${addedFromSupplementary})`
+    );
+    return rows;
   }
 
   if (!fs.existsSync(TARIFF_CSV_PATH)) {
