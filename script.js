@@ -1019,21 +1019,47 @@ function render() {
 }
 
 function renderPrices() {
-  if (!state.prices.length) {
-    dom.avgFare.textContent = "0 TL";
-    dom.totalRoutes.textContent = "0";
-    dom.updateCount.textContent = "0";
-    dom.lastPriceUpdate.textContent = "Son fiyat guncellemesi: -";
-    return;
+  // Dashboard ozetleri fiyat yukleme kayitlarindan uretiliyor.
+}
+
+function renderPricingDashboardSummary() {
+  const uploads = Array.isArray(state.pricingUploads) ? state.pricingUploads : [];
+
+  let oneWayCount = 0;
+  let roundTripCount = 0;
+  let totalCount = 0;
+
+  for (const upload of uploads) {
+    const itemCount = Array.isArray(upload?.items) ? upload.items.length : 0;
+    const direction = String(upload?.directionType || "").toLocaleLowerCase("tr-TR");
+
+    totalCount += itemCount;
+    if (direction === "tek-yon") {
+      oneWayCount += itemCount;
+    } else if (direction === "gidis-donus") {
+      roundTripCount += itemCount;
+    }
   }
 
-  const avg = Math.round(
-    state.prices.reduce((acc, item) => acc + item.economy + item.standard + item.vip, 0) /
-      (state.prices.length * 3)
-  );
-  dom.avgFare.textContent = `${avg} TL`;
-  dom.totalRoutes.textContent = String(state.prices.length);
-  dom.lastPriceUpdate.textContent = `Son fiyat guncellemesi: ${state.lastUpdated || "-"}`;
+  if (dom.avgFare) {
+    dom.avgFare.textContent = `${oneWayCount} satir`;
+  }
+  if (dom.totalRoutes) {
+    dom.totalRoutes.textContent = `${roundTripCount} satir`;
+  }
+  if (dom.updateCount) {
+    dom.updateCount.textContent = `${totalCount} satir`;
+  }
+
+  if (dom.lastPriceUpdate) {
+    const latest = uploads[0];
+    if (!latest) {
+      dom.lastPriceUpdate.textContent = "Henuz fiyat yuklemesi yok.";
+    } else {
+      const latestStamp = latest.createdAt || "-";
+      dom.lastPriceUpdate.textContent = `Son fiyat yukleme: ${latestStamp} (${uploads.length} yukleme kaydi)`;
+    }
+  }
 }
 
 function renderTariffRows(append = false) {
@@ -1440,6 +1466,7 @@ function renderPricingUploads() {
 async function refreshPricingUploadsData() {
   const result = await apiFetch("/api/pricing-uploads");
   state.pricingUploads = result.uploads || [];
+  renderPricingDashboardSummary();
   renderPricingUploads();
 }
 
@@ -1502,8 +1529,6 @@ async function refreshPricesData() {
   const result = await apiFetch("/api/prices");
   state.prices = result.prices || [];
   state.lastUpdated = result.lastUpdated || "-";
-  dom.updateCount.textContent = String(result.updateCount || 0);
-  renderPrices();
 }
 
 async function refreshNotificationsData() {
@@ -1517,6 +1542,7 @@ function startNotificationPolling() {
   state.notifPollTimer = setInterval(() => {
     if (state.currentUser) {
       refreshNotificationsData().catch(() => null);
+      refreshPricingUploadsData().catch(() => null);
       refreshPricesData().catch(() => null);
     }
   }, 60000);
@@ -1583,6 +1609,7 @@ async function handleLogin(username, password) {
     showMessage("", false);
     render();
     await refreshPricesData();
+    await refreshPricingUploadsData();
     await refreshNotificationsData();
     startNotificationPolling();
   } catch (error) {
@@ -1600,6 +1627,7 @@ async function verifySession() {
     const result = await apiFetch("/api/me");
     state.currentUser = result.user;
     await refreshPricesData();
+    await refreshPricingUploadsData();
     await refreshNotificationsData();
     startNotificationPolling();
   } catch {
