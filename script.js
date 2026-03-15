@@ -1103,7 +1103,10 @@ function normalizeUploadHeader(value) {
 
 function findUploadHeaderIndex(headers, aliases) {
   const normalized = headers.map((header) => normalizeUploadHeader(header));
-  return normalized.findIndex((header) => aliases.some((alias) => header.includes(alias)));
+  const normalizedAliases = aliases.map((alias) => normalizeUploadHeader(alias));
+  return normalized.findIndex((header) =>
+    normalizedAliases.some((alias) => header.includes(alias))
+  );
 }
 
 function parseClientPrice(raw) {
@@ -1161,7 +1164,7 @@ async function parsePricingUploadRows(file) {
 
   let headerRowIndex = 0;
   for (let i = 0; i < rows.length; i += 1) {
-    const line = rows[i].join(" ").toLocaleLowerCase("tr-TR");
+    const line = normalizeUploadHeader(rows[i].join(" "));
     if (line.includes("nereden") && line.includes("varis")) {
       headerRowIndex = i;
       break;
