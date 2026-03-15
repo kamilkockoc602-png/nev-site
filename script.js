@@ -1109,6 +1109,46 @@ function findUploadHeaderIndex(headers, aliases) {
   );
 }
 
+function formatUploadDirection(value) {
+  const key = String(value || "").trim().toLocaleLowerCase("tr-TR");
+  if (key === "tek-yon") {
+    return "Tek Yon";
+  }
+  if (key === "gidis-donus") {
+    return "Gidis-Donus";
+  }
+  return toTurkishTitleCase(String(value || ""));
+}
+
+function formatUploadDate(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "-";
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return raw.replace("T", " ");
+  }
+
+  const hasTime = /[T\s]\d{2}:\d{2}/.test(raw);
+  const options = hasTime
+    ? {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }
+    : {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+      };
+
+  return new Intl.DateTimeFormat("tr-TR", options).format(parsed);
+}
+
 function parseClientPrice(raw) {
   const text = String(raw ?? "").trim();
   if (!text) {
@@ -1325,6 +1365,12 @@ function renderPricingUploads() {
   }
 
   state.pricingUploads.forEach((upload) => {
+    const directionLabel = formatUploadDirection(upload.directionType);
+    const rowCountLabel = `${upload.items.length} SATIR`;
+    const validFromText = formatUploadDate(upload.validFrom);
+    const validToText = formatUploadDate(upload.validTo);
+    const createdAtText = formatUploadDate(upload.createdAt);
+
     const detailsRows = (upload.items || [])
       .slice(0, 200)
       .map(
@@ -1343,11 +1389,14 @@ function renderPricingUploads() {
       <summary>
         <div class="pricing-upload-top">
           <strong>${upload.uploadedBy}</strong>
-          <span class="pricing-upload-chip">${upload.directionType}</span>
-          <span class="pricing-upload-chip">${upload.items.length} satir</span>
+          <span class="pricing-upload-chip pricing-upload-chip-primary">${directionLabel}</span>
+          <span class="pricing-upload-chip pricing-upload-chip-count">${rowCountLabel}</span>
         </div>
-        <span class="pricing-upload-meta">${upload.validFrom} - ${upload.validTo}</span>
-        <span class="pricing-upload-meta">Yukleme: ${upload.createdAt}</span>
+        <div class="pricing-upload-range">
+          <span class="pricing-upload-range-label">Gecerlilik:</span>
+          <span class="pricing-upload-range-value">${validFromText} - ${validToText}</span>
+        </div>
+        <span class="pricing-upload-meta">Yukleme: ${createdAtText}</span>
       </summary>
       <div class="pricing-upload-body">
         <div class="actions" style="margin-bottom:.5rem;">

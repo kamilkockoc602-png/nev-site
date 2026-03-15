@@ -646,6 +646,41 @@ body[data-theme="dark"] .theme-thumb {
   background: rgba(15, 157, 143, 0.2);
 }
 
+.pricing-upload-chip-primary {
+  background: rgba(15, 157, 143, 0.24);
+}
+
+.pricing-upload-chip-count {
+  background: #12354a;
+  border-color: #12354a;
+  color: #ffffff;
+  letter-spacing: 0.02em;
+  padding-inline: 0.62rem;
+}
+
+.pricing-upload-range {
+  display: flex;
+  align-items: center;
+  gap: 0.38rem;
+  flex-wrap: wrap;
+}
+
+.pricing-upload-range-label {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #345164;
+}
+
+.pricing-upload-range-value {
+  font-size: 0.9rem;
+  font-weight: 800;
+  color: #12354a;
+  background: rgba(18, 53, 74, 0.08);
+  border: 1px solid rgba(18, 53, 74, 0.18);
+  border-radius: 8px;
+  padding: 0.14rem 0.45rem;
+}
+
 .pricing-upload-meta {
   color: #28475d;
   font-size: 0.82rem;
@@ -707,6 +742,22 @@ body[data-theme="dark"] .pricing-upload-chip {
   color: #dcfff8;
   border-color: rgba(61, 194, 178, 0.7);
   background: rgba(61, 194, 178, 0.2);
+}
+
+body[data-theme="dark"] .pricing-upload-chip-count {
+  background: #6ef2dd;
+  border-color: #6ef2dd;
+  color: #063033;
+}
+
+body[data-theme="dark"] .pricing-upload-range-label {
+  color: #bed4e4;
+}
+
+body[data-theme="dark"] .pricing-upload-range-value {
+  color: #ebf7ff;
+  background: rgba(156, 184, 204, 0.14);
+  border-color: rgba(156, 184, 204, 0.34);
 }
 
 body[data-theme="dark"] .pricing-upload-meta {
