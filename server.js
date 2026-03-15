@@ -25,6 +25,11 @@ const TARIFF_CSV_PATH = path.join(
   "tariffs",
   "BakanlikFiyatTarifesi_15.09.2025.csv"
 );
+const SUPPLEMENTARY_TARIFF_CSV_PATH = path.join(
+  __dirname,
+  "tariffs",
+  "KilisEkTarife.csv"
+);
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -120,6 +125,52 @@ function loadTariffRowsFromCsv() {
       discountedPrice: discountedPrice == null ? 0 : discountedPrice,
       routeSearch: normalizeSearchText(route),
     });
+  }
+
+  rows.sort((a, b) => a.route.localeCompare(b.route, "tr"));
+
+  if (fs.existsSync(SUPPLEMENTARY_TARIFF_CSV_PATH)) {
+    const supContent = fs
+      .readFileSync(SUPPLEMENTARY_TARIFF_CSV_PATH, "utf8")
+      .replace(/^\uFEFF/, "");
+    const supLines = supContent
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+
+    const existing = new Set(rows.map((item) => normalizeSearchText(item.route)));
+    let added = 0;
+
+    for (const line of supLines) {
+      const cols = line.split(";");
+      if (cols.length < 3) {
+        continue;
+      }
+
+      const origin = String(cols[0] || "").trim();
+      const destination = String(cols[1] || "").trim();
+      const price = parseTurkishNumber(cols[2]);
+      if (!origin || !destination || price == null) {
+        continue;
+      }
+
+      const route = `${origin} - ${destination}`;
+      const key = normalizeSearchText(route);
+      if (existing.has(key)) {
+        continue;
+      }
+
+      rows.push({
+        route,
+        tariffPrice: price,
+        discountedPrice: price,
+        routeSearch: key,
+      });
+      existing.add(key);
+      added += 1;
+    }
+
+    console.log(`Ek tarife CSV yüklendi: ${added} yeni satir`);
   }
 
   rows.sort((a, b) => a.route.localeCompare(b.route, "tr"));
