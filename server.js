@@ -109,7 +109,10 @@ function loadTariffRowsFromCsv() {
     const routeRaw = String(cols[routeIndex] || "").trim();
     const tariffPrice = parseTurkishNumber(cols[tariffPriceIndex]);
     const discountedPrice = parseTurkishNumber(cols[discountedIndex]);
-    const route = routeRaw || `(Rota bos satir ${i})`;
+    if (!routeRaw) {
+      continue;
+    }
+    const route = routeRaw;
 
     rows.push({
       route,
