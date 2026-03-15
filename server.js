@@ -6,8 +6,10 @@ const Database = require("better-sqlite3");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const DATA_DIR = process.env.DATA_DIR
-  ? path.resolve(process.env.DATA_DIR)
+const railwayMountPath = process.env.RAILWAY_VOLUME_MOUNT_PATH || "";
+const configuredDataDir = process.env.DATA_DIR || railwayMountPath;
+const DATA_DIR = configuredDataDir
+  ? path.resolve(configuredDataDir)
   : path.join(__dirname, "data");
 const DB_PATH = path.join(DATA_DIR, "app.db");
 const UPDATE_INTERVAL_MS = 10 * 60 * 1000;
@@ -16,6 +18,14 @@ const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || "admin").trim();
 const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || "1234").trim();
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
+
+if (process.env.RAILWAY_PROJECT_ID && !configuredDataDir) {
+  console.warn(
+    "Railway volume algilanmadi. Veriler deploy sonrasi kaybolabilir."
+  );
+}
+console.log(`Veri klasoru: ${DATA_DIR}`);
+console.log(`Veritabani dosyasi: ${DB_PATH}`);
 
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");

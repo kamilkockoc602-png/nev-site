@@ -15,13 +15,13 @@ Railway ile Yayinlama
 - Asagidaki degerleri ekle:
   ADMIN_USERNAME=admin
   ADMIN_PASSWORD=guclu_bir_sifre
-  DATA_DIR=/data
+  DATA_DIR=${{RAILWAY_VOLUME_MOUNT_PATH}}
 
 4) Kalici disk bagla (SQLite icin zorunlu)
 - Servis ayarlarinda Volumes bolumune gir.
 - Yeni volume olustur.
 - Mount Path degeri olarak /data ver.
-- Uygulama sqlite dosyasini /data/app.db yolunda tutar.
+- Uygulama sqlite dosyasini volume altinda app.db olarak tutar.
 
 5) Domain (opsiyonel)
 - Settings -> Domains -> Generate Domain ile .up.railway.app domaini al.
@@ -34,4 +34,5 @@ Railway ile Yayinlama
 
 Notlar
 - PORT degiskenini Railway otomatik verir, manuel girmen gerekmez.
-- DATA_DIR degiskeni verilmezse veriler konteyner icinde gecici klasorde kalir.
+- Uygulama, DATA_DIR yoksa RAILWAY_VOLUME_MOUNT_PATH degiskenini otomatik kullanir.
+- Logs ekraninda "Veritabani dosyasi:" satirini kontrol ederek db yolunu dogrula.
