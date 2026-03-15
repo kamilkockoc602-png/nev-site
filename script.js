@@ -845,6 +845,66 @@ function parseStructuredRowsFromOcrData(ocrData, destinationPool = KNOWN_DESTINA
   return dedupePairs(pairs);
 }
 
+function parseTabularRowsFromOcrData(ocrData, destinationPool = KNOWN_DESTINATIONS) {
+  const rows = groupWordsByRow(ocrData?.words || []);
+  if (!rows.length) {
+    return [];
+  }
+
+  const pairs = [];
+  const headerHints = ["gidecegi", "yer", "fiyat", "tarife"];
+
+  for (const row of rows) {
+    const words = (row.words || []).map((w) => String(w.text || "").trim()).filter(Boolean);
+    if (!words.length) {
+      continue;
+    }
+
+    const rowText = words.join(" ").toLocaleLowerCase("tr-TR");
+    if (headerHints.some((hint) => rowText.includes(hint))) {
+      continue;
+    }
+
+    // Tek satirda birden fazla "Sehir + Fiyat" ciftini yakalar.
+    const segments = [];
+    let currentWords = [];
+
+    for (const token of words) {
+      const parsedPrice = parseOcrPriceToken(token);
+      if (parsedPrice) {
+        if (currentWords.length) {
+          segments.push({
+            destinationRaw: currentWords.join(" "),
+            price: parsedPrice,
+          });
+          currentWords = [];
+        }
+      } else {
+        currentWords.push(token);
+      }
+    }
+
+    for (const segment of segments) {
+      const destination = correctDestinationNameWithPool(
+        normalizeCity(segment.destinationRaw),
+        destinationPool,
+        true
+      );
+
+      if (!isLikelyRow(destination, segment.price)) {
+        continue;
+      }
+
+      pairs.push({
+        destination,
+        price: String(segment.price),
+      });
+    }
+  }
+
+  return dedupePairs(pairs);
+}
+
 function collectTextBlocks(ocrData) {
   const blocks = [];
   if (ocrData?.text) {
@@ -998,6 +1058,9 @@ async function runOcrAndBuildTable() {
     const pass3 = await runPass(file, "Tarama 3/3", 6);
 
     const mergedPairs = [
+      ...parseTabularRowsFromOcrData(pass1.ocrData, destinationPool),
+      ...parseTabularRowsFromOcrData(pass2.ocrData, destinationPool),
+      ...parseTabularRowsFromOcrData(pass3.ocrData, destinationPool),
       ...parseStructuredRowsFromOcrData(pass1.ocrData, destinationPool),
       ...parseStructuredRowsFromOcrData(pass2.ocrData, destinationPool),
       ...parseStructuredRowsFromOcrData(pass3.ocrData, destinationPool),
