@@ -35,6 +35,7 @@ const dom = {
   tariffSummary: document.getElementById("tariffSummary"),
   pricingUploadForm: document.getElementById("pricingUploadForm"),
   pricingDirectionType: document.getElementById("pricingDirectionType"),
+  pricingOriginFilter: document.getElementById("pricingOriginFilter"),
   pricingValidFrom: document.getElementById("pricingValidFrom"),
   pricingValidTo: document.getElementById("pricingValidTo"),
   pricingExcelFile: document.getElementById("pricingExcelFile"),
@@ -1340,7 +1341,14 @@ async function submitPricingUpload() {
   }
 
   const file = dom.pricingExcelFile.files[0];
-  const rows = await parsePricingUploadRows(file);
+  let rows = await parsePricingUploadRows(file);
+
+  const originFilterRaw = String(dom.pricingOriginFilter?.value || "").trim();
+  if (originFilterRaw) {
+    const expected = normalizeUploadHeader(originFilterRaw);
+    rows = rows.filter((row) => normalizeUploadHeader(row.origin) === expected);
+  }
+
   if (!rows.length) {
     throw new Error("Excel icinde gecerli satir yok.");
   }
