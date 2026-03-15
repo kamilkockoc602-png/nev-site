@@ -965,7 +965,10 @@ app.post("/api/pricing-uploads", requireAuth, (req, res) => {
 
     const tariff = findTariffByRoute(origin, destination);
     if (!tariff) {
-      rejected.push({ rowNumber, reason: `${origin} - ${destination} icin bakanlik fiyat kaydi bulunamadi.` });
+      rejected.push({
+        rowNumber,
+        reason: `${origin} - ${destination} icin bakanlik fiyat kaydi bulunamadi. Guzergahi duzeltip tekrar yukleyin.`,
+      });
       return;
     }
 

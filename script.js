@@ -1191,32 +1191,58 @@ async function parsePricingUploadRows(file) {
     }))
     .filter((entry) => entry.cells.some((cell) => cell));
 
-  if (rows.length < 2) {
+  if (rows.length < 1) {
     throw new Error("Excel satirlari okunamadi.");
   }
 
-  // Upload sablonu B-C-D kolonlarina kilitli: B=Kalkis, C=Varis, D=Guncel Bilet Fiyati
-  const originIndex = 1;
-  const destinationIndex = 2;
-  const demandIndex = 3;
-
   let headerRowIndex = -1;
-  for (let i = 0; i < rows.length; i += 1) {
-    const b = normalizeUploadHeader(rows[i].cells[originIndex] || "");
-    const c = normalizeUploadHeader(rows[i].cells[destinationIndex] || "");
-    const d = normalizeUploadHeader(rows[i].cells[demandIndex] || "");
-    if (b.includes("kalkis") && c.includes("varis") && d.includes("guncel bilet fiyati")) {
+  let originIndex = 0;
+  let destinationIndex = 1;
+  let demandIndex = 2;
+
+  // 1) Header varsa kolonlari header'dan bul.
+  for (let i = 0; i < Math.min(rows.length, 30); i += 1) {
+    const headers = rows[i].cells;
+    const o = findUploadHeaderIndex(headers, ["kalkis", "nereden", "origin"]);
+    const d = findUploadHeaderIndex(headers, ["varis", "nereye", "destination"]);
+    const p = findUploadHeaderIndex(headers, ["guncel bilet fiyati", "fiyat", "talep"]);
+    if (o >= 0 && d >= 0 && p >= 0) {
       headerRowIndex = i;
+      originIndex = o;
+      destinationIndex = d;
+      demandIndex = p;
       break;
     }
   }
 
+  // 2) Header yoksa yeni formati algila: A-B-C veya B-C-D (Kalkis;Varis;Fiyat)
   if (headerRowIndex < 0) {
-    throw new Error("Excel sablonu gecersiz. B=Kalkis, C=Varis, D=Guncel Bilet Fiyati olmali.");
+    const sample = rows.slice(0, Math.min(rows.length, 80));
+    const scoreMapping = (start) => {
+      let score = 0;
+      for (const entry of sample) {
+        const origin = String(entry.cells[start] || "").trim();
+        const destination = String(entry.cells[start + 1] || "").trim();
+        const price = parseClientPrice(entry.cells[start + 2]);
+        if (origin && destination && Number.isFinite(price)) {
+          score += 1;
+        }
+      }
+      return score;
+    };
+
+    const scoreABC = scoreMapping(0);
+    const scoreBCD = scoreMapping(1);
+    const start = scoreBCD > scoreABC ? 1 : 0;
+    originIndex = start;
+    destinationIndex = start + 1;
+    demandIndex = start + 2;
   }
 
+  const dataStart = headerRowIndex >= 0 ? headerRowIndex + 1 : 0;
+
   const parsed = [];
-  for (let i = headerRowIndex + 1; i < rows.length; i += 1) {
+  for (let i = dataStart; i < rows.length; i += 1) {
     const row = rows[i].cells;
     const origin = String(row[originIndex] || "").trim();
     const destination = String(row[destinationIndex] || "").trim();
