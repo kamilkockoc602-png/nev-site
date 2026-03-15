@@ -322,7 +322,10 @@ function addPricingNotification(username, message) {
 }
 
 function nowStamp() {
-  return new Date().toLocaleString("tr-TR");
+  return new Date().toLocaleString("tr-TR", {
+    timeZone: "Europe/Istanbul",
+    hour12: false,
+  });
 }
 
 function defaultPermissions(fullAccess) {
