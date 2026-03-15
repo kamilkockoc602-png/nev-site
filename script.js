@@ -1294,6 +1294,7 @@ function renderPricingUploads() {
       <div class="pricing-upload-body">
         <div class="actions" style="margin-bottom:.5rem;">
           <button class="btn btn-small btn-ghost toggleUploadBtn" type="button">${upload.isOpen ? "Kapat" : "Ac"}</button>
+          <button class="btn btn-small btn-danger deleteUploadBtn" type="button">Sil</button>
         </div>
         <table class="data-table">
           <thead><tr><th>Rota</th><th>Talep</th><th>Tarife</th><th>Indirimli</th></tr></thead>
@@ -1308,6 +1309,19 @@ function renderPricingUploads() {
         body: JSON.stringify({ isOpen: !upload.isOpen }),
       });
       await refreshPricingUploadsData();
+    });
+
+    card.querySelector(".deleteUploadBtn").addEventListener("click", async () => {
+      const ok = window.confirm("Bu fiyat yuklemesini silmek istiyor musun?");
+      if (!ok) {
+        return;
+      }
+
+      await apiFetch(`/api/pricing-uploads/${upload.id}`, {
+        method: "DELETE",
+      });
+      await refreshPricingUploadsData();
+      await refreshNotificationsData();
     });
 
     dom.pricingUploadsList.appendChild(card);

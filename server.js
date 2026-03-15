@@ -884,6 +884,42 @@ app.patch("/api/pricing-uploads/:id/toggle", requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+app.delete("/api/pricing-uploads/:id", requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ message: "Gecersiz kayit." });
+    return;
+  }
+
+  const upload = db
+    .prepare("SELECT id, uploaded_by_user_id, uploaded_by_username FROM pricing_uploads WHERE id = ?")
+    .get(id);
+
+  if (!upload) {
+    res.status(404).json({ message: "Kayit bulunamadi." });
+    return;
+  }
+
+  const isOwner = upload.uploaded_by_user_id === req.auth.user.id;
+  if (!isOwner && !req.auth.user.isAdmin) {
+    res.status(403).json({ message: "Bu kaydi silme yetkin yok." });
+    return;
+  }
+
+  const trx = db.transaction(() => {
+    db.prepare("DELETE FROM pricing_upload_items WHERE upload_id = ?").run(id);
+    db.prepare("DELETE FROM pricing_uploads WHERE id = ?").run(id);
+  });
+  trx();
+
+  addPricingNotification(
+    req.auth.user.username,
+    `${req.auth.user.username} fiyat yuklemesini sildi (kayit #${id}).`
+  );
+
+  res.json({ ok: true });
+});
+
 app.post("/api/pricing-uploads", requireAuth, (req, res) => {
   const directionType = String(req.body?.directionType || "").trim();
   const validFrom = String(req.body?.validFrom || "").trim();
