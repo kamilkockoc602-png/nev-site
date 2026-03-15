@@ -152,6 +152,26 @@
 
             <p id="ocrStatus" class="subtle">Hazir.</p>
             <textarea id="ocrOutput" class="ocr-output" rows="12" placeholder="Nereden\tNereye\tFiyat formatinda sonuc burada olusur."></textarea>
+
+            <div id="ocrReviewPanel" class="ocr-review hidden">
+              <div class="ocr-review-head">
+                <h4>Supheli Satirlari Duzenle</h4>
+                <button id="ocrApplyReviewBtn" type="button" class="btn btn-small btn-primary">Duzenleneni TSV'ye Uygula</button>
+              </div>
+              <p class="subtle">Supheli satirlari duzenleyip sadece Ekle secili olanlari ana listeye ekleyebilirsin.</p>
+              <div class="ocr-review-table-wrap">
+                <table class="data-table ocr-review-table">
+                  <thead>
+                    <tr>
+                      <th>Ekle</th>
+                      <th>Nereye</th>
+                      <th>Fiyat</th>
+                    </tr>
+                  </thead>
+                  <tbody id="ocrReviewBody"></tbody>
+                </table>
+              </div>
+            </div>
           </section>
         </div>
 

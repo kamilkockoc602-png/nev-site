@@ -47,6 +47,9 @@ const dom = {
   ocrCopyBtn: document.getElementById("ocrCopyBtn"),
   ocrStatus: document.getElementById("ocrStatus"),
   ocrOutput: document.getElementById("ocrOutput"),
+  ocrReviewPanel: document.getElementById("ocrReviewPanel"),
+  ocrReviewBody: document.getElementById("ocrReviewBody"),
+  ocrApplyReviewBtn: document.getElementById("ocrApplyReviewBtn"),
 };
 
 const state = {
@@ -57,6 +60,9 @@ const state = {
   notifications: [],
   notifPollTimer: null,
   theme: localStorage.getItem(THEME_KEY) || "light",
+  lastOcrPairs: [],
+  lastOcrOrigin: "",
+  lastSuspiciousRows: [],
 };
 
 function applyTheme(theme) {
@@ -415,6 +421,113 @@ function aggregateReliablePairs(items) {
   return dedupePairs(results);
 }
 
+function buildSuspiciousRows(allPairs, acceptedPairs) {
+  const acceptedMap = new Map(
+    acceptedPairs.map((item) => [slugTr(item.destination), String(item.price)])
+  );
+  const freq = new Map();
+
+  for (const item of allPairs) {
+    const key = `${slugTr(item.destination)}|${item.price}`;
+    freq.set(key, (freq.get(key) || 0) + 1);
+  }
+
+  const rows = [];
+  const seen = new Set();
+  for (const item of allPairs) {
+    const destKey = slugTr(item.destination);
+    const key = `${destKey}|${item.price}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+
+    const known = isKnownDestinationName(item.destination);
+    const isAcceptedPrice = acceptedMap.get(destKey) === String(item.price);
+    const confidence = freq.get(key) || 0;
+
+    const isSuspicious = !known || !isAcceptedPrice || confidence < 2;
+    if (!isSuspicious) {
+      continue;
+    }
+
+    rows.push({
+      destination: item.destination,
+      price: String(item.price),
+      confidence,
+      include: false,
+    });
+  }
+
+  rows.sort((a, b) => a.destination.localeCompare(b.destination, "tr"));
+  return rows.slice(0, 80);
+}
+
+function renderSuspiciousRows(rows) {
+  if (!dom.ocrReviewPanel || !dom.ocrReviewBody) {
+    return;
+  }
+
+  if (!rows.length) {
+    dom.ocrReviewBody.innerHTML = "";
+    dom.ocrReviewPanel.classList.add("hidden");
+    return;
+  }
+
+  dom.ocrReviewPanel.classList.remove("hidden");
+  dom.ocrReviewBody.innerHTML = "";
+
+  for (const item of rows) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><input type="checkbox" class="ocr-include" ${item.include ? "checked" : ""} /></td>
+      <td><input type="text" class="ocr-destination" value="${item.destination}" /></td>
+      <td><input type="number" class="ocr-price" value="${item.price}" step="100" min="100" /></td>
+    `;
+    dom.ocrReviewBody.appendChild(tr);
+  }
+}
+
+function applyReviewedRowsToOutput() {
+  if (!dom.ocrReviewBody || !dom.ocrOutput) {
+    return;
+  }
+
+  const baseMap = new Map();
+  for (const item of state.lastOcrPairs || []) {
+    baseMap.set(slugTr(item.destination), {
+      destination: item.destination,
+      price: String(item.price),
+    });
+  }
+
+  const rows = dom.ocrReviewBody.querySelectorAll("tr");
+  rows.forEach((tr) => {
+    const include = tr.querySelector(".ocr-include")?.checked;
+    if (!include) {
+      return;
+    }
+
+    const rawDestination = tr.querySelector(".ocr-destination")?.value || "";
+    const rawPrice = tr.querySelector(".ocr-price")?.value || "";
+    const destination = correctDestinationName(normalizeCity(rawDestination));
+    const price = normalizeBusinessPrice(normalizePrice(rawPrice));
+
+    if (!isLikelyRow(destination, price)) {
+      return;
+    }
+
+    baseMap.set(slugTr(destination), { destination, price: String(price) });
+  });
+
+  const finalPairs = Array.from(baseMap.values()).sort((a, b) =>
+    a.destination.localeCompare(b.destination, "tr")
+  );
+  state.lastOcrPairs = finalPairs;
+  dom.ocrOutput.value = toTsv(state.lastOcrOrigin || dom.ocrOriginInput?.value || "Patnos", finalPairs);
+  setOcrStatus(`${finalPairs.length} satir guncellendi. TSV hazir.`);
+}
+
 function groupWordsByRow(words) {
   if (!Array.isArray(words) || !words.length) {
     return [];
@@ -671,6 +784,7 @@ async function runOcrAndBuildTable() {
   }
 
   dom.ocrOutput.value = "";
+  renderSuspiciousRows([]);
   setOcrStatus("Tarama basladi...");
 
   try {
@@ -734,14 +848,19 @@ async function runOcrAndBuildTable() {
       ...pass3.pairs,
     ];
     const pairs = aggregateReliablePairs(mergedPairs);
+    const suspiciousRows = buildSuspiciousRows(mergedPairs, pairs);
 
     if (!pairs.length) {
       setOcrStatus("Satirlar ayrisamadi. Daha net ve dik cekim bir fotograf deneyin.", true);
       return;
     }
 
+    state.lastOcrOrigin = origin;
+    state.lastOcrPairs = pairs;
+    state.lastSuspiciousRows = suspiciousRows;
     dom.ocrOutput.value = toTsv(origin, pairs);
-    setOcrStatus(`${pairs.length} satir olusturuldu. Excel'e dogrudan yapistirabilirsin.`);
+    renderSuspiciousRows(suspiciousRows);
+    setOcrStatus(`${pairs.length} satir olusturuldu. Supheli satirlari duzenleyebilirsin.`);
   } catch {
     setOcrStatus("Tarama sirasinda hata olustu.", true);
   }
@@ -1336,6 +1455,12 @@ if (dom.ocrScanBtn) {
 if (dom.ocrCopyBtn) {
   dom.ocrCopyBtn.addEventListener("click", () => {
     copyOcrOutput();
+  });
+}
+
+if (dom.ocrApplyReviewBtn) {
+  dom.ocrApplyReviewBtn.addEventListener("click", () => {
+    applyReviewedRowsToOutput();
   });
 }
 
