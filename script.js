@@ -1175,6 +1175,60 @@ function formatUploadDate(value) {
   return new Intl.DateTimeFormat("tr-TR", options).format(parsed);
 }
 
+function routeToParts(routeText) {
+  const text = String(routeText || "");
+  const parts = text.split(" - ");
+  if (parts.length < 2) {
+    return { origin: text.trim(), destination: "" };
+  }
+
+  return {
+    origin: String(parts.shift() || "").trim(),
+    destination: String(parts.join(" - ") || "").trim(),
+  };
+}
+
+function safeFilePart(value) {
+  return String(value || "")
+    .toLocaleLowerCase("tr-TR")
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9-]/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .trim();
+}
+
+function downloadPricingUploadAsExcel(upload) {
+  if (!window.XLSX) {
+    throw new Error("Excel kutuphanesi yuklenemedi.");
+  }
+
+  const rows = (upload.items || []).map((item) => {
+    const routeParts = routeToParts(item.route);
+    const origin = String(item.origin || routeParts.origin || "").trim();
+    const destination = String(item.destination || routeParts.destination || "").trim();
+
+    return {
+      Nereden: origin,
+      Nereye: destination,
+      "Talep Fiyati": Number(item.demandPrice) || 0,
+    };
+  });
+
+  const wb = window.XLSX.utils.book_new();
+  const ws = window.XLSX.utils.json_to_sheet(rows, {
+    header: ["Nereden", "Nereye", "Talep Fiyati"],
+  });
+  window.XLSX.utils.book_append_sheet(wb, ws, "Talep Fiyatlari");
+
+  const direction = safeFilePart(formatUploadDirection(upload.directionType));
+  const validFrom = safeFilePart(upload.validFrom);
+  const validTo = safeFilePart(upload.validTo);
+  const fileName = `talep-fiyatlari-${direction || "kayit"}-${validFrom || "baslangic"}-${validTo || "bitis"}.xlsx`;
+
+  window.XLSX.writeFile(wb, fileName);
+}
+
 function parseClientPrice(raw) {
   const text = String(raw ?? "").trim();
   if (!text) {
@@ -1427,6 +1481,7 @@ function renderPricingUploads() {
       <div class="pricing-upload-body">
         <div class="actions" style="margin-bottom:.5rem;">
           <button class="btn btn-small btn-ghost toggleUploadBtn" type="button">${upload.isOpen ? "Kapat" : "Ac"}</button>
+            <button class="btn btn-small btn-success downloadUploadExcelBtn" type="button"><span class="excel-mini-icon" aria-hidden="true">XLS</span> Excel ile indir</button>
           <button class="btn btn-small btn-danger deleteUploadBtn" type="button">Sil</button>
         </div>
         <div class="pricing-upload-table-wrap">
@@ -1457,6 +1512,17 @@ function renderPricingUploads() {
       });
       await refreshPricingUploadsData();
       await refreshNotificationsData();
+    });
+
+    card.querySelector(".downloadUploadExcelBtn").addEventListener("click", () => {
+      try {
+        downloadPricingUploadAsExcel(upload);
+      } catch (error) {
+        if (dom.pricingUploadMsg) {
+          dom.pricingUploadMsg.style.color = "#d64545";
+          dom.pricingUploadMsg.textContent = error.message || "Excel indirilemedi.";
+        }
+      }
     });
 
     dom.pricingUploadsList.appendChild(card);

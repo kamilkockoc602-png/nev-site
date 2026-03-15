@@ -874,7 +874,7 @@ app.get("/api/pricing-uploads", requireAuth, (req, res) => {
     .all();
 
   const itemQuery = db.prepare(
-    "SELECT route, demand_price, tariff_price, discounted_price FROM pricing_upload_items WHERE upload_id = ? ORDER BY id ASC"
+    "SELECT route, origin, destination, demand_price, tariff_price, discounted_price FROM pricing_upload_items WHERE upload_id = ? ORDER BY id ASC"
   );
 
   res.json({
@@ -889,6 +889,8 @@ app.get("/api/pricing-uploads", requireAuth, (req, res) => {
       createdAt: upload.created_at,
       items: itemQuery.all(upload.id).map((item) => ({
         route: item.route,
+        origin: item.origin,
+        destination: item.destination,
         demandPrice: Number(item.demand_price),
         tariffPrice: Number(item.tariff_price),
         discountedPrice: Number(item.discounted_price),
