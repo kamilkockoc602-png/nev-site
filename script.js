@@ -1126,10 +1126,15 @@ async function readPricingRowsFromFile(file) {
 
   if (name.endsWith(".csv")) {
     const text = await file.text();
-    return text
+    const lines = text
       .replace(/^\uFEFF/, "")
       .split(/\r?\n/)
       .map((line) => line.split(/[;,\t]/));
+
+    return lines.map((cells, index) => ({
+      cells,
+      rowNumber: index + 1,
+    }));
   }
 
   if (!window.XLSX) {
@@ -1144,19 +1149,46 @@ async function readPricingRowsFromFile(file) {
   }
 
   const ws = wb.Sheets[first];
-  return window.XLSX.utils.sheet_to_json(ws, {
-    header: 1,
-    blankrows: false,
-    defval: "",
-    raw: false,
-  });
+  const ref = ws["!ref"];
+  if (!ref) {
+    return [];
+  }
+
+  const range = window.XLSX.utils.decode_range(ref);
+  const out = [];
+
+  for (let r = range.s.r; r <= range.e.r; r += 1) {
+    if (ws["!rows"]?.[r]?.hidden) {
+      continue;
+    }
+
+    const cells = [];
+    for (let c = range.s.c; c <= range.e.c; c += 1) {
+      const addr = window.XLSX.utils.encode_cell({ r, c });
+      const cell = ws[addr];
+      const raw = cell ? (cell.w ?? cell.v ?? "") : "";
+      cells.push(String(raw).trim());
+    }
+
+    out.push({
+      cells,
+      rowNumber: r + 1,
+    });
+  }
+
+  return out;
 }
 
 async function parsePricingUploadRows(file) {
   const matrix = await readPricingRowsFromFile(file);
   const rows = matrix
-    .map((row) => (Array.isArray(row) ? row.map((cell) => String(cell || "").trim()) : []))
-    .filter((row) => row.some((cell) => cell));
+    .map((entry) => ({
+      cells: Array.isArray(entry?.cells)
+        ? entry.cells.map((cell) => String(cell || "").trim())
+        : [],
+      rowNumber: Number(entry?.rowNumber) || 0,
+    }))
+    .filter((entry) => entry.cells.some((cell) => cell));
 
   if (rows.length < 2) {
     throw new Error("Excel satirlari okunamadi.");
@@ -1169,9 +1201,9 @@ async function parsePricingUploadRows(file) {
 
   let headerRowIndex = -1;
   for (let i = 0; i < rows.length; i += 1) {
-    const b = normalizeUploadHeader(rows[i][originIndex] || "");
-    const c = normalizeUploadHeader(rows[i][destinationIndex] || "");
-    const d = normalizeUploadHeader(rows[i][demandIndex] || "");
+    const b = normalizeUploadHeader(rows[i].cells[originIndex] || "");
+    const c = normalizeUploadHeader(rows[i].cells[destinationIndex] || "");
+    const d = normalizeUploadHeader(rows[i].cells[demandIndex] || "");
     if (b.includes("kalkis") && c.includes("varis") && d.includes("guncel bilet fiyati")) {
       headerRowIndex = i;
       break;
@@ -1184,7 +1216,7 @@ async function parsePricingUploadRows(file) {
 
   const parsed = [];
   for (let i = headerRowIndex + 1; i < rows.length; i += 1) {
-    const row = rows[i];
+    const row = rows[i].cells;
     const origin = String(row[originIndex] || "").trim();
     const destination = String(row[destinationIndex] || "").trim();
     const demandRaw = row[demandIndex];
@@ -1194,7 +1226,7 @@ async function parsePricingUploadRows(file) {
     }
 
     parsed.push({
-      rowNumber: i + 1,
+      rowNumber: rows[i].rowNumber || i + 1,
       origin,
       destination,
       demandPrice: parseClientPrice(demandRaw),
