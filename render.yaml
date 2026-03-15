@@ -13,9 +13,3 @@ services:
         value: admin
       - key: ADMIN_PASSWORD
         generateValue: true
-      - key: DATA_DIR
-        value: /opt/render/project/src/data
-    disk:
-      name: app-data
-      mountPath: /opt/render/project/src/data
-      sizeGB: 1
