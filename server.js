@@ -825,6 +825,7 @@ app.get("/api/prices", requireAuth, (req, res) => {
 app.get("/api/tariff-prices", requireAuth, (req, res) => {
   const query = String(req.query.q || "").trim();
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 2000);
+  const offset = Math.max(Number(req.query.offset) || 0, 0);
   const queryNorm = normalizeSearchText(query);
   const queryTokens = queryNorm.split(" ").filter(Boolean);
 
