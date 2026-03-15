@@ -100,12 +100,19 @@
         </div>
 
         <div id="panelRoutes" class="panel-block hidden" data-menu="routes">
-          <h4>Rota Standart Fiyatlari</h4>
+          <h4>Bakanlik Fiyatlari</h4>
+          <div class="route-search">
+            <input id="tariffSearchInput" type="text" placeholder="Akilli arama: ornek Adana Ankara veya Istanbul" />
+            <button id="tariffSearchBtn" type="button" class="btn btn-primary">Ara</button>
+            <button id="tariffResetBtn" type="button" class="btn btn-ghost">Temizle</button>
+          </div>
+          <p id="tariffSummary" class="subtle">Tarife listesi yukleniyor...</p>
           <table class="data-table">
             <thead>
               <tr>
                 <th>Rota</th>
-                <th>Standart</th>
+                <th>Tarife Fiyati</th>
+                <th>Tarife Indirimli</th>
               </tr>
             </thead>
             <tbody id="routeTableBody"></tbody>

@@ -558,6 +558,18 @@ body[data-theme="dark"] .theme-thumb {
   margin-bottom: 0.45rem;
 }
 
+.route-search {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  gap: 0.6rem;
+  align-items: center;
+  margin: 0.7rem 0 0.3rem;
+}
+
+.route-search input {
+  min-width: 0;
+}
+
 .admin-grid {
   display: grid;
   gap: 1rem;
@@ -718,6 +730,10 @@ body[data-theme="dark"] .theme-thumb {
   }
 
   .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .route-search {
     grid-template-columns: 1fr;
   }
 

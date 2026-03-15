@@ -3,7 +3,7 @@ const THEME_KEY = "bus_theme_v1";
 
 const MENUS = [
   { key: "dashboard", label: "Genel Panel" },
-  { key: "routes", label: "Rota Standart" },
+  { key: "routes", label: "Bakanlik Fiyati" },
   { key: "pricing", label: "Fiyat Politikasi" },
   { key: "reports", label: "Raporlar" },
   { key: "ocr", label: "Foto Tarama" },
@@ -29,6 +29,10 @@ const dom = {
   templateRow: document.getElementById("userRowTemplate"),
   loadingOverlay: document.getElementById("loadingOverlay"),
   routeTableBody: document.getElementById("routeTableBody"),
+  tariffSearchInput: document.getElementById("tariffSearchInput"),
+  tariffSearchBtn: document.getElementById("tariffSearchBtn"),
+  tariffResetBtn: document.getElementById("tariffResetBtn"),
+  tariffSummary: document.getElementById("tariffSummary"),
   avgFare: document.getElementById("avgFare"),
   totalRoutes: document.getElementById("totalRoutes"),
   updateCount: document.getElementById("updateCount"),
@@ -57,6 +61,8 @@ const state = {
   currentUser: null,
   usersCache: [],
   prices: [],
+  tariffRows: [],
+  tariffTotal: 0,
   notifications: [],
   notifPollTimer: null,
   theme: localStorage.getItem(THEME_KEY) || "light",
@@ -996,10 +1002,7 @@ function render() {
 }
 
 function renderPrices() {
-  dom.routeTableBody.innerHTML = "";
-
   if (!state.prices.length) {
-    dom.routeTableBody.innerHTML = '<tr><td colspan="2">Fiyat verisi henuz yok.</td></tr>';
     dom.avgFare.textContent = "0 TL";
     dom.totalRoutes.textContent = "0";
     dom.updateCount.textContent = "0";
@@ -1007,18 +1010,51 @@ function renderPrices() {
     return;
   }
 
-  let sum = 0;
-  for (const item of state.prices) {
-    sum += item.standard;
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${item.route}</td><td>${item.standard} TL</td>`;
-    dom.routeTableBody.appendChild(tr);
-  }
-
-  const avg = Math.round(sum / state.prices.length);
+  const avg = Math.round(
+    state.prices.reduce((acc, item) => acc + item.economy + item.standard + item.vip, 0) /
+      (state.prices.length * 3)
+  );
   dom.avgFare.textContent = `${avg} TL`;
   dom.totalRoutes.textContent = String(state.prices.length);
   dom.lastPriceUpdate.textContent = `Son fiyat guncellemesi: ${state.lastUpdated || "-"}`;
+}
+
+function renderTariffRows() {
+  dom.routeTableBody.innerHTML = "";
+
+  if (!state.tariffRows.length) {
+    dom.routeTableBody.innerHTML = '<tr><td colspan="3">Sonuc bulunamadi.</td></tr>';
+    if (dom.tariffSummary) {
+      dom.tariffSummary.textContent = "Aramana uygun tarife kaydi bulunamadi.";
+    }
+    return;
+  }
+
+  state.tariffRows.forEach((item) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${item.route}</td>
+      <td>${item.tariffPrice} TL</td>
+      <td>${item.discountedPrice} TL</td>
+    `;
+    dom.routeTableBody.appendChild(tr);
+  });
+
+  if (dom.tariffSummary) {
+    const q = dom.tariffSearchInput ? dom.tariffSearchInput.value.trim() : "";
+    dom.tariffSummary.textContent = q
+      ? `Akilli arama: "${q}" icin ${state.tariffRows.length} sonuc (toplam eslesen: ${state.tariffTotal}).`
+      : `Toplam ${state.tariffTotal} bakanlik tarife satiri listeleniyor.`;
+  }
+}
+
+async function refreshTariffData(query = "") {
+  const q = String(query || "").trim();
+  const url = `/api/tariff-prices?q=${encodeURIComponent(q)}&limit=500`;
+  const result = await apiFetch(url);
+  state.tariffRows = result.rows || [];
+  state.tariffTotal = Number(result.total || 0);
+  renderTariffRows();
 }
 
 function renderNotifications() {
@@ -1086,6 +1122,16 @@ function activatePanel(menuKey) {
 
   if (menuKey === "logs") {
     renderLoginLogs();
+  }
+
+  if (menuKey === "routes") {
+    const query = dom.tariffSearchInput ? dom.tariffSearchInput.value : "";
+    refreshTariffData(query).catch((error) => {
+      dom.routeTableBody.innerHTML = `<tr><td colspan="3">${error.message}</td></tr>`;
+      if (dom.tariffSummary) {
+        dom.tariffSummary.textContent = "Tarife verisi yuklenemedi.";
+      }
+    });
   }
 }
 
@@ -1445,6 +1491,31 @@ dom.notifReadAllBtn.addEventListener("click", async () => {
 dom.themeToggleBtn.addEventListener("click", () => {
   toggleTheme();
 });
+
+if (dom.tariffSearchBtn) {
+  dom.tariffSearchBtn.addEventListener("click", async () => {
+    await refreshTariffData(dom.tariffSearchInput?.value || "");
+  });
+}
+
+if (dom.tariffSearchInput) {
+  dom.tariffSearchInput.addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+    event.preventDefault();
+    await refreshTariffData(dom.tariffSearchInput.value || "");
+  });
+}
+
+if (dom.tariffResetBtn) {
+  dom.tariffResetBtn.addEventListener("click", async () => {
+    if (dom.tariffSearchInput) {
+      dom.tariffSearchInput.value = "";
+    }
+    await refreshTariffData("");
+  });
+}
 
 if (dom.ocrScanBtn) {
   dom.ocrScanBtn.addEventListener("click", () => {
