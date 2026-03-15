@@ -42,6 +42,7 @@ const dom = {
   themeToggleBtn: document.getElementById("themeToggleBtn"),
   themeLabel: document.getElementById("themeLabel"),
   ocrOriginInput: document.getElementById("ocrOriginInput"),
+  ocrModeSelect: document.getElementById("ocrModeSelect"),
   ocrImageInput: document.getElementById("ocrImageInput"),
   ocrScanBtn: document.getElementById("ocrScanBtn"),
   ocrCopyBtn: document.getElementById("ocrCopyBtn"),
@@ -92,7 +93,12 @@ const KNOWN_DESTINATIONS = [
   "Ordu", "Fatsa", "Çarşamba", "Perşembe", "Samsun", "Sinop", "Gaziantep", "Osmaniye",
   "Adana", "Ereğli", "Ilgın", "Afyon", "Uşak", "Kula", "Salihli", "Turgutlu", "Manisa",
   "İzmir", "Didim", "Bodrum", "Polatlı", "Balıkesir", "Edremit", "Burhaniye", "Ayvalık",
-  "Bolu", "Düzce", "Sakarya", "Kocaeli", "Gebze", "Alibeyköy", "Dudullu", "Esenler"
+  "Bolu", "Düzce", "Sakarya", "Kocaeli", "Gebze", "Alibeyköy", "Dudullu", "Esenler",
+  "Pınarbaşı", "Yıldızeli", "Tokat", "Amasya", "Terme", "Keşap", "Fındıklı", "Pazar", "Of",
+  "Boğazlıyan", "Sarıkaya", "Alaca", "Çorum", "Merzifon", "Hekimhan", "Kangal", "Ulaş",
+  "Hafik", "İmranlı", "Erzincan", "Kelkit", "Torul", "Malatya", "Elazığ", "Bingöl", "Genç",
+  "Karlıova", "Çat", "Aşkale", "Araklı", "Sürmene", "Horasan", "Pasinler", "Selim",
+  "Sarıkamış", "Kars", "Ardahan"
 ];
 
 function slugTr(value) {
@@ -254,6 +260,26 @@ function findDestinationInLine(line) {
   return correctDestinationName(normalizeCity(beforeDigit));
 }
 
+function findKnownDestinationInLine(line) {
+  const lineSlug = slugTr(line);
+  if (!lineSlug) {
+    return "";
+  }
+
+  let best = "";
+  let bestLen = 0;
+
+  for (const city of KNOWN_DESTINATIONS) {
+    const citySlug = slugTr(city);
+    if (citySlug && lineSlug.includes(citySlug) && citySlug.length > bestLen) {
+      best = city;
+      bestLen = citySlug.length;
+    }
+  }
+
+  return best ? toTurkishTitleCase(best) : "";
+}
+
 function extractPriceCandidates(line) {
   const matches = String(line).match(/\d{2,6}/g) || [];
   const out = [];
@@ -300,6 +326,131 @@ function parseDestinationsAndPrices(text) {
     seen.add(key);
     return true;
   });
+}
+
+function dedupePairs(items) {
+  const out = [];
+  const seen = new Set();
+  for (const item of items) {
+    const key = slugTr(item.destination);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+function groupWordsByRow(words) {
+  if (!Array.isArray(words) || !words.length) {
+    return [];
+  }
+
+  const filtered = words
+    .filter((w) => w && w.text && w.bbox)
+    .map((w) => ({
+      text: String(w.text).trim(),
+      x0: Number(w.bbox.x0),
+      x1: Number(w.bbox.x1),
+      y0: Number(w.bbox.y0),
+      y1: Number(w.bbox.y1),
+    }))
+    .filter((w) => w.text && Number.isFinite(w.x0) && Number.isFinite(w.y0));
+
+  if (!filtered.length) {
+    return [];
+  }
+
+  const avgHeight =
+    filtered.reduce((acc, w) => acc + Math.max(1, w.y1 - w.y0), 0) / filtered.length;
+  const tolerance = Math.max(8, Math.round(avgHeight * 0.7));
+
+  filtered.sort((a, b) => ((a.y0 + a.y1) / 2) - ((b.y0 + b.y1) / 2));
+
+  const rows = [];
+  for (const word of filtered) {
+    const yCenter = (word.y0 + word.y1) / 2;
+    let bucket = null;
+    for (const row of rows) {
+      if (Math.abs(row.y - yCenter) <= tolerance) {
+        bucket = row;
+        break;
+      }
+    }
+
+    if (!bucket) {
+      bucket = { y: yCenter, words: [] };
+      rows.push(bucket);
+    }
+
+    bucket.words.push(word);
+    bucket.y = (bucket.y * (bucket.words.length - 1) + yCenter) / bucket.words.length;
+  }
+
+  rows.forEach((row) => row.words.sort((a, b) => a.x0 - b.x0));
+  rows.sort((a, b) => a.y - b.y);
+  return rows;
+}
+
+function parseA4SegmentWords(segmentWords) {
+  if (!segmentWords || segmentWords.length < 2) {
+    return null;
+  }
+
+  const text = segmentWords.map((w) => w.text).join(" ");
+  const destination = findKnownDestinationInLine(text);
+  if (!destination) {
+    return null;
+  }
+
+  const priceCandidates = extractPriceCandidates(text);
+  const price = priceCandidates[priceCandidates.length - 1] || "";
+  if (!isLikelyRow(destination, price)) {
+    return null;
+  }
+
+  return { destination, price };
+}
+
+function parseA4FromOcrData(ocrData) {
+  const rows = groupWordsByRow(ocrData?.words || []);
+  if (!rows.length) {
+    return [];
+  }
+
+  const centers = [];
+  rows.forEach((row) => {
+    row.words.forEach((w) => {
+      centers.push((w.x0 + w.x1) / 2);
+    });
+  });
+
+  if (!centers.length) {
+    return [];
+  }
+
+  centers.sort((a, b) => a - b);
+  const splitX = centers[Math.floor(centers.length / 2)];
+  const margin = 12;
+  const pairs = [];
+
+  for (const row of rows) {
+    const left = row.words.filter((w) => (w.x0 + w.x1) / 2 < splitX - margin);
+    const right = row.words.filter((w) => (w.x0 + w.x1) / 2 >= splitX + margin);
+
+    const leftPair = parseA4SegmentWords(left);
+    const rightPair = parseA4SegmentWords(right);
+
+    if (leftPair) {
+      pairs.push(leftPair);
+    }
+    if (rightPair) {
+      pairs.push(rightPair);
+    }
+  }
+
+  return dedupePairs(pairs);
 }
 
 function collectTextBlocks(ocrData) {
@@ -386,6 +537,7 @@ async function runOcrAndBuildTable() {
 
   const file = dom.ocrImageInput.files && dom.ocrImageInput.files[0];
   const origin = dom.ocrOriginInput.value.trim() || "Patnos";
+  const mode = dom.ocrModeSelect?.value || "normal";
 
   if (!file) {
     setOcrStatus("Lutfen once bir fotograf sec.", true);
@@ -439,24 +591,39 @@ async function runOcrAndBuildTable() {
         }
       }
 
-      return unique;
+      return {
+        pairs: unique,
+        ocrData: result?.data || {},
+      };
     };
 
     const pass1 = await runPass(processedImage, "Tarama 1/3", 6);
     const pass2 = await runPass(processedImage, "Tarama 2/3", 11);
     const pass3 = await runPass(file, "Tarama 3/3", 6);
 
-    const byKey = new Map();
-    [pass1, pass2, pass3].forEach((list) => {
-      list.forEach((item) => {
-        const key = slugTr(item.destination);
-        if (!byKey.has(key)) {
-          byKey.set(key, item);
-        }
+    let pairs = [];
+    if (mode === "a4") {
+      const a4Pairs = [
+        ...parseA4FromOcrData(pass1.ocrData),
+        ...parseA4FromOcrData(pass2.ocrData),
+        ...parseA4FromOcrData(pass3.ocrData),
+        ...pass1.pairs,
+        ...pass2.pairs,
+        ...pass3.pairs,
+      ];
+      pairs = dedupePairs(a4Pairs);
+    } else {
+      const byKey = new Map();
+      [pass1.pairs, pass2.pairs, pass3.pairs].forEach((list) => {
+        list.forEach((item) => {
+          const key = slugTr(item.destination);
+          if (!byKey.has(key)) {
+            byKey.set(key, item);
+          }
+        });
       });
-    });
-
-    const pairs = Array.from(byKey.values());
+      pairs = Array.from(byKey.values());
+    }
 
     if (!pairs.length) {
       setOcrStatus("Satirlar ayrisamadi. Daha net ve dik cekim bir fotograf deneyin.", true);
