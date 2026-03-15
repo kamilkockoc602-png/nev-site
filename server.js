@@ -461,10 +461,6 @@ async function refreshPrices(reason = "interval") {
     `
   );
 
-  const insertNotification = db.prepare(
-    "INSERT INTO price_notifications (route, message, created_at, is_read) VALUES (?, ?, ?, 0)"
-  );
-
   let changedCount = 0;
   const stamp = nowStamp();
 
@@ -483,14 +479,10 @@ async function refreshPrices(reason = "interval") {
         for (const [label, oldVal, newVal] of fields) {
           if (oldVal !== newVal) {
             changedCount += 1;
-            const direction = newVal > oldVal ? "yukseldi" : "dustu";
-            const msg = `${item.route} - ${label} ${oldVal} TL -> ${newVal} TL (${direction})`;
-            insertNotification.run(item.route, msg, stamp);
           }
         }
       } else {
         changedCount += 1;
-        insertNotification.run(item.route, `${item.route} rotasi sisteme eklendi.`, stamp);
       }
     }
   });
@@ -806,34 +798,20 @@ app.get("/api/admin/logs", requireAuth, requireAdmin, (req, res) => {
 });
 
 app.get("/api/prices", requireAuth, (req, res) => {
-  const prices = getPrices();
-  const avg =
-    prices.length > 0
-      ? Math.round(
-          prices.reduce((acc, item) => acc + item.economy + item.standard + item.vip, 0) /
-            (prices.length * 3)
         )
       : 0;
 
   res.json({
     prices: prices.map((item) => ({
       route: item.route,
-      economy: item.economy,
-      standard: item.standard,
-      vip: item.vip,
-      updatedAt: item.updated_at,
-    })),
-    avgFare: avg,
-    totalRoutes: prices.length,
-    updateCount: Number(getMeta("price_update_count", "1")) || 1,
-    lastUpdated: getMeta("last_price_update", "-"),
+  const notifications = pricingNotifications
+    .map((n) => ({
   });
 });
 
 app.get("/api/tariff-prices", requireAuth, (req, res) => {
   const query = String(req.query.q || "").trim();
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 2000);
-  const offset = Math.max(Number(req.query.offset) || 0, 0);
   const queryNorm = normalizeSearchText(query);
   const queryTokens = queryNorm.split(" ").filter(Boolean);
 
@@ -1133,7 +1111,6 @@ app.get("/api/notifications", requireAuth, (req, res) => {
 });
 
 app.post("/api/notifications/read-all", requireAuth, (req, res) => {
-  db.prepare("UPDATE price_notifications SET is_read = 1 WHERE is_read = 0").run();
   db.prepare("UPDATE pricing_notifications SET is_read = 1 WHERE is_read = 0").run();
   res.json({ ok: true });
 });
