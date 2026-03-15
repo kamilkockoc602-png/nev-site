@@ -33,7 +33,7 @@ const SUPPLEMENTARY_TARIFF_CSV_PATH = path.join(
 const PRIMARY_TARIFF_JSON_PATH = path.join(
   __dirname,
   "tariffs",
-  "bakanlik_data_guncel_eksikler_eklendi.json"
+  "bakanlik_yeni_guzergahlar_15.09.2025.json"
 );
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -145,6 +145,13 @@ function loadTariffRowsFromJson(jsonPath) {
 }
 
 function loadTariffRowsFromCsv() {
+  if (fs.existsSync(PRIMARY_TARIFF_JSON_PATH)) {
+    const jsonRows = loadTariffRowsFromJson(PRIMARY_TARIFF_JSON_PATH);
+    jsonRows.sort((a, b) => a.route.localeCompare(b.route, "tr"));
+    console.log(`Ana tarife JSON yüklendi: ${jsonRows.length} satir`);
+    return jsonRows;
+  }
+
   if (!fs.existsSync(TARIFF_CSV_PATH)) {
     console.warn(`Tarife CSV bulunamadi: ${TARIFF_CSV_PATH}`);
     return [];
@@ -233,31 +240,6 @@ function loadTariffRowsFromCsv() {
     }
 
     console.log(`Ek tarife CSV yüklendi: ${added} yeni satir`);
-  }
-
-  if (fs.existsSync(PRIMARY_TARIFF_JSON_PATH)) {
-    const jsonRows = loadTariffRowsFromJson(PRIMARY_TARIFF_JSON_PATH);
-    const byKey = new Map(rows.map((row) => [row.routeSearch, row]));
-    let overridden = 0;
-    let added = 0;
-
-    for (const jsonRow of jsonRows) {
-      const existing = byKey.get(jsonRow.routeSearch);
-      if (existing) {
-        existing.route = jsonRow.route;
-        existing.tariffPrice = jsonRow.tariffPrice;
-        existing.discountedPrice = jsonRow.discountedPrice;
-        overridden += 1;
-      } else {
-        rows.push(jsonRow);
-        byKey.set(jsonRow.routeSearch, jsonRow);
-        added += 1;
-      }
-    }
-
-    console.log(
-      `Tarife JSON yüklendi: ${jsonRows.length} satir, ${overridden} guncellendi, ${added} yeni eklendi`
-    );
   }
 
   rows.sort((a, b) => a.route.localeCompare(b.route, "tr"));
