@@ -738,11 +738,21 @@ app.get("/api/tariff-prices", requireAuth, (req, res) => {
 
   let matched = tariffRows;
   if (queryNorm) {
-    matched = tariffRows
-      .map((row) => ({ row, score: scoreTariffRow(row, queryNorm, queryTokens) }))
-      .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score || a.row.route.localeCompare(b.row.route, "tr"))
-      .map((item) => item.row);
+    const exactMatches = tariffRows.filter((row) => row.routeSearch === queryNorm);
+    if (exactMatches.length > 0) {
+      matched = exactMatches;
+    } else {
+      matched = tariffRows
+        .filter((row) => {
+          if (queryTokens.length <= 1) {
+            return row.routeSearch.includes(queryNorm);
+          }
+          return queryTokens.every((token) => row.routeSearch.includes(token));
+        })
+        .map((row) => ({ row, score: scoreTariffRow(row, queryNorm, queryTokens) }))
+        .sort((a, b) => b.score - a.score || a.row.route.localeCompare(b.row.route, "tr"))
+        .map((item) => item.row);
+    }
   }
 
   const rows = matched.slice(offset, offset + limit).map((row) => ({
