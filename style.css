@@ -578,7 +578,7 @@ body[data-theme="dark"] .theme-thumb {
 }
 
 .pricing-file-field {
-  grid-column: span 2;
+  grid-column: span 3;
 }
 
 .pricing-upload-grid button {
@@ -606,15 +606,33 @@ body[data-theme="dark"] .theme-thumb {
 .pricing-upload-card {
   border: 1px solid var(--stroke);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.45);
-  padding: 0.5rem 0.7rem;
+  background: rgba(255, 255, 255, 0.5);
+  padding: 0.55rem 0.75rem;
+  box-shadow: 0 10px 24px rgba(16, 42, 67, 0.08);
 }
 
 .pricing-upload-card summary {
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 0.35rem;
+}
+
+.pricing-upload-top {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.pricing-upload-chip {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--stroke);
+  padding: 0.16rem 0.5rem;
+  font-size: 0.75rem;
+  background: rgba(15, 157, 143, 0.12);
 }
 
 .pricing-upload-meta {
@@ -624,6 +642,14 @@ body[data-theme="dark"] .theme-thumb {
 
 .pricing-upload-body {
   margin-top: 0.65rem;
+}
+
+.pricing-upload-table-wrap {
+  max-height: 340px;
+  overflow: auto;
+  border-radius: 10px;
+  border: 1px solid var(--stroke);
+  background: rgba(255, 255, 255, 0.35);
 }
 
 .route-search {

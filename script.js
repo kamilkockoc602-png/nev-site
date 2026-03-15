@@ -35,7 +35,6 @@ const dom = {
   tariffSummary: document.getElementById("tariffSummary"),
   pricingUploadForm: document.getElementById("pricingUploadForm"),
   pricingDirectionType: document.getElementById("pricingDirectionType"),
-  pricingOriginFilter: document.getElementById("pricingOriginFilter"),
   pricingValidFrom: document.getElementById("pricingValidFrom"),
   pricingValidTo: document.getElementById("pricingValidTo"),
   pricingExcelFile: document.getElementById("pricingExcelFile"),
@@ -1315,18 +1314,25 @@ function renderPricingUploads() {
 
     card.innerHTML = `
       <summary>
-        <strong>${upload.uploadedBy}</strong> - ${upload.directionType} - ${upload.validFrom} / ${upload.validTo}
-        <span class="pricing-upload-meta">${upload.items.length} satir | ${upload.createdAt}</span>
+        <div class="pricing-upload-top">
+          <strong>${upload.uploadedBy}</strong>
+          <span class="pricing-upload-chip">${upload.directionType}</span>
+          <span class="pricing-upload-chip">${upload.items.length} satir</span>
+        </div>
+        <span class="pricing-upload-meta">${upload.validFrom} - ${upload.validTo}</span>
+        <span class="pricing-upload-meta">Yukleme: ${upload.createdAt}</span>
       </summary>
       <div class="pricing-upload-body">
         <div class="actions" style="margin-bottom:.5rem;">
           <button class="btn btn-small btn-ghost toggleUploadBtn" type="button">${upload.isOpen ? "Kapat" : "Ac"}</button>
           <button class="btn btn-small btn-danger deleteUploadBtn" type="button">Sil</button>
         </div>
-        <table class="data-table">
-          <thead><tr><th>Rota</th><th>Talep</th><th>Tarife</th><th>Indirimli</th></tr></thead>
-          <tbody>${detailsRows || '<tr><td colspan="4">Detay yok.</td></tr>'}</tbody>
-        </table>
+        <div class="pricing-upload-table-wrap">
+          <table class="data-table">
+            <thead><tr><th>Rota</th><th>Talep</th><th>Tarife</th><th>Indirimli</th></tr></thead>
+            <tbody>${detailsRows || '<tr><td colspan="4">Detay yok.</td></tr>'}</tbody>
+          </table>
+        </div>
       </div>
     `;
 
@@ -1368,12 +1374,6 @@ async function submitPricingUpload() {
 
   const file = dom.pricingExcelFile.files[0];
   let rows = await parsePricingUploadRows(file);
-
-  const originFilterRaw = String(dom.pricingOriginFilter?.value || "").trim();
-  if (originFilterRaw) {
-    const expected = normalizeUploadHeader(originFilterRaw);
-    rows = rows.filter((row) => normalizeUploadHeader(row.origin) === expected);
-  }
 
   if (!rows.length) {
     throw new Error("Excel icinde gecerli satir yok.");
