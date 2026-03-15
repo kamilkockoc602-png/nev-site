@@ -604,11 +604,15 @@ body[data-theme="dark"] .theme-thumb {
 }
 
 .pricing-upload-card {
-  border: 1px solid var(--stroke);
+  border: 1px solid rgba(16, 42, 67, 0.22);
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.9);
   padding: 0.55rem 0.75rem;
-  box-shadow: 0 10px 24px rgba(16, 42, 67, 0.08);
+  box-shadow: 0 12px 28px rgba(16, 42, 67, 0.14);
+}
+
+.pricing-upload-card[open] {
+  border-color: rgba(15, 157, 143, 0.45);
 }
 
 .pricing-upload-card summary {
@@ -616,6 +620,11 @@ body[data-theme="dark"] .theme-thumb {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
+}
+
+.pricing-upload-card summary strong {
+  color: var(--ink);
+  font-size: 1.03rem;
 }
 
 .pricing-upload-top {
@@ -629,15 +638,18 @@ body[data-theme="dark"] .theme-thumb {
   display: inline-flex;
   align-items: center;
   border-radius: 999px;
-  border: 1px solid var(--stroke);
-  padding: 0.16rem 0.5rem;
+  border: 1px solid rgba(15, 157, 143, 0.45);
+  padding: 0.18rem 0.56rem;
   font-size: 0.75rem;
-  background: rgba(15, 157, 143, 0.12);
+  font-weight: 700;
+  color: #0a5f56;
+  background: rgba(15, 157, 143, 0.2);
 }
 
 .pricing-upload-meta {
-  color: var(--muted);
+  color: #28475d;
   font-size: 0.82rem;
+  font-weight: 600;
 }
 
 .pricing-upload-body {
@@ -648,8 +660,81 @@ body[data-theme="dark"] .theme-thumb {
   max-height: 340px;
   overflow: auto;
   border-radius: 10px;
-  border: 1px solid var(--stroke);
-  background: rgba(255, 255, 255, 0.35);
+  border: 1px solid rgba(16, 42, 67, 0.24);
+  background: rgba(255, 255, 255, 0.97);
+}
+
+.pricing-upload-table-wrap .data-table {
+  margin-top: 0;
+}
+
+.pricing-upload-table-wrap .data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #eef5fb;
+  color: #12354a;
+  font-weight: 800;
+  border-bottom: 1px solid rgba(16, 42, 67, 0.22);
+}
+
+.pricing-upload-table-wrap .data-table td {
+  color: #1a3446;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(16, 42, 67, 0.12);
+}
+
+.pricing-upload-table-wrap .data-table tbody tr:nth-child(even) {
+  background: rgba(18, 53, 74, 0.045);
+}
+
+.pricing-upload-table-wrap .data-table td:nth-child(2) {
+  color: #0b6a5f;
+  font-weight: 800;
+}
+
+body[data-theme="dark"] .pricing-upload-card {
+  border-color: rgba(156, 184, 204, 0.36);
+  background: rgba(10, 27, 37, 0.9);
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.35);
+}
+
+body[data-theme="dark"] .pricing-upload-card summary strong {
+  color: #f0f7ff;
+}
+
+body[data-theme="dark"] .pricing-upload-chip {
+  color: #dcfff8;
+  border-color: rgba(61, 194, 178, 0.7);
+  background: rgba(61, 194, 178, 0.2);
+}
+
+body[data-theme="dark"] .pricing-upload-meta {
+  color: #c2d6e6;
+}
+
+body[data-theme="dark"] .pricing-upload-table-wrap {
+  border-color: rgba(156, 184, 204, 0.35);
+  background: rgba(7, 22, 31, 0.96);
+}
+
+body[data-theme="dark"] .pricing-upload-table-wrap .data-table th {
+  background: #103141;
+  color: #e8f4ff;
+  border-bottom-color: rgba(156, 184, 204, 0.35);
+}
+
+body[data-theme="dark"] .pricing-upload-table-wrap .data-table td {
+  color: #d8e9f8;
+  border-bottom-color: rgba(156, 184, 204, 0.2);
+}
+
+body[data-theme="dark"] .pricing-upload-table-wrap .data-table tbody tr:nth-child(even) {
+  background: rgba(156, 184, 204, 0.08);
+}
+
+body[data-theme="dark"] .pricing-upload-table-wrap .data-table td:nth-child(2) {
+  color: #6ef2dd;
 }
 
 .route-search {
