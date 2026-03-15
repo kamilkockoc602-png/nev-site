@@ -96,8 +96,13 @@ function defaultPermissions(fullAccess) {
 }
 
 function ensureAdmin() {
-  const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(ADMIN_USERNAME);
+  const existing = db
+    .prepare("SELECT id FROM users WHERE username = ?")
+    .get(ADMIN_USERNAME);
   if (existing) {
+    db.prepare(
+      "UPDATE users SET password = ?, is_admin = 1, is_active = 1 WHERE id = ?"
+    ).run(ADMIN_PASSWORD, existing.id);
     return;
   }
 
