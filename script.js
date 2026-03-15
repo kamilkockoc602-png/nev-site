@@ -71,6 +71,7 @@ const state = {
   currentUser: null,
   usersCache: [],
   prices: [],
+  tariffCatalog: [],
   tariffRows: [],
   tariffTotal: 0,
   tariffOffset: 0,
@@ -83,6 +84,7 @@ const state = {
   theme: localStorage.getItem(THEME_KEY) || "light",
   lastOcrPairs: [],
   lastOcrOrigin: "",
+  lastOcrDestinationPool: [],
   lastSuspiciousRows: [],
 };
 
@@ -170,19 +172,27 @@ function levenshtein(a, b) {
 }
 
 function correctDestinationName(name) {
+  return correctDestinationNameWithPool(name, KNOWN_DESTINATIONS);
+}
+
+function correctDestinationNameWithPool(name, destinationPool = KNOWN_DESTINATIONS) {
   const raw = String(name || "").trim();
   if (!raw) {
     return raw;
   }
 
-  const exact = KNOWN_DESTINATIONS.find((city) => slugTr(city) === slugTr(raw));
+  const pool = Array.isArray(destinationPool) && destinationPool.length
+    ? destinationPool
+    : KNOWN_DESTINATIONS;
+
+  const exact = pool.find((city) => slugTr(city) === slugTr(raw));
   if (exact) {
     return toTurkishTitleCase(exact);
   }
 
   let best = null;
   let bestDistance = Infinity;
-  for (const city of KNOWN_DESTINATIONS) {
+  for (const city of pool) {
     const d = levenshtein(raw, city);
     if (d < bestDistance) {
       bestDistance = d;
@@ -263,16 +273,67 @@ function normalizeBusinessPrice(price) {
   return String(rounded);
 }
 
-function findDestinationInLine(line) {
+function buildDestinationSlugSet(destinationPool = KNOWN_DESTINATIONS) {
+  const pool = Array.isArray(destinationPool) && destinationPool.length
+    ? destinationPool
+    : KNOWN_DESTINATIONS;
+  return new Set(pool.map((city) => slugTr(city)).filter(Boolean));
+}
+
+function buildTariffDestinationPool(origin) {
+  const originSlug = slugTr(origin);
+  if (!originSlug || !Array.isArray(state.tariffCatalog) || !state.tariffCatalog.length) {
+    return KNOWN_DESTINATIONS;
+  }
+
+  const result = [];
+  const seen = new Set();
+
+  for (const row of state.tariffCatalog) {
+    const route = String(row?.route || "");
+    const parts = route.split(" - ").map((part) => String(part || "").trim()).filter(Boolean);
+    if (parts.length < 2) {
+      continue;
+    }
+
+    const from = parts[0];
+    const to = parts.slice(1).join(" - ");
+    const fromSlug = slugTr(from);
+    const toSlug = slugTr(to);
+
+    let candidate = "";
+    if (fromSlug === originSlug) {
+      candidate = to;
+    } else if (toSlug === originSlug) {
+      candidate = from;
+    }
+
+    const key = slugTr(candidate);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    result.push(toTurkishTitleCase(candidate));
+  }
+
+  return result.length ? result : KNOWN_DESTINATIONS;
+}
+
+function findDestinationInLine(line, destinationPool = KNOWN_DESTINATIONS) {
   const lineSlug = slugTr(line);
   if (!lineSlug) {
     return "";
   }
 
+  const pool = Array.isArray(destinationPool) && destinationPool.length
+    ? destinationPool
+    : KNOWN_DESTINATIONS;
+
   let best = "";
   let bestLen = 0;
 
-  for (const city of KNOWN_DESTINATIONS) {
+  for (const city of pool) {
     const citySlug = slugTr(city);
     if (citySlug && lineSlug.includes(citySlug) && citySlug.length > bestLen) {
       best = city;
@@ -285,19 +346,23 @@ function findDestinationInLine(line) {
   }
 
   const beforeDigit = String(line).split(/\d/)[0] || "";
-  return correctDestinationName(normalizeCity(beforeDigit));
+  return correctDestinationNameWithPool(normalizeCity(beforeDigit), pool);
 }
 
-function findKnownDestinationInLine(line) {
+function findKnownDestinationInLine(line, destinationPool = KNOWN_DESTINATIONS) {
   const lineSlug = slugTr(line);
   if (!lineSlug) {
     return "";
   }
 
+  const pool = Array.isArray(destinationPool) && destinationPool.length
+    ? destinationPool
+    : KNOWN_DESTINATIONS;
+
   let best = "";
   let bestLen = 0;
 
-  for (const city of KNOWN_DESTINATIONS) {
+  for (const city of pool) {
     const citySlug = slugTr(city);
     if (citySlug && lineSlug.includes(citySlug) && citySlug.length > bestLen) {
       best = city;
@@ -308,8 +373,8 @@ function findKnownDestinationInLine(line) {
   return best ? toTurkishTitleCase(best) : "";
 }
 
-function isKnownDestinationName(name) {
-  return KNOWN_DESTINATION_SLUGS.has(slugTr(name));
+function isKnownDestinationName(name, destinationSlugSet = KNOWN_DESTINATION_SLUGS) {
+  return destinationSlugSet.has(slugTr(name));
 }
 
 function extractPriceCandidates(line) {
@@ -324,13 +389,13 @@ function extractPriceCandidates(line) {
   return out;
 }
 
-function parseLineToPair(line) {
+function parseLineToPair(line, destinationPool = KNOWN_DESTINATIONS) {
   const cleaned = String(line || "").replace(/[|]/g, " ").replace(/\s+/g, " ").trim();
   if (!cleaned) {
     return null;
   }
 
-  const destination = findDestinationInLine(cleaned);
+  const destination = findDestinationInLine(cleaned, destinationPool);
   const priceCandidates = extractPriceCandidates(cleaned);
   const price = priceCandidates[priceCandidates.length - 1] || "";
 
@@ -341,7 +406,7 @@ function parseLineToPair(line) {
   return { destination, price };
 }
 
-function parseDestinationsAndPrices(text) {
+function parseDestinationsAndPrices(text, destinationPool = KNOWN_DESTINATIONS) {
   const lines = String(text || "")
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -350,7 +415,7 @@ function parseDestinationsAndPrices(text) {
   const pairs = [];
 
   for (const line of lines) {
-    const pair = parseLineToPair(line);
+    const pair = parseLineToPair(line, destinationPool);
     if (pair) {
       pairs.push(pair);
     }
@@ -381,7 +446,11 @@ function dedupePairs(items) {
   return out;
 }
 
-function aggregateReliablePairs(items) {
+function aggregateReliablePairs(
+  items,
+  destinationSlugSet = KNOWN_DESTINATION_SLUGS,
+  destinationPool = KNOWN_DESTINATIONS
+) {
   const byDestination = new Map();
 
   for (const item of items) {
@@ -398,15 +467,16 @@ function aggregateReliablePairs(items) {
       byDestination.set(key, {
         destination: item.destination,
         total: 0,
-        isKnown: isKnownDestinationName(item.destination),
+        isKnown: isKnownDestinationName(item.destination, destinationSlugSet),
         priceCounts: new Map(),
       });
     }
 
     const bucket = byDestination.get(key);
     bucket.total += 1;
-    if (isKnownDestinationName(item.destination)) {
-      bucket.destination = findKnownDestinationInLine(item.destination) || item.destination;
+    if (isKnownDestinationName(item.destination, destinationSlugSet)) {
+      bucket.destination =
+        findKnownDestinationInLine(item.destination, destinationPool) || item.destination;
       bucket.isKnown = true;
     }
 
@@ -442,7 +512,7 @@ function aggregateReliablePairs(items) {
   return dedupePairs(results);
 }
 
-function buildSuspiciousRows(allPairs, acceptedPairs) {
+function buildSuspiciousRows(allPairs, acceptedPairs, destinationSlugSet = KNOWN_DESTINATION_SLUGS) {
   const acceptedMap = new Map(
     acceptedPairs.map((item) => [slugTr(item.destination), String(item.price)])
   );
@@ -463,7 +533,7 @@ function buildSuspiciousRows(allPairs, acceptedPairs) {
     }
     seen.add(key);
 
-    const known = isKnownDestinationName(item.destination);
+    const known = isKnownDestinationName(item.destination, destinationSlugSet);
     const isAcceptedPrice = acceptedMap.get(destKey) === String(item.price);
     const confidence = freq.get(key) || 0;
 
@@ -523,6 +593,10 @@ function applyReviewedRowsToOutput() {
   }
 
   const rows = dom.ocrReviewBody.querySelectorAll("tr");
+  const destinationPool =
+    Array.isArray(state.lastOcrDestinationPool) && state.lastOcrDestinationPool.length
+      ? state.lastOcrDestinationPool
+      : KNOWN_DESTINATIONS;
   rows.forEach((tr) => {
     const include = tr.querySelector(".ocr-include")?.checked;
     if (!include) {
@@ -531,7 +605,7 @@ function applyReviewedRowsToOutput() {
 
     const rawDestination = tr.querySelector(".ocr-destination")?.value || "";
     const rawPrice = tr.querySelector(".ocr-price")?.value || "";
-    const destination = correctDestinationName(normalizeCity(rawDestination));
+    const destination = correctDestinationNameWithPool(normalizeCity(rawDestination), destinationPool);
     const price = normalizeBusinessPrice(normalizePrice(rawPrice));
 
     if (!isLikelyRow(destination, price)) {
@@ -600,13 +674,13 @@ function groupWordsByRow(words) {
   return rows;
 }
 
-function parseA4SegmentWords(segmentWords) {
+function parseA4SegmentWords(segmentWords, destinationPool = KNOWN_DESTINATIONS) {
   if (!segmentWords || segmentWords.length < 2) {
     return null;
   }
 
   const text = segmentWords.map((w) => w.text).join(" ");
-  const destination = findKnownDestinationInLine(text);
+  const destination = findKnownDestinationInLine(text, destinationPool);
   if (!destination) {
     return null;
   }
@@ -620,7 +694,7 @@ function parseA4SegmentWords(segmentWords) {
   return { destination, price };
 }
 
-function parseA4FromOcrData(ocrData) {
+function parseA4FromOcrData(ocrData, destinationPool = KNOWN_DESTINATIONS) {
   const rows = groupWordsByRow(ocrData?.words || []);
   if (!rows.length) {
     return [];
@@ -646,8 +720,8 @@ function parseA4FromOcrData(ocrData) {
     const left = row.words.filter((w) => (w.x0 + w.x1) / 2 < splitX - margin);
     const right = row.words.filter((w) => (w.x0 + w.x1) / 2 >= splitX + margin);
 
-    const leftPair = parseA4SegmentWords(left);
-    const rightPair = parseA4SegmentWords(right);
+    const leftPair = parseA4SegmentWords(left, destinationPool);
+    const rightPair = parseA4SegmentWords(right, destinationPool);
 
     if (leftPair) {
       pairs.push(leftPair);
@@ -660,7 +734,7 @@ function parseA4FromOcrData(ocrData) {
   return dedupePairs(pairs);
 }
 
-function parseStructuredRowsFromOcrData(ocrData) {
+function parseStructuredRowsFromOcrData(ocrData, destinationPool = KNOWN_DESTINATIONS) {
   const rows = groupWordsByRow(ocrData?.words || []);
   if (!rows.length) {
     return [];
@@ -693,14 +767,14 @@ function parseStructuredRowsFromOcrData(ocrData) {
 
     for (const segment of segments) {
       const text = segment.map((w) => w.text).join(" ");
-      const pair = parseLineToPair(text);
+      const pair = parseLineToPair(text, destinationPool);
       if (pair) {
         pairs.push(pair);
       }
     }
 
     const wholeRowText = row.words.map((w) => w.text).join(" ");
-    const rowPair = parseLineToPair(wholeRowText);
+    const rowPair = parseLineToPair(wholeRowText, destinationPool);
     if (rowPair) {
       pairs.push(rowPair);
     }
@@ -809,6 +883,10 @@ async function runOcrAndBuildTable() {
   setOcrStatus("Tarama basladi...");
 
   try {
+    await refreshTariffCatalogData();
+    const destinationPool = buildTariffDestinationPool(origin);
+    const destinationSlugSet = buildDestinationSlugSet(destinationPool);
+
     const processedImage = await preprocessImageForOcr(file);
 
     const runPass = async (imageSource, passName, psm) => {
@@ -834,7 +912,7 @@ async function runOcrAndBuildTable() {
       const blocks = collectTextBlocks(result?.data);
       const parsed = [];
       for (const block of blocks) {
-        parsed.push(...parseDestinationsAndPrices(block));
+        parsed.push(...parseDestinationsAndPrices(block, destinationPool));
       }
 
       const unique = [];
@@ -858,18 +936,18 @@ async function runOcrAndBuildTable() {
     const pass3 = await runPass(file, "Tarama 3/3", 6);
 
     const mergedPairs = [
-      ...parseStructuredRowsFromOcrData(pass1.ocrData),
-      ...parseStructuredRowsFromOcrData(pass2.ocrData),
-      ...parseStructuredRowsFromOcrData(pass3.ocrData),
-      ...parseA4FromOcrData(pass1.ocrData),
-      ...parseA4FromOcrData(pass2.ocrData),
-      ...parseA4FromOcrData(pass3.ocrData),
+      ...parseStructuredRowsFromOcrData(pass1.ocrData, destinationPool),
+      ...parseStructuredRowsFromOcrData(pass2.ocrData, destinationPool),
+      ...parseStructuredRowsFromOcrData(pass3.ocrData, destinationPool),
+      ...parseA4FromOcrData(pass1.ocrData, destinationPool),
+      ...parseA4FromOcrData(pass2.ocrData, destinationPool),
+      ...parseA4FromOcrData(pass3.ocrData, destinationPool),
       ...pass1.pairs,
       ...pass2.pairs,
       ...pass3.pairs,
     ];
-    const pairs = aggregateReliablePairs(mergedPairs);
-    const suspiciousRows = buildSuspiciousRows(mergedPairs, pairs);
+    const pairs = aggregateReliablePairs(mergedPairs, destinationSlugSet, destinationPool);
+    const suspiciousRows = buildSuspiciousRows(mergedPairs, pairs, destinationSlugSet);
 
     if (!pairs.length) {
       setOcrStatus("Satirlar ayrisamadi. Daha net ve dik cekim bir fotograf deneyin.", true);
@@ -877,6 +955,7 @@ async function runOcrAndBuildTable() {
     }
 
     state.lastOcrOrigin = origin;
+    state.lastOcrDestinationPool = destinationPool;
     state.lastOcrPairs = pairs;
     state.lastSuspiciousRows = suspiciousRows;
     dom.ocrOutput.value = toTsv(origin, pairs);
@@ -1111,6 +1190,36 @@ async function refreshTariffData(query = "", append = false) {
   state.tariffOffset = nextOffset + incoming.length;
   state.tariffQuery = q;
   renderTariffRows(append);
+}
+
+async function refreshTariffCatalogData(force = false) {
+  if (!force && Array.isArray(state.tariffCatalog) && state.tariffCatalog.length) {
+    return;
+  }
+
+  const all = [];
+  let offset = 0;
+  let total = Infinity;
+  const pageSize = 2000;
+
+  while (offset < total) {
+    const result = await apiFetch(`/api/tariff-prices?limit=${pageSize}&offset=${offset}`);
+    const rows = Array.isArray(result?.rows) ? result.rows : [];
+    total = Number(result?.total || 0);
+
+    if (!rows.length) {
+      break;
+    }
+
+    all.push(...rows);
+    offset += rows.length;
+
+    if (rows.length < pageSize) {
+      break;
+    }
+  }
+
+  state.tariffCatalog = all;
 }
 
 function normalizeUploadHeader(value) {
