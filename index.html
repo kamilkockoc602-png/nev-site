@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Otobus Fiyat Yonetim Paneli</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Sora:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="bg-orb orb-1"></div>
+  <div class="bg-orb orb-2"></div>
+  <div class="bg-grid"></div>
+
+  <main class="app-shell">
+    <section id="loginView" class="view active">
+      <div class="login-panel card fade-up">
+        <p class="eyebrow">Guvenli Giris</p>
+        <h1>Otobus Fiyat Platformu</h1>
+        <p class="subtle">
+          
+        </p>
+
+        <form id="loginForm" class="form-stack" autocomplete="off">
+          <label>
+            <span>Kullanici Adi</span>
+            <input id="loginUsername" type="text" placeholder="ornek: admin" required />
+          </label>
+
+          <label>
+            <span>Sifre</span>
+            <input id="loginPassword" type="password" placeholder="Sifre" required />
+          </label>
+
+          <button type="submit" class="btn btn-primary">Giris Yap</button>
+          <p id="loginMessage" class="message"></p>
+        </form>
+      </div>
+    </section>
+
+    <section id="portalView" class="view">
+      <aside class="sidebar card slide-in-left">
+        <div>
+          <h2>Fiyat Paneli</h2>
+          <p class="subtle" id="currentUserLabel"></p>
+        </div>
+
+        <nav>
+          <ul id="menuList" class="menu-list"></ul>
+        </nav>
+
+        <button id="logoutBtn" class="btn btn-ghost">Cikis Yap</button>
+      </aside>
+
+      <section class="content card slide-in-right">
+        <header class="content-head">
+          <h3 id="activeTitle">Panel</h3>
+          <div class="head-actions">
+            <button id="themeToggleBtn" class="theme-switch" type="button" aria-label="Tema degistir">
+              <span id="themeLabel" class="theme-label">Acik</span>
+              <span class="theme-track">
+                <span id="themeThumb" class="theme-thumb"></span>
+              </span>
+            </button>
+            <button id="notifBtn" class="notif-btn" type="button" aria-label="Bildirimler">
+              <span class="notif-icon">🔔</span>
+              <span id="notifBadge" class="notif-badge hidden">0</span>
+            </button>
+            <span class="live-dot">Canli</span>
+          </div>
+        </header>
+
+        <div id="notifPanel" class="notif-panel hidden">
+          <div class="notif-head">
+            <h4>Fiyat Bildirimleri</h4>
+            <button id="notifReadAllBtn" class="btn btn-small btn-ghost" type="button">Tumunu Okundu Yap</button>
+          </div>
+          <ul id="notifList" class="notif-list"></ul>
+          <p id="notifEmpty" class="subtle">Yeni bildirim yok.</p>
+        </div>
+
+        <div id="panelDashboard" class="panel-block" data-menu="dashboard">
+          <div class="stats-grid">
+            <article>
+              <h4>Bugunku Ortalama Bilet</h4>
+              <p id="avgFare">845 TL</p>
+            </article>
+            <article>
+              <h4>Toplam Hat</h4>
+              <p id="totalRoutes">0</p>
+            </article>
+            <article>
+              <h4>Guncelleme Sayisi</h4>
+              <p id="updateCount">0</p>
+            </article>
+          </div>
+          <p id="lastPriceUpdate" class="subtle" style="margin-top: 0.8rem;"></p>
+        </div>
+
+        <div id="panelRoutes" class="panel-block hidden" data-menu="routes">
+          <h4>Rota Standart Fiyatlari</h4>
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Rota</th>
+                <th>Standart</th>
+              </tr>
+            </thead>
+            <tbody id="routeTableBody"></tbody>
+          </table>
+        </div>
+
+        <div id="panelPricing" class="panel-block hidden" data-menu="pricing">
+          <h4>Fiyat Politikasi</h4>
+          <p class="subtle">Kampanya, sezon ve doluluk oranina gore dinamik fiyat guncellemesi yapilir.</p>
+          <ul class="line-list">
+            <li>Erken rezervasyon: -%12</li>
+            <li>Hafta sonu artis: +%8</li>
+            <li>Resmi tatil artis: +%15</li>
+          </ul>
+        </div>
+
+        <div id="panelReports" class="panel-block hidden" data-menu="reports">
+          <h4>Raporlar</h4>
+          <p class="subtle">Son 7 gunde en cok satan hat: <strong>Istanbul - Ankara</strong></p>
+          <p class="subtle">Son 7 gunde ortalama fiyat artisi: <strong>%4.2</strong></p>
+        </div>
+
+        <div id="panelOcr" class="panel-block hidden" data-menu="ocr">
+          <section class="ocr-tool">
+            <h3>Fotograftan Excel Ciktisi</h3>
+            <p class="subtle">Fotograf yukle, nereden bilgisini yaz, sistem tabloyu otomatik hazirlar.</p>
+
+            <div class="ocr-form-grid">
+              <label>
+                <span>Nereden</span>
+                <input id="ocrOriginInput" type="text" placeholder="ornek: Patnos" value="Patnos" />
+              </label>
+
+              <label>
+                <span>Fiyat Fotografi</span>
+                <input id="ocrImageInput" type="file" accept="image/*" />
+              </label>
+            </div>
+
+            <div class="actions">
+              <button id="ocrScanBtn" type="button" class="btn btn-primary">Fotografi Tara</button>
+              <button id="ocrCopyBtn" type="button" class="btn btn-ghost">TSV Kopyala</button>
+            </div>
+
+            <p id="ocrStatus" class="subtle">Hazir.</p>
+            <textarea id="ocrOutput" class="ocr-output" rows="12" placeholder="Nereden\tNereye\tFiyat formatinda sonuc burada olusur."></textarea>
+          </section>
+        </div>
+
+        <div id="panelPermissions" class="panel-block hidden" data-menu="permissions">
+          <h4>Yetki Menusu</h4>
+          <p class="subtle">Bu bolum sadece yoneticiye aciktir. Kullanicilarin menu yetkilerini buradan verirsin.</p>
+          <div id="permissionAdminArea"></div>
+        </div>
+
+        <div id="panelLogs" class="panel-block hidden" data-menu="logs">
+          <h4>Giris Kayitlari</h4>
+          <p class="subtle">Kim, ne zaman sisteme girdi veya hatali deneme yapti gorebilirsin.</p>
+          <div id="loginLogsArea"></div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <div id="loadingOverlay" class="loading-overlay hidden" aria-hidden="true">
+    <div class="loading-card card">
+      <div class="loader-ring"></div>
+      <p>Panel yukleniyor...</p>
+    </div>
+  </div>
+
+  <template id="userRowTemplate">
+    <tr>
+      <td class="username"></td>
+      <td class="status"></td>
+      <td class="created"></td>
+      <td class="actions">
+        <button class="btn btn-small toggleActiveBtn"></button>
+        <button class="btn btn-small updateBtn">Guncelle</button>
+        <button class="btn btn-small editPermBtn">Yetki Duzenle</button>
+        <button class="btn btn-small btn-danger deleteBtn">Sil</button>
+      </td>
+    </tr>
+  </template>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
