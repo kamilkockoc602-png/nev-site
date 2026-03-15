@@ -100,6 +100,8 @@ const KNOWN_DESTINATIONS = [
   "Sarıkamış", "Kars", "Ardahan"
 ];
 
+const KNOWN_DESTINATION_SLUGS = new Set(KNOWN_DESTINATIONS.map((city) => slugTr(city)));
+
 function slugTr(value) {
   return String(value || "")
     .toLocaleLowerCase("tr-TR")
@@ -279,6 +281,10 @@ function findKnownDestinationInLine(line) {
   return best ? toTurkishTitleCase(best) : "";
 }
 
+function isKnownDestinationName(name) {
+  return KNOWN_DESTINATION_SLUGS.has(slugTr(name));
+}
+
 function extractPriceCandidates(line) {
   const matches = String(line).match(/\d{2,6}/g) || [];
   const out = [];
@@ -346,6 +352,67 @@ function dedupePairs(items) {
     out.push(item);
   }
   return out;
+}
+
+function aggregateReliablePairs(items) {
+  const byDestination = new Map();
+
+  for (const item of items) {
+    if (!item || !item.destination || !item.price) {
+      continue;
+    }
+
+    const key = slugTr(item.destination);
+    if (!key) {
+      continue;
+    }
+
+    if (!byDestination.has(key)) {
+      byDestination.set(key, {
+        destination: item.destination,
+        total: 0,
+        isKnown: isKnownDestinationName(item.destination),
+        priceCounts: new Map(),
+      });
+    }
+
+    const bucket = byDestination.get(key);
+    bucket.total += 1;
+    if (isKnownDestinationName(item.destination)) {
+      bucket.destination = findKnownDestinationInLine(item.destination) || item.destination;
+      bucket.isKnown = true;
+    }
+
+    const priceKey = String(item.price);
+    bucket.priceCounts.set(priceKey, (bucket.priceCounts.get(priceKey) || 0) + 1);
+  }
+
+  const results = [];
+  for (const bucket of byDestination.values()) {
+    const priceEntries = Array.from(bucket.priceCounts.entries()).sort((a, b) => {
+      if (b[1] !== a[1]) {
+        return b[1] - a[1];
+      }
+      return Number(a[0]) - Number(b[0]);
+    });
+
+    const bestPrice = priceEntries[0] ? priceEntries[0][0] : "";
+    if (!bestPrice) {
+      continue;
+    }
+
+    // Bilinmeyen ve tek sefer gorulmus satirlar genelde OCR copu olur.
+    if (!bucket.isKnown && bucket.total < 2) {
+      continue;
+    }
+
+    results.push({
+      destination: bucket.destination,
+      price: bestPrice,
+    });
+  }
+
+  return dedupePairs(results);
 }
 
 function groupWordsByRow(words) {
@@ -666,7 +733,7 @@ async function runOcrAndBuildTable() {
       ...pass2.pairs,
       ...pass3.pairs,
     ];
-    const pairs = dedupePairs(mergedPairs);
+    const pairs = aggregateReliablePairs(mergedPairs);
 
     if (!pairs.length) {
       setOcrStatus("Satirlar ayrisamadi. Daha net ve dik cekim bir fotograf deneyin.", true);
