@@ -988,18 +988,18 @@ app.post("/api/pricing-uploads", requireAuth, (req, res) => {
         i.destination,
         i.demand_price,
         u.id AS upload_id,
+        u.direction_type,
         u.valid_from,
         u.valid_to
       FROM pricing_upload_items i
       INNER JOIN pricing_uploads u ON u.id = i.upload_id
-      WHERE u.direction_type = ?
-        AND u.is_open = 1
+      WHERE u.is_open = 1
         AND u.valid_from <= ?
         AND u.valid_to >= ?
       ORDER BY u.id DESC
       `
     )
-    .all(directionType, validTo, validFrom);
+    .all(validTo, validFrom);
 
   const overlapMap = new Map();
   for (const item of overlappingItems) {
@@ -1030,7 +1030,7 @@ app.post("/api/pricing-uploads", requireAuth, (req, res) => {
     if (existing) {
       rejected.push({
         rowNumber,
-        reason: `${origin} - ${destination} icin bu tarih araliginda (${existing.valid_from} - ${existing.valid_to}) zaten fiyat var: ${Number(existing.demand_price)} TL (kayit #${existing.upload_id}).`,
+        reason: `${origin} - ${destination} icin bu tarih araliginda (${existing.valid_from} - ${existing.valid_to}) zaten fiyat var: ${Number(existing.demand_price)} TL (${existing.direction_type}, kayit #${existing.upload_id}).`,
       });
       return;
     }
