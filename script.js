@@ -1516,6 +1516,40 @@ function parseClientPrice(raw) {
   return Number(normalized);
 }
 
+function parseRouteCell(raw) {
+  const text = String(raw || "").trim();
+  if (!text) {
+    return { origin: "", destination: "" };
+  }
+
+  const parts = text
+    .split(/\s*[-–—]\s*/)
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+
+  if (parts.length < 2) {
+    return { origin: "", destination: "" };
+  }
+
+  return {
+    origin: parts.shift() || "",
+    destination: parts.join(" - "),
+  };
+}
+
+function parseDirectionTypeFromCell(rawDirection) {
+  const text = normalizeUploadHeader(rawDirection);
+  if (!text) {
+    return "gidis-donus";
+  }
+
+  if (text.includes("gidis") || text.includes("donus")) {
+    return "tek-yon";
+  }
+
+  return "tek-yon";
+}
+
 async function readPricingRowsFromFile(file) {
   const name = String(file?.name || "").toLowerCase();
 
@@ -1593,10 +1627,24 @@ async function parsePricingUploadRows(file) {
   let originIndex = 0;
   let destinationIndex = 1;
   let demandIndex = 2;
+  let routeIndex = -1;
+  let directionIndex = -1;
 
   // 1) Header varsa kolonlari header'dan bul.
   for (let i = 0; i < Math.min(rows.length, 30); i += 1) {
     const headers = rows[i].cells;
+    const route = findUploadHeaderIndex(headers, ["atob", "guzergah", "rota", "kalkis-varis", "kalkis varis"]);
+    const demandNew = findUploadHeaderIndex(headers, ["talep edilen fiyat", "talep fiyati", "fiyat"]);
+    const dirNew = findUploadHeaderIndex(headers, ["yon"]);
+
+    if (route >= 0 && demandNew >= 0) {
+      headerRowIndex = i;
+      routeIndex = route;
+      demandIndex = demandNew;
+      directionIndex = dirNew;
+      break;
+    }
+
     const o = findUploadHeaderIndex(headers, ["kalkis", "nereden", "origin"]);
     const d = findUploadHeaderIndex(headers, ["varis", "nereye", "destination"]);
     const p = findUploadHeaderIndex(headers, ["guncel bilet fiyati", "fiyat", "talep"]);
@@ -1638,9 +1686,16 @@ async function parsePricingUploadRows(file) {
   const parsed = [];
   for (let i = dataStart; i < rows.length; i += 1) {
     const row = rows[i].cells;
-    const origin = String(row[originIndex] || "").trim();
-    const destination = String(row[destinationIndex] || "").trim();
+    let origin = String(row[originIndex] || "").trim();
+    let destination = String(row[destinationIndex] || "").trim();
     const demandRaw = row[demandIndex];
+    const directionRaw = directionIndex >= 0 ? row[directionIndex] : "";
+
+    if (routeIndex >= 0) {
+      const parsedRoute = parseRouteCell(row[routeIndex]);
+      origin = parsedRoute.origin;
+      destination = parsedRoute.destination;
+    }
 
     if (!origin && !destination && !String(demandRaw || "").trim()) {
       continue;
@@ -1651,6 +1706,7 @@ async function parsePricingUploadRows(file) {
       origin,
       destination,
       demandPrice: parseClientPrice(demandRaw),
+      directionType: parseDirectionTypeFromCell(directionRaw),
     });
   }
 
@@ -1796,8 +1852,19 @@ async function submitPricingUpload() {
     throw new Error("Excel icinde gecerli satir yok.");
   }
 
+  const rowDirectionTypes = new Set(
+    rows.map((item) => String(item.directionType || "").trim()).filter(Boolean)
+  );
+
+  let normalizedDirectionType = dom.pricingDirectionType?.value || "tek-yon";
+  if (rowDirectionTypes.size === 1) {
+    normalizedDirectionType = Array.from(rowDirectionTypes)[0];
+  } else if (rowDirectionTypes.size > 1) {
+    normalizedDirectionType = "karma";
+  }
+
   const payload = {
-    directionType: dom.pricingDirectionType?.value || "tek-yon",
+    directionType: normalizedDirectionType,
     validFrom: dom.pricingValidFrom?.value || "",
     validTo: dom.pricingValidTo?.value || "",
     sourceFileName: file.name,
