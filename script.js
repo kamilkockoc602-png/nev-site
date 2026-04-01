@@ -1550,6 +1550,25 @@ function parseDirectionTypeFromCell(rawDirection) {
   return "tek-yon";
 }
 
+function parseDirectionLabelFromCell(rawDirection) {
+  const text = normalizeUploadHeader(rawDirection);
+  if (!text) {
+    return "Gidis-Donus";
+  }
+
+  if (text.includes("gidis") && text.includes("donus")) {
+    return "Gidis-Donus";
+  }
+  if (text.includes("gidis")) {
+    return "Gidis";
+  }
+  if (text.includes("donus")) {
+    return "Donus";
+  }
+
+  return "Gidis-Donus";
+}
+
 async function readPricingRowsFromFile(file) {
   const name = String(file?.name || "").toLowerCase();
 
@@ -1707,6 +1726,7 @@ async function parsePricingUploadRows(file) {
       destination,
       demandPrice: parseClientPrice(demandRaw),
       directionType: parseDirectionTypeFromCell(directionRaw),
+      directionLabel: parseDirectionLabelFromCell(directionRaw),
     });
   }
 
@@ -1729,7 +1749,39 @@ function renderPricingRejectedRows(rejected) {
 
   list.forEach((item) => {
     const li = document.createElement("li");
-    li.textContent = `Satir ${item.rowNumber}: ${item.reason}`;
+    li.className = "pricing-rejected-item";
+
+    const text = String(item?.reason || "");
+    const overlapMatch = text.match(
+      /^(.*?) icin zaten aktif fiyat var: ([\d.,]+) TL \((.*?), (.*?) - (.*?), kayit #(\d+)\)\.?$/
+    );
+
+    if (overlapMatch) {
+      const route = overlapMatch[1];
+      const price = overlapMatch[2];
+      const direction = overlapMatch[3];
+      const validFrom = formatUploadDate(overlapMatch[4]);
+      const validTo = formatUploadDate(overlapMatch[5]);
+      const uploadId = overlapMatch[6];
+
+      li.innerHTML = `
+        <div class="pricing-rejected-head">
+          <strong>Satir ${item.rowNumber}</strong>
+          <span class="pricing-rejected-chip">Cakisiyor</span>
+        </div>
+        <div class="pricing-rejected-route">${route}</div>
+        <div class="pricing-rejected-meta">Mevcut: ${price} TL | Yon: ${direction} | Donem: ${validFrom} - ${validTo} | Kayit #${uploadId}</div>
+      `;
+    } else {
+      li.innerHTML = `
+        <div class="pricing-rejected-head">
+          <strong>Satir ${item.rowNumber}</strong>
+          <span class="pricing-rejected-chip">Uyari</span>
+        </div>
+        <div class="pricing-rejected-meta">${text}</div>
+      `;
+    }
+
     dom.pricingRejectedList.appendChild(li);
   });
 
@@ -1759,7 +1811,7 @@ function renderPricingUploads() {
       .slice(0, 200)
       .map(
         (item) =>
-          `<tr><td>${item.route}</td><td>${item.demandPrice} TL</td><td>${item.tariffPrice} TL</td><td>${item.discountedPrice} TL</td></tr>`
+          `<tr><td>${item.route}</td><td>${item.demandPrice} TL</td><td>${item.directionLabel || formatUploadDirection(upload.directionType)}</td></tr>`
       )
       .join("");
 
@@ -1790,8 +1842,8 @@ function renderPricingUploads() {
         </div>
         <div class="pricing-upload-table-wrap">
           <table class="data-table">
-            <thead><tr><th>Rota</th><th>Talep</th><th>Tarife</th><th>Indirimli</th></tr></thead>
-            <tbody>${detailsRows || '<tr><td colspan="4">Detay yok.</td></tr>'}</tbody>
+            <thead><tr><th>Rota</th><th>Talep</th><th>Yon</th></tr></thead>
+            <tbody>${detailsRows || '<tr><td colspan="3">Detay yok.</td></tr>'}</tbody>
           </table>
         </div>
       </div>

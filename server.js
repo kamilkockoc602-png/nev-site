@@ -279,6 +279,7 @@ CREATE TABLE IF NOT EXISTS pricing_upload_items (
   route TEXT NOT NULL,
   origin TEXT NOT NULL,
   destination TEXT NOT NULL,
+  row_direction TEXT NOT NULL DEFAULT 'Gidis-Donus',
   demand_price REAL NOT NULL,
   tariff_price REAL NOT NULL,
   discounted_price REAL NOT NULL,
@@ -294,6 +295,14 @@ CREATE TABLE IF NOT EXISTS pricing_notifications (
   is_read INTEGER NOT NULL DEFAULT 0
 );
 `);
+
+const pricingItemColumns = db.prepare("PRAGMA table_info(pricing_upload_items)").all();
+const hasRowDirectionColumn = pricingItemColumns.some((col) => col.name === "row_direction");
+if (!hasRowDirectionColumn) {
+  db.exec(
+    "ALTER TABLE pricing_upload_items ADD COLUMN row_direction TEXT NOT NULL DEFAULT 'Gidis-Donus'"
+  );
+}
 
 const tariffRouteMap = new Map();
 for (const row of tariffRows) {
@@ -874,7 +883,7 @@ app.get("/api/pricing-uploads", requireAuth, (req, res) => {
     .all();
 
   const itemQuery = db.prepare(
-    "SELECT route, origin, destination, demand_price, tariff_price, discounted_price FROM pricing_upload_items WHERE upload_id = ? ORDER BY id ASC"
+    "SELECT route, origin, destination, row_direction, demand_price, tariff_price, discounted_price FROM pricing_upload_items WHERE upload_id = ? ORDER BY id ASC"
   );
 
   res.json({
@@ -891,6 +900,7 @@ app.get("/api/pricing-uploads", requireAuth, (req, res) => {
         route: item.route,
         origin: item.origin,
         destination: item.destination,
+        directionLabel: String(item.row_direction || "Gidis-Donus"),
         demandPrice: Number(item.demand_price),
         tariffPrice: Number(item.tariff_price),
         discountedPrice: Number(item.discounted_price),
@@ -1010,6 +1020,7 @@ app.post("/api/pricing-uploads", requireAuth, (req, res) => {
   rows.forEach((row, index) => {
     const origin = String(row?.origin || "").trim();
     const destination = String(row?.destination || "").trim();
+    const directionLabel = String(row?.directionLabel || "Gidis-Donus").trim() || "Gidis-Donus";
     const demandPrice = parsePriceNumber(row?.demandPrice);
     const rowNumber = Number(row?.rowNumber) || index + 1;
 
@@ -1037,6 +1048,7 @@ app.post("/api/pricing-uploads", requireAuth, (req, res) => {
       route: `${origin} - ${destination}`,
       origin,
       destination,
+      directionLabel,
       demandPrice,
       tariffPrice: 0,
       discountedPrice: 0,
@@ -1076,7 +1088,7 @@ app.post("/api/pricing-uploads", requireAuth, (req, res) => {
 
     const uploadId = Number(result.lastInsertRowid);
     const insertItem = db.prepare(
-      "INSERT INTO pricing_upload_items (upload_id, route, origin, destination, demand_price, tariff_price, discounted_price, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      "INSERT INTO pricing_upload_items (upload_id, route, origin, destination, row_direction, demand_price, tariff_price, discounted_price, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
     );
 
     for (const row of accepted) {
@@ -1085,6 +1097,7 @@ app.post("/api/pricing-uploads", requireAuth, (req, res) => {
         row.route,
         row.origin,
         row.destination,
+        row.directionLabel,
         row.demandPrice,
         row.tariffPrice,
         row.discountedPrice,
