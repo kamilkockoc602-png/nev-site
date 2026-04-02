@@ -384,6 +384,11 @@ body[data-theme="dark"] .excel-mini-icon {
   min-height: 76vh;
 }
 
+.content.panel-switching {
+  opacity: 0.82;
+  transition: opacity 0.14s ease;
+}
+
 .content-head {
   display: flex;
   justify-content: space-between;
@@ -597,6 +602,10 @@ body[data-theme="dark"] .notif-item-title {
 
 .panel-block {
   animation: fadeIn 0.35s ease;
+}
+
+.panel-block.panel-enter {
+  animation: fadeIn 0.24s ease;
 }
 
 .hidden {

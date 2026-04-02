@@ -21,6 +21,7 @@ const dom = {
   loginPassword: document.getElementById("loginPassword"),
   loginMessage: document.getElementById("loginMessage"),
   menuList: document.getElementById("menuList"),
+  contentCard: document.querySelector(".content"),
   activeTitle: document.getElementById("activeTitle"),
   logoutBtn: document.getElementById("logoutBtn"),
   currentUserLabel: document.getElementById("currentUserLabel"),
@@ -86,6 +87,7 @@ const state = {
   lastOcrOrigin: "",
   lastOcrDestinationPool: [],
   lastSuspiciousRows: [],
+  panelSwitchSeq: 0,
 };
 
 function applyTheme(theme) {
@@ -2009,10 +2011,30 @@ function stopNotificationPolling() {
   }
 }
 
-function activatePanel(menuKey) {
+async function activatePanel(menuKey) {
+  const switchSeq = ++state.panelSwitchSeq;
+  if (dom.contentCard) {
+    dom.contentCard.classList.add("panel-switching");
+  }
+
+  await pause(120);
+  if (switchSeq !== state.panelSwitchSeq) {
+    return;
+  }
+
   document.querySelectorAll(".panel-block").forEach((el) => {
+    el.classList.remove("panel-enter");
     el.classList.toggle("hidden", el.dataset.menu !== menuKey);
   });
+
+  const activePanel = document.querySelector(`.panel-block[data-menu="${menuKey}"]`);
+  if (activePanel) {
+    activePanel.classList.add("panel-enter");
+  }
+
+  if (dom.contentCard) {
+    dom.contentCard.classList.remove("panel-switching");
+  }
 
   const current = MENUS.find((m) => m.key === menuKey);
   dom.activeTitle.textContent = current ? current.label : "Panel";
