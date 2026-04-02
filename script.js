@@ -1922,11 +1922,9 @@ function renderPricingUploads() {
     const escapedDescription = escapeHtml(currentDescription);
     const descriptionBlock = escapedDescription
       ? `
-        <div class="pricing-upload-note-wrap">
-          <div class="pricing-upload-note">
-            <div class="pricing-upload-note-title">Aciklama</div>
-            <div class="pricing-upload-note-text">${escapedDescription}</div>
-          </div>
+        <div class="pricing-upload-note">
+          <div class="pricing-upload-note-title">Aciklama</div>
+          <div class="pricing-upload-note-text">${escapedDescription}</div>
         </div>
       `
       : "";
@@ -1968,11 +1966,13 @@ function renderPricingUploads() {
         <span class="pricing-upload-meta">Yukleme: ${createdAtText}</span>
       </summary>
       <div class="pricing-upload-body">
-        ${descriptionBlock}
-        <div class="actions" style="margin-bottom:.5rem;">
-          <button class="btn btn-small btn-ghost toggleUploadBtn" type="button">${upload.isOpen ? "Kapat" : "Ac"}</button>
-            <button class="btn btn-small btn-success downloadUploadExcelBtn" type="button"><span class="excel-mini-icon" aria-hidden="true">XLS</span> Excel ile indir</button>
-          <button class="btn btn-small btn-danger deleteUploadBtn" type="button">Sil</button>
+        <div class="pricing-upload-toolbar">
+          <div class="actions" style="margin-bottom:.5rem;">
+            <button class="btn btn-small btn-ghost toggleUploadBtn" type="button">${upload.isOpen ? "Kapat" : "Ac"}</button>
+              <button class="btn btn-small btn-success downloadUploadExcelBtn" type="button"><span class="excel-mini-icon" aria-hidden="true">XLS</span> Excel ile indir</button>
+            <button class="btn btn-small btn-danger deleteUploadBtn" type="button">Sil</button>
+          </div>
+          ${descriptionBlock}
         </div>
         <div class="pricing-upload-desc-editor">
           <input type="text" class="uploadDescriptionInput" maxlength="500" placeholder="Aciklama ekle veya guncelle" value="${escapedDescription}" />
