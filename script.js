@@ -1951,9 +1951,30 @@ function renderNotifications() {
 
   dom.notifEmpty.classList.add("hidden");
   state.notifications.forEach((item) => {
+    const message = String(item.message || "").trim();
+    const actor = String(item.route || "").trim();
+
+    let typeClass = "notif-type-info";
+    let typeLabel = "Bilgi";
+    if (message.includes("fiyat yukledi")) {
+      typeClass = "notif-type-upload";
+      typeLabel = "Yukleme";
+    } else if (message.includes("sildi")) {
+      typeClass = "notif-type-delete";
+      typeLabel = "Silme";
+    }
+
+    const title = actor ? `${actor} islemi` : "Bildirim";
     const li = document.createElement("li");
     li.className = "notif-item";
-    li.innerHTML = `${item.message}<div class="notif-time">${item.time}</div>`;
+    li.innerHTML = `
+      <div class="notif-item-head">
+        <strong class="notif-item-title">${title}</strong>
+        <span class="notif-item-type ${typeClass}">${typeLabel}</span>
+      </div>
+      <div class="notif-item-body">${message}</div>
+      <div class="notif-item-meta">${item.time || "-"}</div>
+    `;
     dom.notifList.appendChild(li);
   });
 }
