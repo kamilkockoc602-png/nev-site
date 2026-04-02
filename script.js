@@ -5,7 +5,7 @@ const MENUS = [
   { key: "dashboard", label: "Genel Panel" },
   { key: "routes", label: "Bakanlik Fiyati" },
   { key: "pricing", label: "Fiyat Yukleme" },
-  { key: "reports", label: "Raporlar" },
+  { key: "reports", label: "Tek Yon Fiyatlar" },
   { key: "ocr", label: "Foto Tarama" },
   { key: "permissions", label: "Yetki Menusu" },
   { key: "logs", label: "Giris Kayitlari" },
