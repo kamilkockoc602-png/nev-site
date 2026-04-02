@@ -119,6 +119,20 @@ function normalizePrice(raw) {
   return digits;
 }
 
+function normalizeSearchText(value) {
+  return String(value || "")
+    .toLocaleLowerCase("tr-TR")
+    .replace(/ı/g, "i")
+    .replace(/ğ/g, "g")
+    .replace(/ü/g, "u")
+    .replace(/ş/g, "s")
+    .replace(/ö/g, "o")
+    .replace(/ç/g, "c")
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 const KNOWN_DESTINATIONS = [
   "Erzurum", "Batman", "Refahiye", "Zara", "Sivas", "Akdağmadeni", "Sorgun", "Yozgat",
   "Kırıkkale", "Ankara", "Eskişehir", "Bozüyük", "İnegöl", "Bursa", "Biga", "Bandırma",
