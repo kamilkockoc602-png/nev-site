@@ -1250,14 +1250,33 @@ function renderPricingDashboardSummary() {
   let totalCount = 0;
 
   for (const upload of uploads) {
-    const itemCount = Array.isArray(upload?.items) ? upload.items.length : 0;
-    const direction = String(upload?.directionType || "").toLocaleLowerCase("tr-TR");
+    const items = Array.isArray(upload?.items) ? upload.items : [];
+    totalCount += items.length;
 
-    totalCount += itemCount;
-    if (direction === "tek-yon") {
-      oneWayCount += itemCount;
-    } else if (direction === "gidis-donus") {
-      roundTripCount += itemCount;
+    if (!items.length) {
+      continue;
+    }
+
+    for (const item of items) {
+      const rowDirection = String(item?.directionLabel || "")
+        .toLocaleLowerCase("tr-TR")
+        .trim();
+
+      if (rowDirection === "gidis" || rowDirection === "donus") {
+        oneWayCount += 1;
+      } else if (rowDirection === "gidis-donus") {
+        roundTripCount += 1;
+      } else {
+        // Legacy kayitlar icin upload seviyesi yon bilgisini kullan.
+        const uploadDirection = String(upload?.directionType || "")
+          .toLocaleLowerCase("tr-TR")
+          .trim();
+        if (uploadDirection === "tek-yon") {
+          oneWayCount += 1;
+        } else if (uploadDirection === "gidis-donus") {
+          roundTripCount += 1;
+        }
+      }
     }
   }
 
