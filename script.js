@@ -1920,14 +1920,6 @@ function renderPricingUploads() {
     const directionLabel = formatUploadDirection(upload.directionType);
     const currentDescription = String(upload.description || "").trim();
     const escapedDescription = escapeHtml(currentDescription);
-    const descriptionBlock = escapedDescription
-      ? `
-        <div class="pricing-upload-note">
-          <div class="pricing-upload-note-title">Aciklama</div>
-          <div class="pricing-upload-note-text">${escapedDescription}</div>
-        </div>
-      `
-      : "";
     const rowCountLabel = `${upload.items.length} SATIR`;
     const validFromText = formatUploadDate(upload.validFrom);
     const validToText = formatUploadDate(upload.validTo);
@@ -1958,6 +1950,7 @@ function renderPricingUploads() {
           <strong>${upload.uploadedBy}</strong>
           <span class="pricing-upload-chip pricing-upload-chip-primary">${directionLabel}</span>
           <span class="pricing-upload-chip pricing-upload-chip-count">${rowCountLabel}</span>
+          ${escapedDescription ? `<span class="pricing-upload-inline-desc">Aciklama: ${escapedDescription}</span>` : ""}
         </div>
         <div class="pricing-upload-range">
           <span class="pricing-upload-range-label">Gecerlilik:</span>
@@ -1966,14 +1959,12 @@ function renderPricingUploads() {
         <span class="pricing-upload-meta">Yukleme: ${createdAtText}</span>
       </summary>
       <div class="pricing-upload-body">
-        <div class="pricing-upload-toolbar">
-          <div class="actions" style="margin-bottom:.5rem;">
-            <button class="btn btn-small btn-ghost toggleUploadBtn" type="button">${upload.isOpen ? "Kapat" : "Ac"}</button>
-              <button class="btn btn-small btn-success downloadUploadExcelBtn" type="button"><span class="excel-mini-icon" aria-hidden="true">XLS</span> Excel ile indir</button>
-            <button class="btn btn-small btn-danger deleteUploadBtn" type="button">Sil</button>
-          </div>
-          ${descriptionBlock}
+        <div class="actions" style="margin-bottom:.5rem;">
+          <button class="btn btn-small btn-ghost toggleUploadBtn" type="button">${upload.isOpen ? "Kapat" : "Ac"}</button>
+            <button class="btn btn-small btn-success downloadUploadExcelBtn" type="button"><span class="excel-mini-icon" aria-hidden="true">XLS</span> Excel ile indir</button>
+          <button class="btn btn-small btn-danger deleteUploadBtn" type="button">Sil</button>
         </div>
+        ${escapedDescription ? `<div class="pricing-upload-desc-inline">Aciklama: ${escapedDescription}</div>` : ""}
         <div class="pricing-upload-desc-editor">
           <input type="text" class="uploadDescriptionInput" maxlength="500" placeholder="Aciklama ekle veya guncelle" value="${escapedDescription}" />
           <button class="btn btn-small btn-ghost saveUploadDescriptionBtn" type="button">Aciklamayi Kaydet</button>

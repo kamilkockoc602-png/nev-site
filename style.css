@@ -827,6 +827,24 @@ body[data-theme="dark"] .notif-item-title {
   font-weight: 600;
 }
 
+.pricing-upload-inline-desc {
+  margin-left: auto;
+  color: #8fb3c9;
+  font-size: 0.84rem;
+  font-weight: 600;
+  max-width: min(52vw, 620px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pricing-upload-desc-inline {
+  margin-bottom: 0.5rem;
+  color: #9ec0d5;
+  font-size: 0.87rem;
+  font-weight: 600;
+}
+
 .pricing-upload-toolbar {
   display: flex;
   align-items: center;
@@ -978,6 +996,14 @@ body[data-theme="dark"] .pricing-upload-range-value {
 
 body[data-theme="dark"] .pricing-upload-meta {
   color: #c2d6e6;
+}
+
+body[data-theme="dark"] .pricing-upload-inline-desc {
+  color: #9fc1d7;
+}
+
+body[data-theme="dark"] .pricing-upload-desc-inline {
+  color: #b7d2e5;
 }
 
 body[data-theme="dark"] .pricing-upload-note {
@@ -1299,6 +1325,11 @@ body[data-theme="dark"] .reports-table-wrap .data-table td:nth-child(2) {
 
   .pricing-upload-desc-editor {
     grid-template-columns: 1fr;
+  }
+
+  .pricing-upload-inline-desc {
+    margin-left: 0;
+    max-width: 100%;
   }
 
   .pricing-upload-toolbar {
