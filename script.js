@@ -43,6 +43,7 @@ const dom = {
   pricingValidFrom: document.getElementById("pricingValidFrom"),
   pricingValidTo: document.getElementById("pricingValidTo"),
   pricingExcelFile: document.getElementById("pricingExcelFile"),
+  pricingDescriptionInput: document.getElementById("pricingDescriptionInput"),
   pricingUploadBtn: document.getElementById("pricingUploadBtn"),
   pricingUploadMsg: document.getElementById("pricingUploadMsg"),
   pricingRejectedWrap: document.getElementById("pricingRejectedWrap"),
@@ -1478,6 +1479,15 @@ function normalizeUploadHeader(value) {
     .trim();
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function findUploadHeaderIndex(headers, aliases) {
   const normalized = headers.map((header) => normalizeUploadHeader(header));
   const normalizedAliases = aliases.map((alias) => normalizeUploadHeader(alias));
@@ -1489,6 +1499,9 @@ function findUploadHeaderIndex(headers, aliases) {
 function formatUploadDirection(value) {
   const key = String(value || "").trim().toLocaleLowerCase("tr-TR");
   if (key === "tek-yon") {
+    return "Tek Yon";
+  }
+  if (key === "karma") {
     return "Tek Yon";
   }
   if (key === "gidis-donus") {
@@ -1905,6 +1918,8 @@ function renderPricingUploads() {
 
   state.pricingUploads.forEach((upload) => {
     const directionLabel = formatUploadDirection(upload.directionType);
+    const currentDescription = String(upload.description || "").trim();
+    const escapedDescription = escapeHtml(currentDescription);
     const rowCountLabel = `${upload.items.length} SATIR`;
     const validFromText = formatUploadDate(upload.validFrom);
     const validToText = formatUploadDate(upload.validTo);
@@ -1940,6 +1955,7 @@ function renderPricingUploads() {
           <span class="pricing-upload-range-label">Gecerlilik:</span>
           <span class="pricing-upload-range-value">${validFromText} - ${validToText}</span>
         </div>
+        ${escapedDescription ? `<div class="pricing-upload-desc">Aciklama: ${escapedDescription}</div>` : ""}
         <span class="pricing-upload-meta">Yukleme: ${createdAtText}</span>
       </summary>
       <div class="pricing-upload-body">
@@ -1947,6 +1963,10 @@ function renderPricingUploads() {
           <button class="btn btn-small btn-ghost toggleUploadBtn" type="button">${upload.isOpen ? "Kapat" : "Ac"}</button>
             <button class="btn btn-small btn-success downloadUploadExcelBtn" type="button"><span class="excel-mini-icon" aria-hidden="true">XLS</span> Excel ile indir</button>
           <button class="btn btn-small btn-danger deleteUploadBtn" type="button">Sil</button>
+        </div>
+        <div class="pricing-upload-desc-editor">
+          <input type="text" class="uploadDescriptionInput" maxlength="500" placeholder="Aciklama ekle veya guncelle" value="${escapedDescription}" />
+          <button class="btn btn-small btn-ghost saveUploadDescriptionBtn" type="button">Aciklamayi Kaydet</button>
         </div>
         <div class="pricing-upload-table-wrap">
           <table class="data-table">
@@ -1999,6 +2019,25 @@ function renderPricingUploads() {
       });
     });
 
+    card.querySelector(".saveUploadDescriptionBtn")?.addEventListener("click", async () => {
+      const input = card.querySelector(".uploadDescriptionInput");
+      if (!input) {
+        return;
+      }
+
+      const description = String(input.value || "").trim();
+      await apiFetch(`/api/pricing-uploads/${upload.id}/description`, {
+        method: "PATCH",
+        body: JSON.stringify({ description }),
+      });
+      if (dom.pricingUploadMsg) {
+        dom.pricingUploadMsg.style.color = "#1f7a1f";
+        dom.pricingUploadMsg.textContent = "Aciklama kaydedildi.";
+      }
+      await refreshPricingUploadsData();
+      await refreshNotificationsData();
+    });
+
     card.querySelector(".downloadUploadExcelBtn").addEventListener("click", () => {
       try {
         downloadPricingUploadAsExcel(upload);
@@ -2042,13 +2081,14 @@ async function submitPricingUpload() {
   if (rowDirectionTypes.size === 1) {
     normalizedDirectionType = Array.from(rowDirectionTypes)[0];
   } else if (rowDirectionTypes.size > 1) {
-    normalizedDirectionType = "karma";
+    normalizedDirectionType = "tek-yon";
   }
 
   const payload = {
     directionType: normalizedDirectionType,
     validFrom: dom.pricingValidFrom?.value || "",
     validTo: dom.pricingValidTo?.value || "",
+    description: dom.pricingDescriptionInput?.value || "",
     sourceFileName: file.name,
     rows,
   };

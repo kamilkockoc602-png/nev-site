@@ -266,6 +266,7 @@ CREATE TABLE IF NOT EXISTS pricing_uploads (
   uploaded_by_user_id TEXT NOT NULL,
   uploaded_by_username TEXT NOT NULL,
   direction_type TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
   valid_from TEXT NOT NULL,
   valid_to TEXT NOT NULL,
   source_file_name TEXT,
@@ -302,6 +303,12 @@ if (!hasRowDirectionColumn) {
   db.exec(
     "ALTER TABLE pricing_upload_items ADD COLUMN row_direction TEXT NOT NULL DEFAULT 'Gidis-Donus'"
   );
+}
+
+const pricingUploadColumns = db.prepare("PRAGMA table_info(pricing_uploads)").all();
+const hasDescriptionColumn = pricingUploadColumns.some((col) => col.name === "description");
+if (!hasDescriptionColumn) {
+  db.exec("ALTER TABLE pricing_uploads ADD COLUMN description TEXT NOT NULL DEFAULT ''");
 }
 
 const tariffRouteMap = new Map();
@@ -878,7 +885,7 @@ app.get("/api/tariff-prices", requireAuth, (req, res) => {
 app.get("/api/pricing-uploads", requireAuth, (req, res) => {
   const uploads = db
     .prepare(
-      "SELECT id, uploaded_by_username, direction_type, valid_from, valid_to, source_file_name, is_open, created_at FROM pricing_uploads ORDER BY id DESC LIMIT 50"
+      "SELECT id, uploaded_by_user_id, uploaded_by_username, direction_type, description, valid_from, valid_to, source_file_name, is_open, created_at FROM pricing_uploads ORDER BY id DESC LIMIT 50"
     )
     .all();
 
@@ -889,8 +896,10 @@ app.get("/api/pricing-uploads", requireAuth, (req, res) => {
   res.json({
     uploads: uploads.map((upload) => ({
       id: upload.id,
+      uploadedByUserId: upload.uploaded_by_user_id,
       uploadedBy: upload.uploaded_by_username,
       directionType: upload.direction_type,
+      description: String(upload.description || ""),
       validFrom: upload.valid_from,
       validTo: upload.valid_to,
       sourceFileName: upload.source_file_name || "",
@@ -926,6 +935,40 @@ app.patch("/api/pricing-uploads/:id/toggle", requireAuth, (req, res) => {
 
   db.prepare("UPDATE pricing_uploads SET is_open = ? WHERE id = ?").run(isOpen ? 1 : 0, id);
   res.json({ ok: true });
+});
+
+app.patch("/api/pricing-uploads/:id/description", requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  const description = String(req.body?.description || "").trim().slice(0, 500);
+
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ message: "Gecersiz kayit." });
+    return;
+  }
+
+  const upload = db
+    .prepare("SELECT id, uploaded_by_user_id, uploaded_by_username FROM pricing_uploads WHERE id = ?")
+    .get(id);
+
+  if (!upload) {
+    res.status(404).json({ message: "Kayit bulunamadi." });
+    return;
+  }
+
+  const isOwner = upload.uploaded_by_user_id === req.auth.user.id;
+  if (!isOwner && !req.auth.user.isAdmin) {
+    res.status(403).json({ message: "Bu kaydin aciklamasini guncelleme yetkin yok." });
+    return;
+  }
+
+  db.prepare("UPDATE pricing_uploads SET description = ? WHERE id = ?").run(description, id);
+
+  addPricingNotification(
+    req.auth.user.username,
+    `${req.auth.user.username} fiyat yuklemesi aciklamasini guncelledi (kayit #${id}).`
+  );
+
+  res.json({ ok: true, description });
 });
 
 app.delete("/api/pricing-upload-items/:itemId", requireAuth, (req, res) => {
@@ -1010,6 +1053,7 @@ app.delete("/api/pricing-uploads/:id", requireAuth, (req, res) => {
 
 app.post("/api/pricing-uploads", requireAuth, (req, res) => {
   const directionType = String(req.body?.directionType || "").trim();
+  const description = String(req.body?.description || "").trim().slice(0, 500);
   const validFrom = String(req.body?.validFrom || "").trim();
   const validTo = String(req.body?.validTo || "").trim();
   const sourceFileName = String(req.body?.sourceFileName || "").trim();
@@ -1119,12 +1163,13 @@ app.post("/api/pricing-uploads", requireAuth, (req, res) => {
 
   const trx = db.transaction(() => {
     const insertUpload = db.prepare(
-      "INSERT INTO pricing_uploads (uploaded_by_user_id, uploaded_by_username, direction_type, valid_from, valid_to, source_file_name, is_open, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)"
+      "INSERT INTO pricing_uploads (uploaded_by_user_id, uploaded_by_username, direction_type, description, valid_from, valid_to, source_file_name, is_open, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)"
     );
     const result = insertUpload.run(
       req.auth.user.id,
       req.auth.user.username,
       directionType,
+      description,
       validFrom,
       validTo,
       sourceFileName,
@@ -1152,7 +1197,7 @@ app.post("/api/pricing-uploads", requireAuth, (req, res) => {
 
     addPricingNotification(
       req.auth.user.username,
-      `${req.auth.user.username} fiyat yukledi (${accepted.length} satir, ${directionType}, ${validFrom} - ${validTo})`
+      `${req.auth.user.username} fiyat yukledi (${accepted.length} satir, ${directionType}, ${validFrom} - ${validTo}${description ? `, Aciklama: ${description}` : ""})`
     );
 
     return uploadId;
