@@ -883,7 +883,7 @@ app.get("/api/pricing-uploads", requireAuth, (req, res) => {
     .all();
 
   const itemQuery = db.prepare(
-    "SELECT route, origin, destination, row_direction, demand_price, tariff_price, discounted_price FROM pricing_upload_items WHERE upload_id = ? ORDER BY id ASC"
+    "SELECT id, route, origin, destination, row_direction, demand_price, tariff_price, discounted_price FROM pricing_upload_items WHERE upload_id = ? ORDER BY id ASC"
   );
 
   res.json({
@@ -897,6 +897,7 @@ app.get("/api/pricing-uploads", requireAuth, (req, res) => {
       isOpen: Boolean(upload.is_open),
       createdAt: upload.created_at,
       items: itemQuery.all(upload.id).map((item) => ({
+        id: Number(item.id),
         route: item.route,
         origin: item.origin,
         destination: item.destination,
@@ -924,6 +925,50 @@ app.patch("/api/pricing-uploads/:id/toggle", requireAuth, (req, res) => {
   }
 
   db.prepare("UPDATE pricing_uploads SET is_open = ? WHERE id = ?").run(isOpen ? 1 : 0, id);
+  res.json({ ok: true });
+});
+
+app.delete("/api/pricing-upload-items/:itemId", requireAuth, (req, res) => {
+  const itemId = Number(req.params.itemId);
+  if (!Number.isInteger(itemId) || itemId <= 0) {
+    res.status(400).json({ message: "Gecersiz satir." });
+    return;
+  }
+
+  const item = db
+    .prepare(
+      `
+      SELECT
+        i.id,
+        i.route,
+        i.upload_id,
+        u.uploaded_by_user_id,
+        u.uploaded_by_username
+      FROM pricing_upload_items i
+      INNER JOIN pricing_uploads u ON u.id = i.upload_id
+      WHERE i.id = ?
+      `
+    )
+    .get(itemId);
+
+  if (!item) {
+    res.status(404).json({ message: "Satir bulunamadi." });
+    return;
+  }
+
+  const isOwner = item.uploaded_by_user_id === req.auth.user.id;
+  if (!isOwner && !req.auth.user.isAdmin) {
+    res.status(403).json({ message: "Bu satiri silme yetkin yok." });
+    return;
+  }
+
+  db.prepare("DELETE FROM pricing_upload_items WHERE id = ?").run(itemId);
+
+  addPricingNotification(
+    req.auth.user.username,
+    `${req.auth.user.username} fiyat satiri sildi (${item.route}, satir #${itemId}).`
+  );
+
   res.json({ ok: true });
 });
 

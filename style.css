@@ -863,6 +863,17 @@ body[data-theme="dark"] .notif-item-title {
   font-weight: 700;
 }
 
+.pricing-upload-table-wrap .data-table th:nth-child(4),
+.pricing-upload-table-wrap .data-table td:nth-child(4) {
+  width: 92px;
+  text-align: right;
+}
+
+.pricing-upload-table-wrap .deletePriceItemBtn {
+  padding: 0.28rem 0.5rem;
+  font-size: 0.74rem;
+}
+
 body[data-theme="dark"] .pricing-upload-card {
   border-color: rgba(156, 184, 204, 0.36);
   background: rgba(10, 27, 37, 0.9);

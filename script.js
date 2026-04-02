@@ -1813,7 +1813,12 @@ function renderPricingUploads() {
       .slice(0, 200)
       .map(
         (item) =>
-          `<tr><td>${item.route}</td><td>${item.demandPrice} TL</td><td>${item.directionLabel || formatUploadDirection(upload.directionType)}</td></tr>`
+          `<tr>
+            <td>${item.route}</td>
+            <td>${item.demandPrice} TL</td>
+            <td>${item.directionLabel || formatUploadDirection(upload.directionType)}</td>
+            <td><button class="btn btn-small btn-danger deletePriceItemBtn" type="button" data-item-id="${item.id}">Sil</button></td>
+          </tr>`
       )
       .join("");
 
@@ -1844,8 +1849,8 @@ function renderPricingUploads() {
         </div>
         <div class="pricing-upload-table-wrap">
           <table class="data-table">
-            <thead><tr><th>Rota</th><th>Talep</th><th>Yon</th></tr></thead>
-            <tbody>${detailsRows || '<tr><td colspan="3">Detay yok.</td></tr>'}</tbody>
+            <thead><tr><th>Rota</th><th>Talep</th><th>Yon</th><th>Islem</th></tr></thead>
+            <tbody>${detailsRows || '<tr><td colspan="4">Detay yok.</td></tr>'}</tbody>
           </table>
         </div>
       </div>
@@ -1870,6 +1875,27 @@ function renderPricingUploads() {
       });
       await refreshPricingUploadsData();
       await refreshNotificationsData();
+    });
+
+    card.querySelectorAll(".deletePriceItemBtn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const itemId = Number(btn.getAttribute("data-item-id") || 0);
+        if (!Number.isInteger(itemId) || itemId <= 0) {
+          return;
+        }
+
+        const ok = window.confirm("Bu fiyat satirini silmek istiyor musun?");
+        if (!ok) {
+          return;
+        }
+
+        await apiFetch(`/api/pricing-upload-items/${itemId}`, {
+          method: "DELETE",
+        });
+
+        await refreshPricingUploadsData();
+        await refreshNotificationsData();
+      });
     });
 
     card.querySelector(".downloadUploadExcelBtn").addEventListener("click", () => {
