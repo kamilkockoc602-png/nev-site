@@ -1368,7 +1368,7 @@ function buildReportRows() {
       continue;
     }
 
-    const period = `${upload.validFrom || "-"} - ${upload.validTo || "-"}`;
+    const period = `${formatUploadDate(upload.validFrom)} - ${formatUploadDate(upload.validTo)}`;
     for (const item of upload.items || []) {
       rows.push({
         route: item.route,
