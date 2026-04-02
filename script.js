@@ -34,6 +34,10 @@ const dom = {
   tariffResetBtn: document.getElementById("tariffResetBtn"),
   tariffLoadMoreBtn: document.getElementById("tariffLoadMoreBtn"),
   tariffSummary: document.getElementById("tariffSummary"),
+  reportSearchInput: document.getElementById("reportSearchInput"),
+  reportSearchResetBtn: document.getElementById("reportSearchResetBtn"),
+  reportSummary: document.getElementById("reportSummary"),
+  reportTableBody: document.getElementById("reportTableBody"),
   pricingUploadForm: document.getElementById("pricingUploadForm"),
   pricingDirectionType: document.getElementById("pricingDirectionType"),
   pricingValidFrom: document.getElementById("pricingValidFrom"),
@@ -77,6 +81,7 @@ const state = {
   tariffTotal: 0,
   tariffOffset: 0,
   tariffQuery: "",
+  reportQuery: "",
   tariffPageSize: 50,
   tariffSearchTimer: null,
   pricingUploads: [],
@@ -1339,6 +1344,69 @@ function renderTariffRows(append = false) {
   }
 }
 
+function buildReportRows() {
+  const uploads = Array.isArray(state.pricingUploads) ? state.pricingUploads : [];
+  const rows = [];
+
+  for (const upload of uploads) {
+    if (!upload?.isOpen) {
+      continue;
+    }
+
+    const period = `${upload.validFrom || "-"} - ${upload.validTo || "-"}`;
+    for (const item of upload.items || []) {
+      rows.push({
+        route: item.route,
+        demandPrice: Number(item.demandPrice) || 0,
+        directionLabel: item.directionLabel || formatUploadDirection(upload.directionType),
+        period,
+        searchText: normalizeSearchText(`${item.route} ${item.directionLabel || ""} ${period}`),
+      });
+    }
+  }
+
+  rows.sort((a, b) => a.route.localeCompare(b.route, "tr"));
+  return rows;
+}
+
+function renderReportsPanel() {
+  if (!dom.reportTableBody || !dom.reportSummary) {
+    return;
+  }
+
+  const allRows = buildReportRows();
+  const query = String(state.reportQuery || "").trim();
+  const queryNorm = normalizeSearchText(query);
+
+  const rows = queryNorm
+    ? allRows.filter((row) => row.searchText.includes(queryNorm))
+    : allRows;
+
+  dom.reportTableBody.innerHTML = "";
+  if (!rows.length) {
+    dom.reportTableBody.innerHTML = '<tr><td colspan="4">Sonuc bulunamadi.</td></tr>';
+    dom.reportSummary.textContent = query
+      ? `Aradigin guzergah icin aktif fiyat yok: "${query}"`
+      : "Aktif fiyat kaydi bulunamadi.";
+    return;
+  }
+
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${row.route}</td>
+      <td>${row.demandPrice} TL</td>
+      <td>${row.directionLabel}</td>
+      <td>${row.period}</td>
+    `;
+    dom.reportTableBody.appendChild(tr);
+  });
+
+  dom.reportSummary.textContent = query
+    ? `"${query}" icin ${rows.length} aktif fiyat bulundu.`
+    : `Toplam ${rows.length} aktif fiyat listeleniyor.`;
+}
+
 async function refreshTariffData(query = "", append = false) {
   const q = String(query || "").trim();
   const nextOffset = append ? state.tariffOffset : 0;
@@ -1937,6 +2005,7 @@ async function refreshPricingUploadsData() {
   state.pricingUploads = result.uploads || [];
   renderPricingDashboardSummary();
   renderPricingUploads();
+  renderReportsPanel();
 }
 
 async function submitPricingUpload() {
@@ -2108,6 +2177,10 @@ async function activatePanel(menuKey) {
         dom.tariffSummary.textContent = "Tarife verisi yuklenemedi.";
       }
     });
+  }
+
+  if (menuKey === "reports") {
+    renderReportsPanel();
   }
 }
 
@@ -2516,6 +2589,23 @@ if (dom.tariffLoadMoreBtn) {
       return;
     }
     await refreshTariffData(state.tariffQuery, true);
+  });
+}
+
+if (dom.reportSearchInput) {
+  dom.reportSearchInput.addEventListener("input", () => {
+    state.reportQuery = dom.reportSearchInput.value || "";
+    renderReportsPanel();
+  });
+}
+
+if (dom.reportSearchResetBtn) {
+  dom.reportSearchResetBtn.addEventListener("click", () => {
+    state.reportQuery = "";
+    if (dom.reportSearchInput) {
+      dom.reportSearchInput.value = "";
+    }
+    renderReportsPanel();
   });
 }
 

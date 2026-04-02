@@ -168,9 +168,25 @@
         </div>
 
         <div id="panelReports" class="panel-block hidden" data-menu="reports">
-          <h4>Raporlar</h4>
-          <p class="subtle">Son 7 gunde en cok satan hat: <strong>Istanbul - Ankara</strong></p>
-          <p class="subtle">Son 7 gunde ortalama fiyat artisi: <strong>%4.2</strong></p>
+          <h4>Tek Yon Fiyatlar</h4>
+          <div class="reports-search-row">
+            <input id="reportSearchInput" type="text" placeholder="Guzergah ara (ornek: Bingol - Giresun)" />
+            <button id="reportSearchResetBtn" type="button" class="btn btn-ghost">Temizle</button>
+          </div>
+          <p id="reportSummary" class="subtle">Aktif fiyatlar yukleniyor...</p>
+          <div class="reports-table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Rota</th>
+                  <th>Talep</th>
+                  <th>Yon</th>
+                  <th>Donem</th>
+                </tr>
+              </thead>
+              <tbody id="reportTableBody"></tbody>
+            </table>
+          </div>
         </div>
 
         <div id="panelOcr" class="panel-block hidden" data-menu="ocr">

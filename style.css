@@ -947,6 +947,88 @@ body[data-theme="dark"] .pricing-upload-table-wrap .data-table td:nth-child(2) {
   color: #6ef2dd;
 }
 
+.reports-search-row {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto;
+  gap: 0.6rem;
+  align-items: center;
+  margin: 0.75rem 0 0.35rem;
+}
+
+.reports-search-row input {
+  min-width: 0;
+}
+
+.reports-table-wrap {
+  max-height: 430px;
+  overflow: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(16, 42, 67, 0.24);
+  background: rgba(255, 255, 255, 0.97);
+}
+
+.reports-table-wrap .data-table {
+  margin-top: 0;
+}
+
+.reports-table-wrap .data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #eef5fb;
+  color: #12354a;
+  font-weight: 800;
+  border-bottom: 1px solid rgba(16, 42, 67, 0.22);
+}
+
+.reports-table-wrap .data-table td {
+  color: #1a3446;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(16, 42, 67, 0.12);
+}
+
+.reports-table-wrap .data-table tbody tr:nth-child(even) {
+  background: rgba(18, 53, 74, 0.045);
+}
+
+.reports-table-wrap .data-table td:nth-child(2) {
+  color: #0b6a5f;
+  font-weight: 800;
+}
+
+.reports-table-wrap .data-table td:nth-child(2),
+.reports-table-wrap .data-table td:nth-child(3),
+.reports-table-wrap .data-table td:nth-child(4),
+.reports-table-wrap .data-table th:nth-child(2),
+.reports-table-wrap .data-table th:nth-child(3),
+.reports-table-wrap .data-table th:nth-child(4) {
+  white-space: nowrap;
+}
+
+body[data-theme="dark"] .reports-table-wrap {
+  border-color: rgba(156, 184, 204, 0.35);
+  background: rgba(7, 22, 31, 0.96);
+}
+
+body[data-theme="dark"] .reports-table-wrap .data-table th {
+  background: #103141;
+  color: #e8f4ff;
+  border-bottom-color: rgba(156, 184, 204, 0.35);
+}
+
+body[data-theme="dark"] .reports-table-wrap .data-table td {
+  color: #d8e9f8;
+  border-bottom-color: rgba(156, 184, 204, 0.2);
+}
+
+body[data-theme="dark"] .reports-table-wrap .data-table tbody tr:nth-child(even) {
+  background: rgba(156, 184, 204, 0.08);
+}
+
+body[data-theme="dark"] .reports-table-wrap .data-table td:nth-child(2) {
+  color: #6ef2dd;
+}
+
 .route-search {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto;
