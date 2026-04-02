@@ -86,11 +86,11 @@ button {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  padding: 2rem 1.25rem;
+  padding: 1.1rem 1rem;
 }
 
 .view {
-  width: min(1120px, 100%);
+  width: min(1360px, calc(100vw - 2rem));
   display: none;
 }
 
@@ -340,6 +340,7 @@ body[data-theme="dark"] .excel-mini-icon {
 }
 
 #portalView.active {
+  width: 100%;
   grid-template-columns: 280px 1fr;
   gap: 1rem;
 }
@@ -381,7 +382,7 @@ body[data-theme="dark"] .excel-mini-icon {
 
 .content {
   padding: 1.2rem;
-  min-height: 76vh;
+  min-height: calc(100vh - 2.2rem);
 }
 
 .content.panel-switching {
@@ -1100,6 +1101,10 @@ body[data-theme="dark"] .pricing-upload-table-wrap .data-table td:nth-child(2) {
 }
 
 @media (max-width: 960px) {
+  .view {
+    width: calc(100vw - 1rem);
+  }
+
   #portalView.active {
     grid-template-columns: 1fr;
   }
