@@ -1920,6 +1920,16 @@ function renderPricingUploads() {
     const directionLabel = formatUploadDirection(upload.directionType);
     const currentDescription = String(upload.description || "").trim();
     const escapedDescription = escapeHtml(currentDescription);
+    const descriptionBlock = escapedDescription
+      ? `
+        <div class="pricing-upload-note-wrap">
+          <div class="pricing-upload-note">
+            <div class="pricing-upload-note-title">Aciklama</div>
+            <div class="pricing-upload-note-text">${escapedDescription}</div>
+          </div>
+        </div>
+      `
+      : "";
     const rowCountLabel = `${upload.items.length} SATIR`;
     const validFromText = formatUploadDate(upload.validFrom);
     const validToText = formatUploadDate(upload.validTo);
@@ -1955,10 +1965,10 @@ function renderPricingUploads() {
           <span class="pricing-upload-range-label">Gecerlilik:</span>
           <span class="pricing-upload-range-value">${validFromText} - ${validToText}</span>
         </div>
-        ${escapedDescription ? `<div class="pricing-upload-desc">Aciklama: ${escapedDescription}</div>` : ""}
         <span class="pricing-upload-meta">Yukleme: ${createdAtText}</span>
       </summary>
       <div class="pricing-upload-body">
+        ${descriptionBlock}
         <div class="actions" style="margin-bottom:.5rem;">
           <button class="btn btn-small btn-ghost toggleUploadBtn" type="button">${upload.isOpen ? "Kapat" : "Ac"}</button>
             <button class="btn btn-small btn-success downloadUploadExcelBtn" type="button"><span class="excel-mini-icon" aria-hidden="true">XLS</span> Excel ile indir</button>

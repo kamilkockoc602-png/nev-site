@@ -827,11 +827,33 @@ body[data-theme="dark"] .notif-item-title {
   font-weight: 600;
 }
 
-.pricing-upload-desc {
-  margin-top: 0.32rem;
-  color: #2b4b62;
-  font-size: 0.84rem;
-  font-weight: 600;
+.pricing-upload-note-wrap {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.55rem;
+}
+
+.pricing-upload-note {
+  width: min(560px, 100%);
+  border: 1px solid rgba(15, 157, 143, 0.45);
+  border-radius: 10px;
+  padding: 0.42rem 0.62rem;
+  background: linear-gradient(130deg, rgba(15, 157, 143, 0.16), rgba(18, 53, 74, 0.06));
+}
+
+.pricing-upload-note-title {
+  font-size: 0.73rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #0a5f56;
+}
+
+.pricing-upload-note-text {
+  margin-top: 0.18rem;
+  color: #1f3d51;
+  font-size: 0.9rem;
+  font-weight: 700;
 }
 
 .pricing-upload-desc-editor {
@@ -951,8 +973,17 @@ body[data-theme="dark"] .pricing-upload-meta {
   color: #c2d6e6;
 }
 
-body[data-theme="dark"] .pricing-upload-desc {
-  color: #cde3f2;
+body[data-theme="dark"] .pricing-upload-note {
+  border-color: rgba(110, 242, 221, 0.45);
+  background: linear-gradient(130deg, rgba(110, 242, 221, 0.12), rgba(156, 184, 204, 0.08));
+}
+
+body[data-theme="dark"] .pricing-upload-note-title {
+  color: #6ef2dd;
+}
+
+body[data-theme="dark"] .pricing-upload-note-text {
+  color: #d3e8f6;
 }
 
 body[data-theme="dark"] .pricing-upload-table-wrap {
