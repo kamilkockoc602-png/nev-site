@@ -1364,7 +1364,7 @@ function buildReportRows() {
   const rows = [];
 
   for (const upload of uploads) {
-    if (!upload?.isOpen) {
+    if (!upload) {
       continue;
     }
 
@@ -1401,8 +1401,8 @@ function renderReportsPanel() {
   if (!rows.length) {
     dom.reportTableBody.innerHTML = '<tr><td colspan="4">Sonuc bulunamadi.</td></tr>';
     dom.reportSummary.textContent = query
-      ? `Aradigin guzergah icin aktif fiyat yok: "${query}"`
-      : "Aktif fiyat kaydi bulunamadi.";
+      ? `Aradigin guzergah icin yuklenmis fiyat yok: "${query}"`
+      : "Yuklenmis fiyat kaydi bulunamadi.";
     return;
   }
 
@@ -1418,8 +1418,8 @@ function renderReportsPanel() {
   });
 
   dom.reportSummary.textContent = query
-    ? `"${query}" icin ${rows.length} aktif fiyat bulundu.`
-    : `Toplam ${rows.length} aktif fiyat listeleniyor.`;
+    ? `"${query}" icin ${rows.length} yuklenmis fiyat bulundu.`
+    : `Toplam ${rows.length} yuklenmis fiyat listeleniyor.`;
 }
 
 async function refreshTariffData(query = "", append = false) {
