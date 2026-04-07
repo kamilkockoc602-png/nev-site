@@ -355,29 +355,99 @@ body[data-theme="dark"] .excel-mini-icon {
   height: fit-content;
 }
 
+.sidebar-brand {
+  padding: 0.9rem;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 157, 143, 0.25);
+  background: linear-gradient(155deg, rgba(15, 157, 143, 0.14), rgba(18, 53, 74, 0.05));
+}
+
+.sidebar-brand-kicker {
+  display: inline-flex;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #0a6e63;
+}
+
+.sidebar-brand h2 {
+  margin: 0.34rem 0 0;
+  font-size: 1.6rem;
+  letter-spacing: 0.03em;
+}
+
+.sidebar-brand-subtitle {
+  margin: 0.15rem 0 0;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: #32566f;
+}
+
+.sidebar-brand-meta {
+  margin-top: 0.6rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.sidebar-brand-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #0f9d8f;
+  box-shadow: 0 0 0 4px rgba(15, 157, 143, 0.2);
+}
+
+.sidebar-brand-meta .subtle {
+  margin: 0;
+  font-size: 0.82rem;
+}
+
 .menu-list {
   display: grid;
-  gap: 0.45rem;
+  gap: 0.35rem;
   padding: 0;
   list-style: none;
 }
 
 .menu-item {
-  padding: 0.72rem 0.8rem;
+  padding: 0.7rem 0.8rem 0.7rem 0.9rem;
   border-radius: 12px;
-  border: 1px solid transparent;
+  border: 1px solid rgba(16, 42, 67, 0.04);
   cursor: pointer;
   transition: all 0.2s ease;
+  position: relative;
+}
+
+.menu-item::before {
+  content: "";
+  position: absolute;
+  left: 0.35rem;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(16, 42, 67, 0.24);
+  transform: translateY(-50%);
 }
 
 .menu-item:hover {
   border-color: var(--stroke);
+  background: rgba(255, 255, 255, 0.38);
 }
 
 .menu-item.active {
-  background: rgba(15, 157, 143, 0.15);
+  background: rgba(15, 157, 143, 0.18);
   border-color: rgba(15, 157, 143, 0.3);
   font-weight: 700;
+}
+
+.menu-item.active::before {
+  width: 8px;
+  height: 8px;
+  background: #0f9d8f;
+  box-shadow: 0 0 0 4px rgba(15, 157, 143, 0.2);
 }
 
 .content {
@@ -455,6 +525,31 @@ body[data-theme="dark"] .excel-mini-icon {
 
 body[data-theme="dark"] .theme-track {
   background: rgba(61, 194, 178, 0.45);
+}
+
+body[data-theme="dark"] .sidebar-brand {
+  border-color: rgba(61, 194, 178, 0.34);
+  background: linear-gradient(155deg, rgba(61, 194, 178, 0.14), rgba(18, 53, 74, 0.16));
+}
+
+body[data-theme="dark"] .sidebar-brand-kicker {
+  color: #6ef2dd;
+}
+
+body[data-theme="dark"] .sidebar-brand-subtitle {
+  color: #b5d1e4;
+}
+
+body[data-theme="dark"] .menu-item {
+  border-color: rgba(156, 184, 204, 0.08);
+}
+
+body[data-theme="dark"] .menu-item::before {
+  background: rgba(156, 184, 204, 0.52);
+}
+
+body[data-theme="dark"] .menu-item:hover {
+  background: rgba(156, 184, 204, 0.08);
 }
 
 body[data-theme="dark"] .theme-thumb {
