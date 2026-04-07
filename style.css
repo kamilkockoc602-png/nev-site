@@ -362,17 +362,8 @@ body[data-theme="dark"] .excel-mini-icon {
   background: linear-gradient(155deg, rgba(15, 157, 143, 0.14), rgba(18, 53, 74, 0.05));
 }
 
-.sidebar-brand-kicker {
-  display: inline-flex;
-  font-size: 0.68rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: #0a6e63;
-}
-
 .sidebar-brand h2 {
-  margin: 0.34rem 0 0;
+  margin: 0;
   font-size: 1.6rem;
   letter-spacing: 0.03em;
 }
@@ -530,10 +521,6 @@ body[data-theme="dark"] .theme-track {
 body[data-theme="dark"] .sidebar-brand {
   border-color: rgba(61, 194, 178, 0.34);
   background: linear-gradient(155deg, rgba(61, 194, 178, 0.14), rgba(18, 53, 74, 0.16));
-}
-
-body[data-theme="dark"] .sidebar-brand-kicker {
-  color: #6ef2dd;
 }
 
 body[data-theme="dark"] .sidebar-brand-subtitle {
