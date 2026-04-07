@@ -400,6 +400,71 @@ body[data-theme="dark"] .excel-mini-icon {
   gap: 0.35rem;
   padding: 0;
   list-style: none;
+.dashboard-expired-wrap {
+  margin-top: 0.9rem;
+  border: 1px solid rgba(214, 69, 69, 0.36);
+  border-radius: 14px;
+  background: linear-gradient(150deg, rgba(214, 69, 69, 0.08), rgba(214, 69, 69, 0.03));
+  padding: 0.85rem;
+}
+.dashboard-expired-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+.dashboard-expired-head h4 {
+  margin: 0;
+}
+.dashboard-expired-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 999px;
+  background: rgba(214, 69, 69, 0.16);
+  border: 1px solid rgba(214, 69, 69, 0.38);
+  color: #a72d2d;
+  font-weight: 800;
+  font-size: 0.82rem;
+}
+.dashboard-expired-list {
+  margin: 0.65rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.48rem;
+}
+.dashboard-expired-item {
+  border: 1px solid rgba(214, 69, 69, 0.24);
+  border-radius: 10px;
+  padding: 0.55rem 0.62rem;
+  background: rgba(255, 255, 255, 0.66);
+}
+.dashboard-expired-item-main {
+  display: flex;
+  align-items: center;
+  gap: 0.48rem;
+  flex-wrap: wrap;
+  font-size: 0.84rem;
+}
+.dashboard-expired-item-main strong {
+  font-size: 0.9rem;
+}
+.dashboard-expired-item-main span {
+  color: #5a6978;
+}
+.dashboard-expired-item-desc {
+  margin-top: 0.28rem;
+  font-size: 0.83rem;
+  color: #2b465b;
+}
+.dashboard-expired-item-actions {
+  margin-top: 0.4rem;
+  display: flex;
+  justify-content: flex-end;
+}
 }
 
 .menu-item {

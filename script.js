@@ -53,6 +53,9 @@ const dom = {
   totalRoutes: document.getElementById("totalRoutes"),
   updateCount: document.getElementById("updateCount"),
   lastPriceUpdate: document.getElementById("lastPriceUpdate"),
+  expiredUploadsCount: document.getElementById("expiredUploadsCount"),
+  expiredUploadsEmpty: document.getElementById("expiredUploadsEmpty"),
+  expiredUploadsList: document.getElementById("expiredUploadsList"),
   notifBtn: document.getElementById("notifBtn"),
   notifBadge: document.getElementById("notifBadge"),
   notifPanel: document.getElementById("notifPanel"),
@@ -1319,6 +1322,74 @@ function renderPricingDashboardSummary() {
       dom.lastPriceUpdate.textContent = `Son fiyat yukleme: ${latestStamp} (${uploads.length} yukleme kaydi)`;
     }
   }
+
+  renderExpiredUploadsWarning(uploads);
+}
+
+function isUploadExpired(upload) {
+  const end = new Date(String(upload?.validTo || "").trim());
+  return Number.isFinite(end.getTime()) && end.getTime() < Date.now();
+}
+
+function renderExpiredUploadsWarning(uploads) {
+  if (!dom.expiredUploadsList || !dom.expiredUploadsEmpty || !dom.expiredUploadsCount) {
+    return;
+  }
+
+  const expired = (Array.isArray(uploads) ? uploads : [])
+    .filter((upload) => upload && isUploadExpired(upload))
+    .sort((a, b) => String(a.validTo || "").localeCompare(String(b.validTo || ""), "tr"));
+
+  dom.expiredUploadsCount.textContent = String(expired.length);
+  dom.expiredUploadsList.innerHTML = "";
+
+  if (!expired.length) {
+    dom.expiredUploadsEmpty.classList.remove("hidden");
+    return;
+  }
+
+  dom.expiredUploadsEmpty.classList.add("hidden");
+
+  expired.forEach((upload) => {
+    const li = document.createElement("li");
+    const desc = String(upload.description || "").trim();
+    li.className = "dashboard-expired-item";
+    li.innerHTML = `
+      <div class="dashboard-expired-item-main">
+        <strong>${escapeHtml(upload.uploadedBy || "-")}</strong>
+        <span>#${Number(upload.id) || "-"}</span>
+        <span>${formatUploadDate(upload.validFrom)} - ${formatUploadDate(upload.validTo)}</span>
+      </div>
+      ${desc ? `<div class="dashboard-expired-item-desc">Aciklama: ${escapeHtml(desc)}</div>` : ""}
+      <div class="dashboard-expired-item-actions">
+        <button class="btn btn-small btn-danger expiredDeleteBtn" type="button" data-upload-id="${Number(upload.id) || 0}">Kaldir</button>
+      </div>
+    `;
+
+    li.querySelector(".expiredDeleteBtn")?.addEventListener("click", async () => {
+      const id = Number(upload.id || 0);
+      if (!Number.isInteger(id) || id <= 0) {
+        return;
+      }
+
+      const ok = window.confirm(`Kayit #${id} tarihi gecmis. Kaldirmak istiyor musun?`);
+      if (!ok) {
+        return;
+      }
+
+      try {
+        await apiFetch(`/api/pricing-uploads/${id}`, { method: "DELETE" });
+        await refreshPricingUploadsData();
+        await refreshNotificationsData();
+      } catch (error) {
+        if (dom.lastPriceUpdate) {
+          dom.lastPriceUpdate.textContent = error.message || "Kayit kaldirilamadi.";
+        }
+      }
+    });
+
+    dom.expiredUploadsList.appendChild(li);
+  });
 }
 
 function renderTariffRows(append = false) {
