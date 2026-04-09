@@ -451,7 +451,12 @@ const REPORTING_KNOWN_TARGET_MAP = new Map(
 function resolveDestinationNameFromRide(ride, toStationId) {
   const directCandidates = [
     ride?.to_stop_name,
+    ride?.to_stop?.name,
+    ride?.to_stop?.city_name,
+    ride?.to_stop_city_name,
     ride?.destination_name,
+    ride?.destination?.name,
+    ride?.destination?.city_name,
     ride?.destination,
     ride?.to_name,
     ride?.toStopName,
@@ -465,6 +470,46 @@ function resolveDestinationNameFromRide(ride, toStationId) {
   }
 
   return REPORTING_KNOWN_TARGET_MAP.get(String(toStationId || "")) || "Hedef";
+}
+
+async function fetchStationNameById(stationId) {
+  const id = String(stationId || "").trim();
+  if (!id) {
+    return "";
+  }
+
+  const urls = [
+    `https://global.api.flixbus.com/gis/v1/station/${encodeURIComponent(id)}`,
+    `https://global.api.flixbus.com/gis/v1/station/${encodeURIComponent(id)}?locale=tr`,
+  ];
+
+  for (const url of urls) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        continue;
+      }
+
+      const data = await res.json();
+      const candidates = [
+        data?.name,
+        data?.city_name,
+        data?.city?.name,
+        data?.display_name,
+      ];
+
+      for (const candidate of candidates) {
+        const name = String(candidate || "").trim();
+        if (name) {
+          return name;
+        }
+      }
+    } catch {
+      // Try next endpoint variation.
+    }
+  }
+
+  return "";
 }
 
 function getIstanbulDayRangeMs(reportDateIso) {
@@ -850,6 +895,7 @@ async function collectOperationsReportRows(reportDateIso) {
   const departures = await fetchSiirtDepartures(reportDateIso);
   const availabilityMaps = new Map();
   const oneOpsPlateCache = new Map();
+  const stationNameCache = new Map();
 
   const targetByStation = new Map();
   for (const ride of departures) {
@@ -883,7 +929,17 @@ async function collectOperationsReportRows(reportDateIso) {
       continue;
     }
 
-    const destinationName = resolveDestinationNameFromRide(ride, toStationId);
+    let destinationName = resolveDestinationNameFromRide(ride, toStationId);
+    if (destinationName === "Hedef") {
+      if (!stationNameCache.has(toStationId)) {
+        stationNameCache.set(toStationId, fetchStationNameById(toStationId));
+      }
+
+      const stationName = String(await stationNameCache.get(toStationId) || "").trim();
+      if (stationName) {
+        destinationName = stationName;
+      }
+    }
     const base = availabilityMaps.get(toStationId)?.get(rideUuid) || {};
     const timing = await fetchTripDetailsTiming(rideUuid, REPORTING_SOURCE.fromStationId, toStationId);
     const liveSnapshot = await fetchLiveTripSnapshot(rideUuid, REPORTING_SOURCE.fromStationId, toStationId);
