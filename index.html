@@ -251,6 +251,56 @@
           </div>
         </div>
 
+        <div id="panelControl" class="panel-block hidden" data-menu="control">
+          <h4>Control Baglanti</h4>
+          <p class="subtle">Control tarafina giris yapip gerekli baglanti bilgilerini buraya kaydet. Sonraki adimda gecikme/plaka/doluluk verisini otomatik cekecegiz.</p>
+
+          <section class="control-guide-wrap">
+            <h5>Yonlendirme Adimlari</h5>
+            <ol class="control-steps">
+              <li>Control giris ekranini ac ve hesabinla giris yap.</li>
+              <li>Tarayici geliştirici araclarindan gerekli oturum bilgisini al (Cookie veya token).</li>
+              <li>Asagidaki alanlara yapistirip Kaydet butonuna bas.</li>
+            </ol>
+
+            <div class="actions">
+              <button id="controlOpenLoginBtn" type="button" class="btn btn-primary">Control Giris Sayfasini Ac</button>
+              <button id="controlOpenOpsBtn" type="button" class="btn btn-ghost">Ops Portal Ac</button>
+            </div>
+          </section>
+
+          <section class="control-form-wrap">
+            <div class="control-form-grid">
+              <label>
+                <span>Control Base URL</span>
+                <input id="controlBaseUrlInput" type="text" placeholder="https://backend.flixbus.com" />
+              </label>
+
+              <label>
+                <span>Login URL</span>
+                <input id="controlLoginUrlInput" type="text" placeholder="https://backend.flixbus.com/users/login" />
+              </label>
+
+              <label class="control-wide-field">
+                <span>Cookie / Session Header</span>
+                <textarea id="controlCookieInput" rows="4" placeholder="ornek: _session=...; other=... "></textarea>
+              </label>
+
+              <label class="control-wide-field">
+                <span>CSRF Token (opsiyonel)</span>
+                <input id="controlCsrfInput" type="text" placeholder="X-CSRF-Token" />
+              </label>
+            </div>
+
+            <div class="actions" style="margin-top:.6rem;">
+              <button id="controlSaveBtn" type="button" class="btn btn-primary">Control Bilgilerini Kaydet</button>
+              <button id="controlReloadBtn" type="button" class="btn btn-ghost">Durumu Yenile</button>
+            </div>
+
+            <p id="controlStatusMsg" class="message"></p>
+          </section>
+        </div>
+
         <div id="panelOcr" class="panel-block hidden" data-menu="ocr">
           <section class="ocr-tool">
             <h3>Fotograftan Excel Ciktisi</h3>

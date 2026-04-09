@@ -207,12 +207,13 @@ const MENUS = [
   "pricing",
   "reports",
   "reporting",
+  "control",
   "ocr",
   "permissions",
   "logs",
 ];
 
-const ADMIN_ONLY_MENUS = new Set(["permissions", "logs"]);
+const ADMIN_ONLY_MENUS = new Set(["control", "permissions", "logs"]);
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -1750,6 +1751,52 @@ app.post("/api/operations-reports/sync", requireAuth, async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: error.message || "Rapor verisi senkronize edilemedi." });
   }
+});
+
+app.get("/api/control-integration", requireAuth, requireAdmin, (req, res) => {
+  const baseUrl = getMeta("control_base_url", "https://backend.flixbus.com");
+  const loginUrl = getMeta("control_login_url", "https://backend.flixbus.com/users/login");
+  const cookieHeader = getMeta("control_cookie_header", "");
+  const csrfToken = getMeta("control_csrf_token", "");
+  const updatedAt = getMeta("control_updated_at", "");
+
+  res.json({
+    baseUrl,
+    loginUrl,
+    cookieHeader,
+    csrfToken,
+    hasCookie: Boolean(cookieHeader),
+    updatedAt,
+  });
+});
+
+app.patch("/api/control-integration", requireAuth, requireAdmin, (req, res) => {
+  const baseUrl = String(req.body?.baseUrl || "https://backend.flixbus.com").trim().slice(0, 400);
+  const loginUrl = String(req.body?.loginUrl || "https://backend.flixbus.com/users/login").trim().slice(0, 500);
+  const cookieHeader = String(req.body?.cookieHeader || "").trim().slice(0, 12000);
+  const csrfToken = String(req.body?.csrfToken || "").trim().slice(0, 1000);
+
+  if (baseUrl && !/^https?:\/\//i.test(baseUrl)) {
+    res.status(400).json({ message: "Control Base URL gecersiz." });
+    return;
+  }
+  if (loginUrl && !/^https?:\/\//i.test(loginUrl)) {
+    res.status(400).json({ message: "Login URL gecersiz." });
+    return;
+  }
+
+  setMeta("control_base_url", baseUrl);
+  setMeta("control_login_url", loginUrl);
+  setMeta("control_cookie_header", cookieHeader);
+  setMeta("control_csrf_token", csrfToken);
+  setMeta("control_updated_at", nowStamp());
+
+  addPricingNotification(
+    req.auth.user.username,
+    `${req.auth.user.username} Control baglanti ayarlarini guncelledi.`
+  );
+
+  res.json({ ok: true });
 });
 
 app.patch("/api/operations-reports/:id", requireAuth, (req, res) => {

@@ -7,12 +7,13 @@ const MENUS = [
   { key: "pricing", label: "Fiyat Yukleme" },
   { key: "reports", label: "Tek Yon Fiyatlar" },
   { key: "reporting", label: "Raporlama" },
+  { key: "control", label: "Control Baglanti" },
   { key: "ocr", label: "Foto Tarama" },
   { key: "permissions", label: "Yetki Menusu" },
   { key: "logs", label: "Giris Kayitlari" },
 ];
 
-const ADMIN_ONLY_MENUS = new Set(["permissions", "logs"]);
+const ADMIN_ONLY_MENUS = new Set(["control", "permissions", "logs"]);
 
 const dom = {
   loginView: document.getElementById("loginView"),
@@ -46,6 +47,15 @@ const dom = {
   reportingFilterInput: document.getElementById("reportingFilterInput"),
   reportingSummary: document.getElementById("reportingSummary"),
   reportingTableBody: document.getElementById("reportingTableBody"),
+  controlOpenLoginBtn: document.getElementById("controlOpenLoginBtn"),
+  controlOpenOpsBtn: document.getElementById("controlOpenOpsBtn"),
+  controlBaseUrlInput: document.getElementById("controlBaseUrlInput"),
+  controlLoginUrlInput: document.getElementById("controlLoginUrlInput"),
+  controlCookieInput: document.getElementById("controlCookieInput"),
+  controlCsrfInput: document.getElementById("controlCsrfInput"),
+  controlSaveBtn: document.getElementById("controlSaveBtn"),
+  controlReloadBtn: document.getElementById("controlReloadBtn"),
+  controlStatusMsg: document.getElementById("controlStatusMsg"),
   pricingUploadForm: document.getElementById("pricingUploadForm"),
   pricingDirectionType: document.getElementById("pricingDirectionType"),
   pricingValidFrom: document.getElementById("pricingValidFrom"),
@@ -98,6 +108,7 @@ const state = {
   reportingOrigin: "Siirt",
   reportingQuery: "",
   reportingRows: [],
+  controlConfig: null,
   tariffPageSize: 50,
   tariffSearchTimer: null,
   pricingUploads: [],
@@ -1616,6 +1627,64 @@ async function syncReportingData() {
   await refreshNotificationsData();
 }
 
+async function refreshControlIntegrationData() {
+  const result = await apiFetch("/api/control-integration");
+  state.controlConfig = result || null;
+  return result;
+}
+
+async function renderControlIntegrationPanel() {
+  if (!dom.controlStatusMsg) {
+    return;
+  }
+
+  try {
+    const result = await refreshControlIntegrationData();
+
+    if (dom.controlBaseUrlInput) {
+      dom.controlBaseUrlInput.value = result.baseUrl || "https://backend.flixbus.com";
+    }
+    if (dom.controlLoginUrlInput) {
+      dom.controlLoginUrlInput.value = result.loginUrl || "https://backend.flixbus.com/users/login";
+    }
+    if (dom.controlCookieInput) {
+      dom.controlCookieInput.value = result.cookieHeader || "";
+    }
+    if (dom.controlCsrfInput) {
+      dom.controlCsrfInput.value = result.csrfToken || "";
+    }
+
+    dom.controlStatusMsg.style.color = "var(--muted)";
+    dom.controlStatusMsg.textContent = result.hasCookie
+      ? `Control oturumu kayitli. Son guncelleme: ${result.updatedAt || "-"}`
+      : "Control oturumu henuz kaydedilmedi.";
+  } catch (error) {
+    dom.controlStatusMsg.style.color = "#d64545";
+    dom.controlStatusMsg.textContent = error.message || "Control bilgileri yuklenemedi.";
+  }
+}
+
+async function saveControlIntegrationData() {
+  const payload = {
+    baseUrl: dom.controlBaseUrlInput?.value || "",
+    loginUrl: dom.controlLoginUrlInput?.value || "",
+    cookieHeader: dom.controlCookieInput?.value || "",
+    csrfToken: dom.controlCsrfInput?.value || "",
+  };
+
+  await apiFetch("/api/control-integration", {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+
+  if (dom.controlStatusMsg) {
+    dom.controlStatusMsg.style.color = "#1f7a1f";
+    dom.controlStatusMsg.textContent = "Control baglanti bilgileri kaydedildi.";
+  }
+
+  await renderControlIntegrationPanel();
+}
+
 async function refreshTariffData(query = "", append = false) {
   const q = String(query || "").trim();
   const nextOffset = append ? state.tariffOffset : 0;
@@ -2444,6 +2513,15 @@ async function activatePanel(menuKey) {
       }
     });
   }
+
+  if (menuKey === "control") {
+    renderControlIntegrationPanel().catch((error) => {
+      if (dom.controlStatusMsg) {
+        dom.controlStatusMsg.style.color = "#d64545";
+        dom.controlStatusMsg.textContent = error.message || "Control paneli acilamadi.";
+      }
+    });
+  }
 }
 
 async function handleLogin(username, password) {
@@ -2901,6 +2979,36 @@ if (dom.reportingSyncBtn) {
         dom.reportingSummary.textContent = error.message || "Rapor senkronu basarisiz.";
       }
     });
+  });
+}
+
+if (dom.controlOpenLoginBtn) {
+  dom.controlOpenLoginBtn.addEventListener("click", () => {
+    const url = (dom.controlLoginUrlInput?.value || "https://backend.flixbus.com/users/login").trim();
+    window.open(url, "_blank", "noopener");
+  });
+}
+
+if (dom.controlOpenOpsBtn) {
+  dom.controlOpenOpsBtn.addEventListener("click", () => {
+    window.open("https://app.oneops.flixbus.com/ops-portal/", "_blank", "noopener");
+  });
+}
+
+if (dom.controlSaveBtn) {
+  dom.controlSaveBtn.addEventListener("click", () => {
+    saveControlIntegrationData().catch((error) => {
+      if (dom.controlStatusMsg) {
+        dom.controlStatusMsg.style.color = "#d64545";
+        dom.controlStatusMsg.textContent = error.message || "Control bilgileri kaydedilemedi.";
+      }
+    });
+  });
+}
+
+if (dom.controlReloadBtn) {
+  dom.controlReloadBtn.addEventListener("click", () => {
+    renderControlIntegrationPanel().catch(() => null);
   });
 }
 
