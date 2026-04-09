@@ -48,6 +48,9 @@ const dom = {
   reportingRideUuidInput: document.getElementById("reportingRideUuidInput"),
   reportingPlateDebugBtn: document.getElementById("reportingPlateDebugBtn"),
   reportingPlateDebugMsg: document.getElementById("reportingPlateDebugMsg"),
+  reportingRevenueTryTotal: document.getElementById("reportingRevenueTryTotal"),
+  reportingRevenueEurTotal: document.getElementById("reportingRevenueEurTotal"),
+  reportingRevenueCount: document.getElementById("reportingRevenueCount"),
   reportingSummary: document.getElementById("reportingSummary"),
   reportingTableBody: document.getElementById("reportingTableBody"),
   controlOpenLoginBtn: document.getElementById("controlOpenLoginBtn"),
@@ -1536,6 +1539,22 @@ function renderReportingPanel() {
     return;
   }
 
+  const formatMoney = (value, currency) => {
+    if (value === null || value === undefined || value === "") {
+      return "-";
+    }
+    const n = Number(value);
+    if (!Number.isFinite(n)) {
+      return "-";
+    }
+    return new Intl.NumberFormat("tr-TR", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(n);
+  };
+
   const query = normalizeSearchText(state.reportingQuery || "");
   const allRows = Array.isArray(state.reportingRows) ? state.reportingRows : [];
   const rows = query
@@ -1544,13 +1563,30 @@ function renderReportingPanel() {
 
   dom.reportingTableBody.innerHTML = "";
   if (!rows.length) {
-    dom.reportingTableBody.innerHTML = '<tr><td colspan="8">Bu tarihte rapor kaydi yok. Gunluk raporu cek butonuna bas.</td></tr>';
+    dom.reportingTableBody.innerHTML = '<tr><td colspan="10">Bu tarihte rapor kaydi yok. Gunluk raporu cek butonuna bas.</td></tr>';
     dom.reportingSummary.textContent = `${state.reportingDate || "-"} icin kayit bulunamadi.`;
+    if (dom.reportingRevenueTryTotal) dom.reportingRevenueTryTotal.textContent = "0 TL";
+    if (dom.reportingRevenueEurTotal) dom.reportingRevenueEurTotal.textContent = "0 EUR";
+    if (dom.reportingRevenueCount) dom.reportingRevenueCount.textContent = "0";
     return;
   }
 
   const delayedCount = rows.filter((row) => Number(row.delayMinutes) !== 0).length;
   dom.reportingSummary.textContent = `${state.reportingDate} icin ${rows.length} sefer listelendi. Rotarli sefer: ${delayedCount}.`;
+
+  const totalTry = rows.reduce((acc, row) => acc + (Number.isFinite(Number(row.revenueTry)) ? Number(row.revenueTry) : 0), 0);
+  const totalEur = rows.reduce((acc, row) => acc + (Number.isFinite(Number(row.revenueEur)) ? Number(row.revenueEur) : 0), 0);
+  const revenueCount = rows.filter((row) => Number.isFinite(Number(row.revenueTry)) || Number.isFinite(Number(row.revenueEur))).length;
+
+  if (dom.reportingRevenueTryTotal) {
+    dom.reportingRevenueTryTotal.textContent = new Intl.NumberFormat("tr-TR").format(Math.round(totalTry * 100) / 100) + " TL";
+  }
+  if (dom.reportingRevenueEurTotal) {
+    dom.reportingRevenueEurTotal.textContent = new Intl.NumberFormat("tr-TR").format(Math.round(totalEur * 100) / 100) + " EUR";
+  }
+  if (dom.reportingRevenueCount) {
+    dom.reportingRevenueCount.textContent = String(revenueCount);
+  }
 
   rows.forEach((row) => {
     const tr = document.createElement("tr");
@@ -1581,7 +1617,12 @@ function renderReportingPanel() {
       <td>
         <input class="report-plate-input" type="text" maxlength="32" value="${escapeHtml(row.vehiclePlate || "")}" placeholder="34 ABC 123" />
       </td>
+      <td>
+        <div>${escapeHtml(row.vehicleModel || "-")}</div>
+        <small class="subtle">${escapeHtml(row.operatorName || "-")}</small>
+      </td>
       <td>${occupancyText}${hasSeatCount ? ` (Bos: ${Number(row.seatsAvailable)})` : ""}</td>
+      <td>${formatMoney(row.revenueTry, "TRY")} / ${formatMoney(row.revenueEur, "EUR")}</td>
       <td>
         <input class="report-note-input" type="text" maxlength="400" value="${escapeHtml(row.note || "")}" placeholder="Not" />
       </td>
@@ -1642,6 +1683,10 @@ async function debugPlateByRideUuid() {
   });
 
   const extracted = String(result.extractedPlate || "").trim();
+  const extractedModel = String(result.extractedVehicleModel || "").trim();
+  const extractedOperator = String(result.extractedOperatorName || "").trim();
+  const extractedTry = Number(result.extractedRevenueTry);
+  const extractedEur = Number(result.extractedRevenueEur);
   const current = String(result.currentRow?.vehiclePlate || "").trim();
   const firstProbe = Array.isArray(result.probes) && result.probes.length ? result.probes[0] : null;
   const detail = firstProbe
@@ -1651,7 +1696,8 @@ async function debugPlateByRideUuid() {
   if (dom.reportingPlateDebugMsg) {
     if (extracted) {
       dom.reportingPlateDebugMsg.style.color = "#1f7a1f";
-      dom.reportingPlateDebugMsg.textContent = `Bulunan plaka: ${extracted} | DB'deki mevcut: ${current || "-"}${detail}`;
+      const revenueText = `${Number.isFinite(extractedTry) ? extractedTry.toFixed(2) : "-"} TRY / ${Number.isFinite(extractedEur) ? extractedEur.toFixed(2) : "-"} EUR`;
+      dom.reportingPlateDebugMsg.textContent = `Bulunan plaka: ${extracted} | Model: ${extractedModel || "-"} | Operator: ${extractedOperator || "-"} | Gelir: ${revenueText} | DB'deki mevcut: ${current || "-"}${detail}`;
     } else {
       dom.reportingPlateDebugMsg.style.color = "#d64545";
       dom.reportingPlateDebugMsg.textContent = `Bu ride_uuid icin plaka bulunamadi.${detail}`;

@@ -317,6 +317,10 @@ CREATE TABLE IF NOT EXISTS operations_reports (
   is_delayed INTEGER NOT NULL DEFAULT 0,
   delay_minutes INTEGER NOT NULL DEFAULT 0,
   vehicle_plate TEXT NOT NULL DEFAULT '',
+  operator_name TEXT NOT NULL DEFAULT '',
+  vehicle_model TEXT NOT NULL DEFAULT '',
+  revenue_try REAL,
+  revenue_eur REAL,
   note TEXT NOT NULL DEFAULT '',
   payload_json TEXT,
   created_at TEXT NOT NULL,
@@ -347,6 +351,22 @@ if (!hasFromStationColumn) {
 const hasToStationColumn = reportingColumns.some((col) => col.name === "to_station_id");
 if (!hasToStationColumn) {
   db.exec("ALTER TABLE operations_reports ADD COLUMN to_station_id TEXT NOT NULL DEFAULT ''");
+}
+const hasOperatorNameColumn = reportingColumns.some((col) => col.name === "operator_name");
+if (!hasOperatorNameColumn) {
+  db.exec("ALTER TABLE operations_reports ADD COLUMN operator_name TEXT NOT NULL DEFAULT ''");
+}
+const hasVehicleModelColumn = reportingColumns.some((col) => col.name === "vehicle_model");
+if (!hasVehicleModelColumn) {
+  db.exec("ALTER TABLE operations_reports ADD COLUMN vehicle_model TEXT NOT NULL DEFAULT ''");
+}
+const hasRevenueTryColumn = reportingColumns.some((col) => col.name === "revenue_try");
+if (!hasRevenueTryColumn) {
+  db.exec("ALTER TABLE operations_reports ADD COLUMN revenue_try REAL");
+}
+const hasRevenueEurColumn = reportingColumns.some((col) => col.name === "revenue_eur");
+if (!hasRevenueEurColumn) {
+  db.exec("ALTER TABLE operations_reports ADD COLUMN revenue_eur REAL");
 }
 
 const tariffRouteMap = new Map();
@@ -824,6 +844,122 @@ function extractPlateNearChangeButton(htmlOrText) {
   return "";
 }
 
+function parseMoneyAmount(raw) {
+  const text = String(raw || "").trim();
+  if (!text) {
+    return null;
+  }
+
+  const cleaned = text.replace(/[^0-9,.-]/g, "");
+  if (!cleaned) {
+    return null;
+  }
+
+  let normalized = cleaned;
+  const hasComma = normalized.includes(",");
+  const hasDot = normalized.includes(".");
+  if (hasComma && hasDot) {
+    const lastComma = normalized.lastIndexOf(",");
+    const lastDot = normalized.lastIndexOf(".");
+    if (lastComma > lastDot) {
+      normalized = normalized.replace(/\./g, "").replace(/,/g, ".");
+    } else {
+      normalized = normalized.replace(/,/g, "");
+    }
+  } else if (hasComma) {
+    normalized = normalized.replace(/\./g, "").replace(/,/g, ".");
+  }
+
+  const num = Number(normalized);
+  return Number.isFinite(num) ? num : null;
+}
+
+function emptyOneOpsSummary() {
+  return {
+    plate: "",
+    revenueTry: null,
+    revenueEur: null,
+    operatorName: "",
+    vehicleModel: "",
+  };
+}
+
+function mergeOneOpsSummary(base, incoming) {
+  return {
+    plate: String(incoming?.plate || base?.plate || "").trim(),
+    revenueTry: incoming?.revenueTry != null ? incoming.revenueTry : (base?.revenueTry ?? null),
+    revenueEur: incoming?.revenueEur != null ? incoming.revenueEur : (base?.revenueEur ?? null),
+    operatorName: String(incoming?.operatorName || base?.operatorName || "").trim(),
+    vehicleModel: String(incoming?.vehicleModel || base?.vehicleModel || "").trim(),
+  };
+}
+
+function extractOneOpsSummaryFromText(htmlOrText) {
+  const raw = String(htmlOrText || "");
+  const text = htmlToPlainText(raw);
+  const summary = emptyOneOpsSummary();
+
+  summary.plate = extractPlateNearChangeButton(raw) || extractPlateFromOneOpsAssignmentArea(raw) || "";
+
+  const tryMatch = /Total\s*Revenue\s*\(TRY\)\s*:?\s*([^\n]+)/i.exec(text);
+  if (tryMatch) {
+    const amount = parseMoneyAmount(tryMatch[1]);
+    if (amount != null) {
+      summary.revenueTry = amount;
+    }
+  }
+
+  const eurMatch = /Total\s*Revenue\s*\(EUR\)\s*:?\s*([^\n]+)/i.exec(text);
+  if (eurMatch) {
+    const amount = parseMoneyAmount(eurMatch[1]);
+    if (amount != null) {
+      summary.revenueEur = amount;
+    }
+  }
+
+  const modelMatch = /\b\d{3,8}\s*-\s*[0-9A-Z\s]{4,20}\s*-\s*([^\n-]{3,80})\s*-\s*(?:Active|Inactive)/i.exec(text);
+  if (modelMatch) {
+    summary.vehicleModel = String(modelMatch[1] || "").replace(/\s+/g, " ").trim();
+  }
+
+  const operatorMatch = /([A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC0-9\s\.,&\-]{6,}(?:A\.\s?\u015E\.|LTD\.?|\u015ET\.?\u0130\.?|TUR\u0130ZM|TA\u015EIMACILIK)[A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC0-9\s\.,&\-]{0,80})/i.exec(text);
+  if (operatorMatch) {
+    summary.operatorName = String(operatorMatch[1] || "").replace(/\s+/g, " ").trim();
+  }
+
+  return summary;
+}
+
+function extractOneOpsSummaryFromPayload(payload) {
+  const summary = emptyOneOpsSummary();
+  if (!payload || typeof payload !== "object") {
+    return summary;
+  }
+
+  summary.plate = extractVehiclePlateFromPayload(payload);
+
+  const text = JSON.stringify(payload || {});
+  const tryMatch = /"totalRevenueTry"\s*:\s*([0-9.,-]+)/i.exec(text) || /"total_revenue_try"\s*:\s*([0-9.,-]+)/i.exec(text);
+  if (tryMatch) {
+    summary.revenueTry = parseMoneyAmount(tryMatch[1]);
+  }
+  const eurMatch = /"totalRevenueEur"\s*:\s*([0-9.,-]+)/i.exec(text) || /"total_revenue_eur"\s*:\s*([0-9.,-]+)/i.exec(text);
+  if (eurMatch) {
+    summary.revenueEur = parseMoneyAmount(eurMatch[1]);
+  }
+
+  const modelMatch = /"vehicleModel"\s*:\s*"([^"]+)"/i.exec(text);
+  if (modelMatch) {
+    summary.vehicleModel = String(modelMatch[1] || "").trim();
+  }
+  const operatorMatch = /"operatorName"\s*:\s*"([^"]+)"/i.exec(text) || /"carrierName"\s*:\s*"([^"]+)"/i.exec(text);
+  if (operatorMatch) {
+    summary.operatorName = String(operatorMatch[1] || "").trim();
+  }
+
+  return summary;
+}
+
 async function fetchVehiclePlateFromUrl(url, headers) {
   const debug = {
     url,
@@ -832,8 +968,14 @@ async function fetchVehiclePlateFromUrl(url, headers) {
     contentType: "",
     matchedBy: "",
     plate: "",
+    revenueTry: null,
+    revenueEur: null,
+    operatorName: "",
+    vehicleModel: "",
     note: "",
   };
+
+  let summary = emptyOneOpsSummary();
 
   try {
     const response = await fetch(url, {
@@ -847,12 +989,12 @@ async function fetchVehiclePlateFromUrl(url, headers) {
 
     if (!response.ok) {
       debug.note = "HTTP hata";
-      return { plate: "", debug };
+      return { plate: "", summary, debug };
     }
 
     if (/\/users\/login|\/login/i.test(debug.finalUrl)) {
       debug.note = "Login sayfasina yonlendi";
-      return { plate: "", debug };
+      return { plate: "", summary, debug };
     }
 
     const contentType = String(response.headers.get("content-type") || "").toLocaleLowerCase("tr-TR");
@@ -860,49 +1002,75 @@ async function fetchVehiclePlateFromUrl(url, headers) {
 
     if (contentType.includes("application/json")) {
       const payload = await response.json();
-      const fromPayload = extractVehiclePlateFromPayload(payload);
-      if (fromPayload) {
+      summary = mergeOneOpsSummary(summary, extractOneOpsSummaryFromPayload(payload));
+      if (summary.plate) {
         debug.matchedBy = "json:plate-key";
-        debug.plate = fromPayload;
-        return { plate: fromPayload, debug };
+        debug.plate = summary.plate;
+        debug.revenueTry = summary.revenueTry;
+        debug.revenueEur = summary.revenueEur;
+        debug.operatorName = summary.operatorName;
+        debug.vehicleModel = summary.vehicleModel;
+        return { plate: summary.plate, summary, debug };
       }
 
       const fromJsonText = extractVehiclePlateFromText(JSON.stringify(payload || {}));
       if (fromJsonText) {
         debug.matchedBy = "json:text-scan";
-        debug.plate = fromJsonText;
+        summary.plate = fromJsonText;
+        debug.plate = summary.plate;
       } else {
         debug.note = "JSON var ama plaka yok";
       }
-      return { plate: fromJsonText, debug };
+      debug.revenueTry = summary.revenueTry;
+      debug.revenueEur = summary.revenueEur;
+      debug.operatorName = summary.operatorName;
+      debug.vehicleModel = summary.vehicleModel;
+      return { plate: summary.plate, summary, debug };
     }
 
     const text = await response.text();
+    summary = mergeOneOpsSummary(summary, extractOneOpsSummaryFromText(text));
     const fromChangeArea = extractPlateNearChangeButton(text);
     if (fromChangeArea) {
       debug.matchedBy = "html:vehicle-info-change";
-      debug.plate = fromChangeArea;
-      return { plate: fromChangeArea, debug };
+      summary.plate = fromChangeArea;
+      debug.plate = summary.plate;
+      debug.revenueTry = summary.revenueTry;
+      debug.revenueEur = summary.revenueEur;
+      debug.operatorName = summary.operatorName;
+      debug.vehicleModel = summary.vehicleModel;
+      return { plate: summary.plate, summary, debug };
     }
 
     const fromAssignmentArea = extractPlateFromOneOpsAssignmentArea(text);
     if (fromAssignmentArea) {
       debug.matchedBy = "html:plaka-atama";
-      debug.plate = fromAssignmentArea;
-      return { plate: fromAssignmentArea, debug };
+      summary.plate = fromAssignmentArea;
+      debug.plate = summary.plate;
+      debug.revenueTry = summary.revenueTry;
+      debug.revenueEur = summary.revenueEur;
+      debug.operatorName = summary.operatorName;
+      debug.vehicleModel = summary.vehicleModel;
+      return { plate: summary.plate, summary, debug };
     }
 
     const fromHtmlText = extractVehiclePlateFromText(text);
     if (fromHtmlText) {
       debug.matchedBy = "html:text-scan";
-      debug.plate = fromHtmlText;
+      summary.plate = fromHtmlText;
+      debug.plate = summary.plate;
     } else {
       debug.note = "HTML var ama plaka yok";
     }
-    return { plate: fromHtmlText, debug };
+
+    debug.revenueTry = summary.revenueTry;
+    debug.revenueEur = summary.revenueEur;
+    debug.operatorName = summary.operatorName;
+    debug.vehicleModel = summary.vehicleModel;
+    return { plate: summary.plate, summary, debug };
   } catch {
     debug.note = "Istek hatasi";
-    return { plate: "", debug };
+    return { plate: "", summary, debug };
   }
 }
 
@@ -924,7 +1092,7 @@ async function probeOneOpsPlateByRideUuid(rideUuid) {
   const cookieHeader = String(getMeta("control_cookie_header", "") || "").trim();
   if (!cookieHeader) {
     return {
-      plate: "",
+      summary: emptyOneOpsSummary(),
       probes: [],
       note: "Kayitli cookie yok.",
     };
@@ -940,28 +1108,30 @@ async function probeOneOpsPlateByRideUuid(rideUuid) {
 
   const probeUrls = buildPlateProbeUrls(rideUuid);
   const probes = [];
+  let mergedSummary = emptyOneOpsSummary();
   for (const url of probeUrls) {
     const result = await fetchVehiclePlateFromUrl(url, headers);
     probes.push(result.debug);
-    if (result.plate) {
+    mergedSummary = mergeOneOpsSummary(mergedSummary, result.summary);
+    if (result.summary && result.summary.plate) {
       return {
-        plate: result.plate,
+        summary: mergedSummary,
         probes,
-        note: "Plaka bulundu.",
+        note: "OneOps verisi bulundu.",
       };
     }
   }
 
   return {
-    plate: "",
+    summary: mergedSummary,
     probes,
-    note: "Plaka bulunamadi.",
+    note: "OneOps verisi bulunamadi.",
   };
 }
 
 async function fetchOneOpsVehiclePlate(rideUuid) {
   const probe = await probeOneOpsPlateByRideUuid(rideUuid);
-  return probe.plate || "";
+  return probe.summary?.plate || "";
 }
 
 function toFiniteNumber(value) {
@@ -1116,7 +1286,7 @@ async function fetchSiirtDepartures(reportDateIso) {
 async function collectOperationsReportRows(reportDateIso) {
   const departures = await fetchSiirtDepartures(reportDateIso);
   const availabilityMaps = new Map();
-  const oneOpsPlateCache = new Map();
+  const oneOpsSummaryCache = new Map();
   const stationNameCache = new Map();
 
   const targetByStation = new Map();
@@ -1166,13 +1336,27 @@ async function collectOperationsReportRows(reportDateIso) {
     const timing = await fetchTripDetailsTiming(rideUuid, REPORTING_SOURCE.fromStationId, toStationId);
     const liveSnapshot = await fetchLiveTripSnapshot(rideUuid, REPORTING_SOURCE.fromStationId, toStationId);
     let vehiclePlate = String(liveSnapshot.vehiclePlate || "").trim();
+    let oneOpsSummary = emptyOneOpsSummary();
+
+    if (!oneOpsSummaryCache.has(rideUuid)) {
+      oneOpsSummaryCache.set(rideUuid, probeOneOpsPlateByRideUuid(rideUuid));
+    }
+
+    const oneOpsProbe = await oneOpsSummaryCache.get(rideUuid);
+    oneOpsSummary = oneOpsProbe?.summary || emptyOneOpsSummary();
 
     if (!vehiclePlate) {
-      if (!oneOpsPlateCache.has(rideUuid)) {
-        oneOpsPlateCache.set(rideUuid, fetchOneOpsVehiclePlate(rideUuid));
-      }
-      vehiclePlate = String(await oneOpsPlateCache.get(rideUuid) || "").trim();
+      vehiclePlate = String(oneOpsSummary.plate || "").trim();
     }
+    if (oneOpsSummary.plate) {
+      // OneOps ekrani operasyonda tek dogru kaynak; varsa bununla ez.
+      vehiclePlate = String(oneOpsSummary.plate || "").trim();
+    }
+
+    const operatorName = String(oneOpsSummary.operatorName || "").trim();
+    const vehicleModel = String(oneOpsSummary.vehicleModel || "").trim();
+    const revenueTry = toFiniteNumber(oneOpsSummary.revenueTry);
+    const revenueEur = toFiniteNumber(oneOpsSummary.revenueEur);
 
     const delayMinutes = Number(liveSnapshot.delayMinutes) || 0;
 
@@ -1193,6 +1377,10 @@ async function collectOperationsReportRows(reportDateIso) {
       delayMinutes,
       isDelayed: delayMinutes !== 0 ? 1 : 0,
       vehiclePlate,
+      operatorName,
+      vehicleModel,
+      revenueTry,
+      revenueEur,
       payloadJson: base.payloadJson || JSON.stringify(ride || {}),
     });
   }
@@ -2165,10 +2353,14 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
         is_delayed,
         delay_minutes,
         vehicle_plate,
+        operator_name,
+        vehicle_model,
+        revenue_try,
+        revenue_eur,
         payload_json,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(report_date, ride_uuid) DO UPDATE SET
         destination_name = excluded.destination_name,
         route_label = excluded.route_label,
@@ -2189,6 +2381,16 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
           WHEN operations_reports.vehicle_plate GLOB '[0-9][0-9] [A-Z] [0-9]' THEN ''
           ELSE operations_reports.vehicle_plate
         END,
+        operator_name = CASE
+          WHEN COALESCE(TRIM(excluded.operator_name), '') <> '' THEN excluded.operator_name
+          ELSE operations_reports.operator_name
+        END,
+        vehicle_model = CASE
+          WHEN COALESCE(TRIM(excluded.vehicle_model), '') <> '' THEN excluded.vehicle_model
+          ELSE operations_reports.vehicle_model
+        END,
+        revenue_try = COALESCE(excluded.revenue_try, operations_reports.revenue_try),
+        revenue_eur = COALESCE(excluded.revenue_eur, operations_reports.revenue_eur),
         payload_json = excluded.payload_json,
         updated_at = excluded.updated_at
       `
@@ -2233,6 +2435,10 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
           row.isDelayed,
           row.delayMinutes,
           row.vehiclePlate,
+          row.operatorName,
+          row.vehicleModel,
+          row.revenueTry,
+          row.revenueEur,
           row.payloadJson,
           stamp,
           stamp
@@ -2286,6 +2492,10 @@ app.get("/api/operations-reports", requireAuth, async (req, res) => {
         is_delayed,
         delay_minutes,
         vehicle_plate,
+        operator_name,
+        vehicle_model,
+        revenue_try,
+        revenue_eur,
         note,
         updated_at
       FROM operations_reports
@@ -2315,6 +2525,10 @@ app.get("/api/operations-reports", requireAuth, async (req, res) => {
       isDelayed: Boolean(row.is_delayed),
       delayMinutes: Number(row.delay_minutes) || 0,
       vehiclePlate: row.vehicle_plate || "",
+      operatorName: row.operator_name || "",
+      vehicleModel: row.vehicle_model || "",
+      revenueTry: toFiniteNumber(row.revenue_try),
+      revenueEur: toFiniteNumber(row.revenue_eur),
       note: row.note || "",
       updatedAt: row.updated_at,
     })),
@@ -2347,7 +2561,11 @@ app.post("/api/operations-reports/plate-debug", requireAuth, requireAdmin, async
     res.json({
       ok: true,
       rideUuid,
-      extractedPlate: probe.plate || "",
+      extractedPlate: probe.summary?.plate || "",
+      extractedRevenueTry: probe.summary?.revenueTry ?? null,
+      extractedRevenueEur: probe.summary?.revenueEur ?? null,
+      extractedOperatorName: probe.summary?.operatorName || "",
+      extractedVehicleModel: probe.summary?.vehicleModel || "",
       note: probe.note || "",
       probes: probe.probes || [],
       currentRow: lastRow
