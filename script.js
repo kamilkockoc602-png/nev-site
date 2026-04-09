@@ -125,6 +125,8 @@ const state = {
   lastOcrDestinationPool: [],
   lastSuspiciousRows: [],
   panelSwitchSeq: 0,
+  activeMenu: "",
+  reportingAutoTimer: null,
 };
 
 function applyTheme(theme) {
@@ -1666,6 +1668,22 @@ async function refreshReportingData() {
   renderReportingPanel();
 }
 
+function stopReportingAutoRefresh() {
+  if (state.reportingAutoTimer) {
+    clearInterval(state.reportingAutoTimer);
+    state.reportingAutoTimer = null;
+  }
+}
+
+function ensureReportingAutoRefresh() {
+  stopReportingAutoRefresh();
+  state.reportingAutoTimer = setInterval(() => {
+    if (state.activeMenu === "reporting" && state.currentUser) {
+      refreshReportingData().catch(() => null);
+    }
+  }, 60000);
+}
+
 async function syncReportingData() {
   const date = String(state.reportingDate || todayIsoDate()).trim();
   state.reportingDate = date;
@@ -2525,6 +2543,7 @@ function stopNotificationPolling() {
 }
 
 async function activatePanel(menuKey) {
+  state.activeMenu = String(menuKey || "");
   const switchSeq = ++state.panelSwitchSeq;
   if (dom.contentCard) {
     dom.contentCard.classList.add("panel-switching");
@@ -2583,6 +2602,7 @@ async function activatePanel(menuKey) {
   }
 
   if (menuKey === "reporting") {
+    ensureReportingAutoRefresh();
     (async () => {
       await refreshReportingData();
       if (!state.reportingRows.length) {
@@ -2593,6 +2613,10 @@ async function activatePanel(menuKey) {
         dom.reportingSummary.textContent = error.message || "Rapor verisi yuklenemedi.";
       }
     });
+  }
+
+  if (menuKey !== "reporting") {
+    stopReportingAutoRefresh();
   }
 
   if (menuKey === "oneops") {
@@ -2650,6 +2674,7 @@ async function verifySession() {
   } catch {
     setToken("");
     state.currentUser = null;
+    stopReportingAutoRefresh();
     stopNotificationPolling();
   }
 
@@ -2665,6 +2690,7 @@ async function handleLogout() {
 
   setToken("");
   state.currentUser = null;
+  stopReportingAutoRefresh();
   stopNotificationPolling();
   render();
 }

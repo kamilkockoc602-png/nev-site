@@ -400,6 +400,23 @@ function todayIsoInIstanbul() {
   return raw;
 }
 
+function shiftIsoDate(dateIso, dayOffset) {
+  const m = String(dateIso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) {
+    return dateIso;
+  }
+
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const base = new Date(Date.UTC(y, mo - 1, d));
+  base.setUTCDate(base.getUTCDate() + Number(dayOffset || 0));
+  const yy = base.getUTCFullYear();
+  const mm = String(base.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(base.getUTCDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
 function parseIsoToStamp(value) {
   const text = String(value || "").trim();
   if (!text) {
@@ -1414,14 +1431,24 @@ setInterval(() => {
 
 safeRefreshPrices("startup");
 
-setInterval(() => {
+async function autoSyncReportingDates() {
   const today = todayIsoInIstanbul();
-  syncOperationsReportsForDate(today, { emitNotification: false }).catch((error) => {
-    console.error("Raporlama otomatik senkron hatasi:", error.message);
-  });
-}, 15 * 60 * 1000);
+  const tomorrow = shiftIsoDate(today, 1);
 
-syncOperationsReportsForDate(todayIsoInIstanbul(), { emitNotification: false }).catch(() => null);
+  for (const date of [today, tomorrow]) {
+    try {
+      await syncOperationsReportsForDate(date, { emitNotification: false });
+    } catch (error) {
+      console.error(`Raporlama otomatik senkron hatasi (${date}):`, error.message);
+    }
+  }
+}
+
+setInterval(() => {
+  autoSyncReportingDates().catch(() => null);
+}, 5 * 60 * 1000);
+
+autoSyncReportingDates().catch(() => null);
 
 app.use(express.json({ limit: "25mb" }));
 app.use(express.static(__dirname));
@@ -2228,9 +2255,16 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
   }
 }
 
-app.get("/api/operations-reports", requireAuth, (req, res) => {
+app.get("/api/operations-reports", requireAuth, async (req, res) => {
   const date = String(req.query.date || todayIsoInIstanbul()).trim();
   const origin = String(req.query.origin || "Siirt").trim();
+
+  // Frontend'de butona basmadan veri güncel olsun.
+  try {
+    await syncOperationsReportsForDate(date, { emitNotification: false });
+  } catch (error) {
+    console.error(`GET /api/operations-reports otomatik sync hatasi (${date}):`, error.message);
+  }
 
   const rows = db
     .prepare(
