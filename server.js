@@ -436,7 +436,7 @@ const REPORTING_SOURCE = {
   fromStationId: "45e1a606-8cd1-46bc-aebd-7f67a4909a4d",
 };
 
-const REPORTING_TARGETS = [
+const REPORTING_KNOWN_TARGETS = [
   { destinationName: "Marmaris", toStationId: "66615e19-06cb-4c6f-93df-c3bf05b40e6a" },
   { destinationName: "Antalya", toStationId: "9b6c0630-3ecb-11ea-8017-02437075395e" },
   { destinationName: "Esenler", toStationId: "9b6a8316-3ecb-11ea-8017-02437075395e" },
@@ -444,9 +444,28 @@ const REPORTING_TARGETS = [
   { destinationName: "Izmir", toStationId: "9b6a8396-3ecb-11ea-8017-02437075395e" },
 ];
 
-const REPORTING_TARGET_MAP = new Map(
-  REPORTING_TARGETS.map((item) => [String(item.toStationId), item.destinationName])
+const REPORTING_KNOWN_TARGET_MAP = new Map(
+  REPORTING_KNOWN_TARGETS.map((item) => [String(item.toStationId), item.destinationName])
 );
+
+function resolveDestinationNameFromRide(ride, toStationId) {
+  const directCandidates = [
+    ride?.to_stop_name,
+    ride?.destination_name,
+    ride?.destination,
+    ride?.to_name,
+    ride?.toStopName,
+  ];
+
+  for (const candidate of directCandidates) {
+    const text = String(candidate || "").trim();
+    if (text) {
+      return text;
+    }
+  }
+
+  return REPORTING_KNOWN_TARGET_MAP.get(String(toStationId || "")) || "Hedef";
+}
 
 function getIstanbulDayRangeMs(reportDateIso) {
   const raw = String(reportDateIso || "").trim();
@@ -824,16 +843,36 @@ async function fetchSiirtDepartures(reportDateIso) {
 
   const data = await res.json();
   const rides = Array.isArray(data?.rides) ? data.rides : [];
-  return rides.filter((ride) => REPORTING_TARGET_MAP.has(String(ride?.to_stop_uuid || "")));
+  return rides;
 }
 
 async function collectOperationsReportRows(reportDateIso) {
   const departures = await fetchSiirtDepartures(reportDateIso);
   const availabilityMaps = new Map();
   const oneOpsPlateCache = new Map();
-  for (const target of REPORTING_TARGETS) {
-    const map = await fetchRouteAvailabilityMap(reportDateIso, REPORTING_SOURCE, target);
-    availabilityMaps.set(target.toStationId, map);
+
+  const targetByStation = new Map();
+  for (const ride of departures) {
+    const toStationId = String(ride?.to_stop_uuid || "").trim();
+    if (!toStationId) {
+      continue;
+    }
+
+    if (!targetByStation.has(toStationId)) {
+      targetByStation.set(toStationId, {
+        toStationId,
+        destinationName: resolveDestinationNameFromRide(ride, toStationId),
+      });
+    }
+  }
+
+  for (const target of targetByStation.values()) {
+    try {
+      const map = await fetchRouteAvailabilityMap(reportDateIso, REPORTING_SOURCE, target);
+      availabilityMaps.set(target.toStationId, map);
+    } catch {
+      availabilityMaps.set(target.toStationId, new Map());
+    }
   }
 
   const rows = [];
@@ -844,7 +883,7 @@ async function collectOperationsReportRows(reportDateIso) {
       continue;
     }
 
-    const destinationName = REPORTING_TARGET_MAP.get(toStationId) || "Hedef";
+    const destinationName = resolveDestinationNameFromRide(ride, toStationId);
     const base = availabilityMaps.get(toStationId)?.get(rideUuid) || {};
     const timing = await fetchTripDetailsTiming(rideUuid, REPORTING_SOURCE.fromStationId, toStationId);
     const liveSnapshot = await fetchLiveTripSnapshot(rideUuid, REPORTING_SOURCE.fromStationId, toStationId);
@@ -865,6 +904,7 @@ async function collectOperationsReportRows(reportDateIso) {
       destinationName,
       routeLabel: `${REPORTING_SOURCE.originName} -> ${destinationName}`,
       rideUuid,
+      toStationId,
       lineCode: timing.lineCode || String(ride?.line_code || "").trim(),
       tripNumber: timing.tripNumber || "",
       departureTime: timing.departureTime || fromUnixSecondsToStamp(ride?.planned?.timestamp, ride?.planned?.tz),
@@ -1892,7 +1932,7 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
           row.routeLabel,
           row.rideUuid,
           REPORTING_SOURCE.fromStationId,
-          REPORTING_TARGETS.find((x) => x.destinationName === row.destinationName)?.toStationId || "",
+          String(row.toStationId || ""),
           row.lineCode,
           row.tripNumber,
           row.departureTime,
