@@ -538,21 +538,253 @@ async function fetchRouteAvailabilityMap(reportDateIso, origin, target) {
   return map;
 }
 
-async function fetchLiveDelayMinutes(rideUuid, fromStationId, toStationId) {
+function normalizeVehiclePlate(raw) {
+  const text = String(raw || "")
+    .toLocaleUpperCase("tr-TR")
+    .replace(/[^0-9A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) {
+    return "";
+  }
+
+  const compact = text.replace(/\s+/g, "");
+  const compactMatch = compact.match(/^(\d{2})([A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{1,3})(\d{2,4})$/);
+  if (compactMatch) {
+    return `${compactMatch[1]} ${compactMatch[2]} ${compactMatch[3]}`;
+  }
+
+  const spaced = text.match(/\b(\d{2})\s*([A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{1,3})\s*(\d{2,4})\b/);
+  if (spaced) {
+    return `${spaced[1]} ${spaced[2]} ${spaced[3]}`;
+  }
+
+  return "";
+}
+
+function collectCandidatePlateValues(obj, out = []) {
+  if (!obj || typeof obj !== "object") {
+    return out;
+  }
+
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      collectCandidatePlateValues(item, out);
+    }
+    return out;
+  }
+
+  for (const [key, value] of Object.entries(obj)) {
+    const keyNorm = String(key || "").toLocaleLowerCase("tr-TR");
+    const isPlateKey = /plate|license|registration|plaka/.test(keyNorm);
+
+    if (isPlateKey && typeof value === "string") {
+      out.push(value);
+    }
+
+    if (value && typeof value === "object") {
+      collectCandidatePlateValues(value, out);
+    }
+  }
+
+  return out;
+}
+
+function extractVehiclePlateFromPayload(payload) {
+  const candidates = collectCandidatePlateValues(payload, []);
+  for (const item of candidates) {
+    const normalized = normalizeVehiclePlate(item);
+    if (normalized) {
+      return normalized;
+    }
+  }
+  return "";
+}
+
+function getOneOpsOrigin() {
+  const fromMeta = String(getMeta("control_session_test_url", "") || "").trim();
+  if (fromMeta) {
+    try {
+      return new URL(fromMeta).origin;
+    } catch {
+      // fallback below
+    }
+  }
+  return "https://app.oneops.flixbus.com";
+}
+
+async function fetchOneOpsVehiclePlate(rideUuid) {
+  const cookieHeader = String(getMeta("control_cookie_header", "") || "").trim();
+  if (!cookieHeader) {
+    return "";
+  }
+
+  const csrfToken = String(getMeta("control_csrf_token", "") || "").trim();
+  const origin = getOneOpsOrigin();
+  const url = `${origin}/ops-portal/ride-control/ride/${encodeURIComponent(rideUuid)}`;
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Cookie: cookieHeader,
+        "X-CSRF-Token": csrfToken,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        Accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+      },
+      redirect: "follow",
+    });
+
+    if (!response.ok) {
+      return "";
+    }
+
+    const finalUrl = String(response.url || "");
+    if (/\/users\/login|\/login/i.test(finalUrl)) {
+      return "";
+    }
+
+    const html = await response.text();
+    if (!html) {
+      return "";
+    }
+
+    const jsonLikePatterns = [
+      /"licensePlate"\s*:\s*"([^"]+)"/gi,
+      /"vehiclePlate"\s*:\s*"([^"]+)"/gi,
+      /"plateNumber"\s*:\s*"([^"]+)"/gi,
+      /"registrationNumber"\s*:\s*"([^"]+)"/gi,
+      /"plaka"\s*:\s*"([^"]+)"/gi,
+    ];
+
+    for (const regex of jsonLikePatterns) {
+      let match = regex.exec(html);
+      while (match) {
+        const normalized = normalizeVehiclePlate(match[1]);
+        if (normalized) {
+          return normalized;
+        }
+        match = regex.exec(html);
+      }
+    }
+
+    const freePattern = /\b\d{2}\s?[A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{1,3}\s?\d{2,4}\b/g;
+    const freeMatches = html.match(freePattern) || [];
+    for (const value of freeMatches) {
+      const normalized = normalizeVehiclePlate(value);
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+function toFiniteNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function secondsOrMinutesToMinutes(rawValue) {
+  const n = toFiniteNumber(rawValue);
+  if (n == null) {
+    return null;
+  }
+
+  // Buyuk ihtimalle saniye: 180 => 3 dk, 540 => 9 dk
+  if (Math.abs(n) > 120) {
+    return Math.round(n / 60);
+  }
+
+  return Math.round(n);
+}
+
+function extractStopDelayMinutes(stop) {
+  if (!stop || typeof stop !== "object") {
+    return null;
+  }
+
+  const departure = stop.departure && typeof stop.departure === "object" ? stop.departure : {};
+  const arrival = stop.arrival && typeof stop.arrival === "object" ? stop.arrival : {};
+
+  const directCandidates = [
+    departure.deviation_seconds,
+    departure.delay_seconds,
+    departure.deviation_minutes,
+    departure.delay_minutes,
+    departure.deviation,
+    departure.delay,
+    stop.deviation_seconds,
+    stop.delay_seconds,
+    stop.deviation_minutes,
+    stop.delay_minutes,
+    stop.deviation,
+    stop.delay,
+    arrival.deviation_seconds,
+    arrival.delay_seconds,
+    arrival.deviation_minutes,
+    arrival.delay_minutes,
+    arrival.deviation,
+    arrival.delay,
+  ];
+
+  for (const value of directCandidates) {
+    const m = secondsOrMinutesToMinutes(value);
+    if (m != null) {
+      return m;
+    }
+  }
+
+  const realtimeTs = toFiniteNumber(departure.realtime_timestamp ?? departure.actual_timestamp ?? departure.live_timestamp);
+  const plannedTs = toFiniteNumber(departure.timestamp ?? departure.planned_timestamp ?? departure.scheduled_timestamp);
+  if (realtimeTs != null && plannedTs != null) {
+    const deltaSec = realtimeTs - plannedTs;
+    return Math.round(deltaSec / 60);
+  }
+
+  return null;
+}
+
+async function fetchLiveTripSnapshot(rideUuid, fromStationId, toStationId) {
   const url = `https://global.api.flixbus.com/gis/v1/ride/${encodeURIComponent(rideUuid)}/trip-info/live?from_station_uuid=${encodeURIComponent(fromStationId)}&to_station_uuid=${encodeURIComponent(toStationId)}`;
   const res = await fetch(url);
   if (!res.ok) {
-    return 0;
+    return { delayMinutes: 0, vehiclePlate: "" };
   }
 
   const data = await res.json();
   const stops = Array.isArray(data?.stops) ? data.stops : [];
   const originStop = stops.find((stop) => String(stop?.stop_uuid || "") === String(fromStationId));
-  const sec = Number(originStop?.departure?.deviation_seconds);
-  if (!Number.isFinite(sec)) {
-    return 0;
+  const stopDelay = extractStopDelayMinutes(originStop);
+  const fallbackCandidates = [
+    data?.deviation_seconds,
+    data?.delay_seconds,
+    data?.deviation_minutes,
+    data?.delay_minutes,
+    data?.delay,
+  ];
+
+  let delayMinutes = stopDelay;
+  if (delayMinutes == null) {
+    for (const value of fallbackCandidates) {
+      const m = secondsOrMinutesToMinutes(value);
+      if (m != null) {
+        delayMinutes = m;
+        break;
+      }
+    }
   }
-  return Math.round(sec / 60);
+
+  if (delayMinutes == null) {
+    delayMinutes = 0;
+  }
+
+  const vehiclePlate = extractVehiclePlateFromPayload(data);
+  return { delayMinutes, vehiclePlate };
 }
 
 async function fetchTripDetailsTiming(rideUuid, fromStationId, toStationId) {
@@ -598,6 +830,7 @@ async function fetchSiirtDepartures(reportDateIso) {
 async function collectOperationsReportRows(reportDateIso) {
   const departures = await fetchSiirtDepartures(reportDateIso);
   const availabilityMaps = new Map();
+  const oneOpsPlateCache = new Map();
   for (const target of REPORTING_TARGETS) {
     const map = await fetchRouteAvailabilityMap(reportDateIso, REPORTING_SOURCE, target);
     availabilityMaps.set(target.toStationId, map);
@@ -614,7 +847,17 @@ async function collectOperationsReportRows(reportDateIso) {
     const destinationName = REPORTING_TARGET_MAP.get(toStationId) || "Hedef";
     const base = availabilityMaps.get(toStationId)?.get(rideUuid) || {};
     const timing = await fetchTripDetailsTiming(rideUuid, REPORTING_SOURCE.fromStationId, toStationId);
-    const delayMinutes = await fetchLiveDelayMinutes(rideUuid, REPORTING_SOURCE.fromStationId, toStationId);
+    const liveSnapshot = await fetchLiveTripSnapshot(rideUuid, REPORTING_SOURCE.fromStationId, toStationId);
+    let vehiclePlate = String(liveSnapshot.vehiclePlate || "").trim();
+
+    if (!vehiclePlate) {
+      if (!oneOpsPlateCache.has(rideUuid)) {
+        oneOpsPlateCache.set(rideUuid, fetchOneOpsVehiclePlate(rideUuid));
+      }
+      vehiclePlate = String(await oneOpsPlateCache.get(rideUuid) || "").trim();
+    }
+
+    const delayMinutes = Number(liveSnapshot.delayMinutes) || 0;
 
     rows.push({
       reportDate: reportDateIso,
@@ -631,6 +874,7 @@ async function collectOperationsReportRows(reportDateIso) {
       occupancyLevel: String(base.occupancyLevel || "veri-yok"),
       delayMinutes,
       isDelayed: delayMinutes !== 0 ? 1 : 0,
+      vehiclePlate,
       payloadJson: base.payloadJson || JSON.stringify(ride || {}),
     });
   }
@@ -1592,10 +1836,11 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
         occupancy_level,
         is_delayed,
         delay_minutes,
+        vehicle_plate,
         payload_json,
         created_at,
         updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(report_date, ride_uuid) DO UPDATE SET
         destination_name = excluded.destination_name,
         route_label = excluded.route_label,
@@ -1610,6 +1855,10 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
         occupancy_level = excluded.occupancy_level,
         is_delayed = excluded.is_delayed,
         delay_minutes = excluded.delay_minutes,
+        vehicle_plate = CASE
+          WHEN COALESCE(TRIM(operations_reports.vehicle_plate), '') = '' THEN excluded.vehicle_plate
+          ELSE operations_reports.vehicle_plate
+        END,
         payload_json = excluded.payload_json,
         updated_at = excluded.updated_at
       `
@@ -1653,6 +1902,7 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
           row.occupancyLevel,
           row.isDelayed,
           row.delayMinutes,
+          row.vehiclePlate,
           row.payloadJson,
           stamp,
           stamp
