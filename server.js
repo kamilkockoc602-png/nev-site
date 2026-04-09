@@ -621,7 +621,7 @@ function normalizeVehiclePlate(raw) {
   }
 
   // Extended OneOps formats also appear as 01HAZER01 or 34ABCD12345.
-  const compactExtended = compact.match(/^(\d{2})([A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{1,8})(\d{1,6})$/);
+  const compactExtended = compact.match(/^(\d{2})([A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{1,8})(\d{2,6})$/);
   if (compactExtended) {
     return `${compactExtended[1]} ${compactExtended[2]} ${compactExtended[3]}`;
   }
@@ -631,16 +631,9 @@ function normalizeVehiclePlate(raw) {
     return `${spaced[1]} ${spaced[2]} ${spaced[3]}`;
   }
 
-  const spacedExtended = text.match(/\b(\d{2})[\s-]*([A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{1,8})[\s-]*(\d{1,6})\b/);
+  const spacedExtended = text.match(/\b(\d{2})[\s-]*([A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{1,8})[\s-]*(\d{2,6})\b/);
   if (spacedExtended) {
     return `${spacedExtended[1]} ${spacedExtended[2]} ${spacedExtended[3]}`;
-  }
-
-  // As a last resort, keep mixed alnum identifiers from OneOps if clearly plate-like.
-  const letters = /[A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]/.test(text);
-  const digits = /\d/.test(text);
-  if (letters && digits && text.length >= 6 && text.length <= 24) {
-    return text;
   }
 
   return "";
@@ -773,10 +766,50 @@ function extractVehiclePlateFromText(text) {
     }
   }
 
-  const freePattern = /\b\d{2}[\s-]?[A-Za-z\u00C7\u011E\u0130\u00D6\u015E\u00DC\u00E7\u011F\u0131\u00F6\u015F\u00FC]{1,8}[\s-]?\d{1,6}\b/g;
+  const freePattern = /\b\d{2}[\s-]?[A-Za-z\u00C7\u011E\u0130\u00D6\u015E\u00DC\u00E7\u011F\u0131\u00F6\u015F\u00FC]{1,8}[\s-]?\d{2,6}\b/g;
   const freeMatches = source.match(freePattern) || [];
   for (const value of freeMatches) {
     const normalized = normalizeVehiclePlate(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+function htmlToPlainText(html) {
+  return String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractPlateFromOneOpsAssignmentArea(htmlOrText) {
+  const text = htmlToPlainText(htmlOrText);
+  if (!text) {
+    return "";
+  }
+
+  const sectionPatterns = [
+    /Plaka\s*Atama[\s\S]{0,260}?Plaka\s*yaz\s*:?\s*([0-9A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC\s-]{4,40})/i,
+    /Plaka\s*yaz\s*:?\s*([0-9A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC\s-]{4,40})/i,
+  ];
+
+  for (const regex of sectionPatterns) {
+    const match = regex.exec(text);
+    if (!match) {
+      continue;
+    }
+    const normalized = normalizeVehiclePlate(match[1]);
     if (normalized) {
       return normalized;
     }
@@ -814,6 +847,10 @@ async function fetchVehiclePlateFromUrl(url, headers) {
     }
 
     const text = await response.text();
+    const fromAssignmentArea = extractPlateFromOneOpsAssignmentArea(text);
+    if (fromAssignmentArea) {
+      return fromAssignmentArea;
+    }
     return extractVehiclePlateFromText(text);
   } catch {
     return "";
