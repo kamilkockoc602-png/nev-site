@@ -230,6 +230,12 @@
             <input id="reportingFilterInput" type="text" placeholder="Sefer ara (ornek: Siirt -> Marmaris)" />
           </div>
 
+          <div class="reporting-filter-row" style="margin-top:.5rem; display:grid; grid-template-columns: 1fr auto; gap:.5rem;">
+            <input id="reportingRideUuidInput" type="text" placeholder="ride_uuid ile plaka test (ornek: 21c3f102-9290-43d9-87c3-6c37c1a2bdf8)" />
+            <button id="reportingPlateDebugBtn" class="btn btn-ghost" type="button">UUID ile Plaka Test</button>
+          </div>
+          <p id="reportingPlateDebugMsg" class="subtle" style="margin-top:.35rem;"></p>
+
           <p id="reportingSummary" class="subtle">Rapor verisi bekleniyor...</p>
 
           <div class="reports-table-wrap">

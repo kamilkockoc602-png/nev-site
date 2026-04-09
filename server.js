@@ -808,6 +808,16 @@ function extractPlateNearChangeButton(htmlOrText) {
 }
 
 async function fetchVehiclePlateFromUrl(url, headers) {
+  const debug = {
+    url,
+    status: null,
+    finalUrl: "",
+    contentType: "",
+    matchedBy: "",
+    plate: "",
+    note: "",
+  };
+
   try {
     const response = await fetch(url, {
       method: "GET",
@@ -815,53 +825,75 @@ async function fetchVehiclePlateFromUrl(url, headers) {
       redirect: "follow",
     });
 
+    debug.status = response.status;
+    debug.finalUrl = String(response.url || "");
+
     if (!response.ok) {
-      return "";
+      debug.note = "HTTP hata";
+      return { plate: "", debug };
     }
 
-    const finalUrl = String(response.url || "");
-    if (/\/users\/login|\/login/i.test(finalUrl)) {
-      return "";
+    if (/\/users\/login|\/login/i.test(debug.finalUrl)) {
+      debug.note = "Login sayfasina yonlendi";
+      return { plate: "", debug };
     }
 
     const contentType = String(response.headers.get("content-type") || "").toLocaleLowerCase("tr-TR");
+    debug.contentType = contentType;
+
     if (contentType.includes("application/json")) {
       const payload = await response.json();
       const fromPayload = extractVehiclePlateFromPayload(payload);
       if (fromPayload) {
-        return fromPayload;
+        debug.matchedBy = "json:plate-key";
+        debug.plate = fromPayload;
+        return { plate: fromPayload, debug };
       }
 
-      return extractVehiclePlateFromText(JSON.stringify(payload || {}));
+      const fromJsonText = extractVehiclePlateFromText(JSON.stringify(payload || {}));
+      if (fromJsonText) {
+        debug.matchedBy = "json:text-scan";
+        debug.plate = fromJsonText;
+      } else {
+        debug.note = "JSON var ama plaka yok";
+      }
+      return { plate: fromJsonText, debug };
     }
 
     const text = await response.text();
     const fromChangeArea = extractPlateNearChangeButton(text);
     if (fromChangeArea) {
-      return fromChangeArea;
+      debug.matchedBy = "html:vehicle-info-change";
+      debug.plate = fromChangeArea;
+      return { plate: fromChangeArea, debug };
     }
 
     const fromAssignmentArea = extractPlateFromOneOpsAssignmentArea(text);
     if (fromAssignmentArea) {
-      return fromAssignmentArea;
+      debug.matchedBy = "html:plaka-atama";
+      debug.plate = fromAssignmentArea;
+      return { plate: fromAssignmentArea, debug };
     }
-    return extractVehiclePlateFromText(text);
+
+    const fromHtmlText = extractVehiclePlateFromText(text);
+    if (fromHtmlText) {
+      debug.matchedBy = "html:text-scan";
+      debug.plate = fromHtmlText;
+    } else {
+      debug.note = "HTML var ama plaka yok";
+    }
+    return { plate: fromHtmlText, debug };
   } catch {
-    return "";
+    debug.note = "Istek hatasi";
+    return { plate: "", debug };
   }
 }
 
-async function fetchOneOpsVehiclePlate(rideUuid) {
-  const cookieHeader = String(getMeta("control_cookie_header", "") || "").trim();
-  if (!cookieHeader) {
-    return "";
-  }
-
-  const csrfToken = String(getMeta("control_csrf_token", "") || "").trim();
+function buildPlateProbeUrls(rideUuid) {
   const oneOpsOrigin = getOneOpsOrigin();
   const controlBaseOrigin = getControlBaseOrigin();
 
-  const probeUrls = [
+  return [
     `${oneOpsOrigin}/ops-portal/ride-control/ride/${encodeURIComponent(rideUuid)}`,
     `${oneOpsOrigin}/ops-portal/ride-control/api/ride/${encodeURIComponent(rideUuid)}`,
     `${oneOpsOrigin}/ops-portal/api/ride-control/ride/${encodeURIComponent(rideUuid)}`,
@@ -869,7 +901,19 @@ async function fetchOneOpsVehiclePlate(rideUuid) {
     `${controlBaseOrigin}/ride-control/api/ride/${encodeURIComponent(rideUuid)}`,
     `${controlBaseOrigin}/api/ride-control/ride/${encodeURIComponent(rideUuid)}`,
   ];
+}
 
+async function probeOneOpsPlateByRideUuid(rideUuid) {
+  const cookieHeader = String(getMeta("control_cookie_header", "") || "").trim();
+  if (!cookieHeader) {
+    return {
+      plate: "",
+      probes: [],
+      note: "Kayitli cookie yok.",
+    };
+  }
+
+  const csrfToken = String(getMeta("control_csrf_token", "") || "").trim();
   const headers = {
     Cookie: cookieHeader,
     "X-CSRF-Token": csrfToken,
@@ -877,14 +921,30 @@ async function fetchOneOpsVehiclePlate(rideUuid) {
     Accept: "application/json,text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
   };
 
+  const probeUrls = buildPlateProbeUrls(rideUuid);
+  const probes = [];
   for (const url of probeUrls) {
-    const plate = await fetchVehiclePlateFromUrl(url, headers);
-    if (plate) {
-      return plate;
+    const result = await fetchVehiclePlateFromUrl(url, headers);
+    probes.push(result.debug);
+    if (result.plate) {
+      return {
+        plate: result.plate,
+        probes,
+        note: "Plaka bulundu.",
+      };
     }
   }
 
-  return "";
+  return {
+    plate: "",
+    probes,
+    note: "Plaka bulunamadi.",
+  };
+}
+
+async function fetchOneOpsVehiclePlate(rideUuid) {
+  const probe = await probeOneOpsPlateByRideUuid(rideUuid);
+  return probe.plate || "";
 }
 
 function toFiniteNumber(value) {
@@ -2236,6 +2296,39 @@ app.post("/api/operations-reports/sync", requireAuth, async (req, res) => {
   }
 
   try {
+
+app.post("/api/operations-reports/plate-debug", requireAuth, requireAdmin, async (req, res) => {
+  const rideUuid = String(req.body?.rideUuid || "").trim();
+  if (!rideUuid) {
+    res.status(400).json({ message: "ride_uuid zorunlu." });
+    return;
+  }
+
+  try {
+    const probe = await probeOneOpsPlateByRideUuid(rideUuid);
+    const lastRow = db.prepare(
+      "SELECT id, report_date, route_label, vehicle_plate FROM operations_reports WHERE ride_uuid = ? ORDER BY id DESC LIMIT 1"
+    ).get(rideUuid);
+
+    res.json({
+      ok: true,
+      rideUuid,
+      extractedPlate: probe.plate || "",
+      note: probe.note || "",
+      probes: probe.probes || [],
+      currentRow: lastRow
+        ? {
+            id: Number(lastRow.id),
+            reportDate: lastRow.report_date,
+            routeLabel: lastRow.route_label,
+            vehiclePlate: lastRow.vehicle_plate || "",
+          }
+        : null,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Plaka debug islemi basarisiz." });
+  }
+});
     const result = await syncOperationsReportsForDate(reportDate, {
       emitNotification: true,
       actor: req.auth.user.username,

@@ -45,6 +45,9 @@ const dom = {
   reportingSyncBtn: document.getElementById("reportingSyncBtn"),
   reportingRefreshBtn: document.getElementById("reportingRefreshBtn"),
   reportingFilterInput: document.getElementById("reportingFilterInput"),
+  reportingRideUuidInput: document.getElementById("reportingRideUuidInput"),
+  reportingPlateDebugBtn: document.getElementById("reportingPlateDebugBtn"),
+  reportingPlateDebugMsg: document.getElementById("reportingPlateDebugMsg"),
   reportingSummary: document.getElementById("reportingSummary"),
   reportingTableBody: document.getElementById("reportingTableBody"),
   controlOpenLoginBtn: document.getElementById("controlOpenLoginBtn"),
@@ -1561,7 +1564,10 @@ function renderReportingPanel() {
     const delayBadgeClass = delayMinutes !== 0 ? "delay-badge-late" : "delay-badge-on-time";
 
     tr.innerHTML = `
-      <td>${escapeHtml(row.routeLabel || "-")}</td>
+      <td>
+        <div>${escapeHtml(row.routeLabel || "-")}</div>
+        <small class="subtle">uuid: ${escapeHtml(row.rideUuid || "-")}</small>
+      </td>
       <td>${escapeHtml(row.departureTime || "-")}</td>
       <td>${escapeHtml(row.arrivalTime || "-")}</td>
       <td>
@@ -1579,6 +1585,7 @@ function renderReportingPanel() {
       </td>
       <td>
         <button class="btn btn-small btn-ghost report-save-btn" type="button">Kaydet</button>
+        <button class="btn btn-small btn-ghost report-debug-btn" type="button">UUID Test</button>
       </td>
     `;
 
@@ -1601,8 +1608,53 @@ function renderReportingPanel() {
       await refreshReportingData();
     });
 
+    tr.querySelector(".report-debug-btn")?.addEventListener("click", async () => {
+      if (dom.reportingRideUuidInput) {
+        dom.reportingRideUuidInput.value = String(row.rideUuid || "");
+      }
+      await debugPlateByRideUuid();
+    });
+
     dom.reportingTableBody.appendChild(tr);
   });
+}
+
+async function debugPlateByRideUuid() {
+  const rideUuid = String(dom.reportingRideUuidInput?.value || "").trim();
+  if (!rideUuid) {
+    if (dom.reportingPlateDebugMsg) {
+      dom.reportingPlateDebugMsg.style.color = "#d64545";
+      dom.reportingPlateDebugMsg.textContent = "Lutfen bir ride_uuid gir.";
+    }
+    return;
+  }
+
+  if (dom.reportingPlateDebugMsg) {
+    dom.reportingPlateDebugMsg.style.color = "var(--muted)";
+    dom.reportingPlateDebugMsg.textContent = "ride_uuid icin plaka probe calisiyor...";
+  }
+
+  const result = await apiFetch("/api/operations-reports/plate-debug", {
+    method: "POST",
+    body: JSON.stringify({ rideUuid }),
+  });
+
+  const extracted = String(result.extractedPlate || "").trim();
+  const current = String(result.currentRow?.vehiclePlate || "").trim();
+  const firstProbe = Array.isArray(result.probes) && result.probes.length ? result.probes[0] : null;
+  const detail = firstProbe
+    ? ` | ilk endpoint: HTTP ${firstProbe.status || "-"}${firstProbe.matchedBy ? `, match=${firstProbe.matchedBy}` : ""}`
+    : "";
+
+  if (dom.reportingPlateDebugMsg) {
+    if (extracted) {
+      dom.reportingPlateDebugMsg.style.color = "#1f7a1f";
+      dom.reportingPlateDebugMsg.textContent = `Bulunan plaka: ${extracted} | DB'deki mevcut: ${current || "-"}${detail}`;
+    } else {
+      dom.reportingPlateDebugMsg.style.color = "#d64545";
+      dom.reportingPlateDebugMsg.textContent = `Bu ride_uuid icin plaka bulunamadi.${detail}`;
+    }
+  }
 }
 
 async function refreshReportingData() {
@@ -3008,6 +3060,17 @@ if (dom.reportingSyncBtn) {
     syncReportingData().catch((error) => {
       if (dom.reportingSummary) {
         dom.reportingSummary.textContent = error.message || "Rapor senkronu basarisiz.";
+      }
+    });
+  });
+}
+
+if (dom.reportingPlateDebugBtn) {
+  dom.reportingPlateDebugBtn.addEventListener("click", () => {
+    debugPlateByRideUuid().catch((error) => {
+      if (dom.reportingPlateDebugMsg) {
+        dom.reportingPlateDebugMsg.style.color = "#d64545";
+        dom.reportingPlateDebugMsg.textContent = error.message || "UUID plaka testi basarisiz.";
       }
     });
   });
