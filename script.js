@@ -1538,14 +1538,20 @@ function renderReportingPanel() {
     const tr = document.createElement("tr");
     const occupancyText = Number.isFinite(Number(row.occupancyPercent))
       ? `%${Math.max(0, Math.min(100, Number(row.occupancyPercent)))}`
-      : (row.occupancyLevel || "-");
+      : (row.occupancyLevel === "veri-yok" ? "Veri yok" : (row.occupancyLevel || "-"));
+    const delayMinutes = Number(row.delayMinutes) || 0;
+    const delayBadgeText = delayMinutes > 0 ? `${delayMinutes} dk gec` : "R";
+    const delayBadgeClass = delayMinutes > 0 ? "delay-badge-late" : "delay-badge-on-time";
 
     tr.innerHTML = `
       <td>${escapeHtml(row.routeLabel || "-")}</td>
       <td>${escapeHtml(row.departureTime || "-")}</td>
       <td>${escapeHtml(row.arrivalTime || "-")}</td>
       <td>
-        <input class="report-delay-input" type="number" min="0" step="1" value="${Number(row.delayMinutes) || 0}" />
+        <div class="report-delay-wrap">
+          <span class="report-delay-badge ${delayBadgeClass}">${delayBadgeText}</span>
+          <input class="report-delay-input" type="number" min="0" step="1" value="${delayMinutes}" />
+        </div>
       </td>
       <td>
         <input class="report-plate-input" type="text" maxlength="32" value="${escapeHtml(row.vehiclePlate || "")}" placeholder="34 ABC 123" />

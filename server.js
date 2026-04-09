@@ -495,6 +495,27 @@ async function fetchRouteReportRows(reportDateIso, origin, target) {
     }
   }
 
+  if (!rows.length) {
+    rows.push({
+      reportDate: reportDateIso,
+      originName: origin.originName,
+      destinationName: target.destinationName,
+      routeLabel: `${origin.originName} -> ${target.destinationName}`,
+      rideUuid: `placeholder:${target.toStationId}`,
+      lineCode: "no-data",
+      tripNumber: "",
+      departureTime: "",
+      arrivalTime: "",
+      seatsAvailable: null,
+      occupancyPercent: null,
+      occupancyLevel: "veri-yok",
+      payloadJson: JSON.stringify({
+        noData: true,
+        reason: "Public API bu tarih icin detayli sefer satiri dondurmedi.",
+      }),
+    });
+  }
+
   return rows;
 }
 
