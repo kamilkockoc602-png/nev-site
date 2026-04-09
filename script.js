@@ -1644,7 +1644,7 @@ async function renderControlIntegrationPanel() {
       dom.controlBaseUrlInput.value = result.baseUrl || "https://backend.flixbus.com";
     }
     if (dom.controlLoginUrlInput) {
-      dom.controlLoginUrlInput.value = result.loginUrl || "https://backend.flixbus.com/users/login";
+      dom.controlLoginUrlInput.value = result.loginUrl || "https://app.oneops.flixbus.com/users/login";
     }
     if (dom.controlCookieInput) {
       dom.controlCookieInput.value = result.cookieHeader || "";
@@ -1655,11 +1655,11 @@ async function renderControlIntegrationPanel() {
 
     dom.controlStatusMsg.style.color = "var(--muted)";
     dom.controlStatusMsg.textContent = result.hasCookie
-      ? `Control oturumu kayitli. Son guncelleme: ${result.updatedAt || "-"}`
-      : "Control oturumu henuz kaydedilmedi.";
+      ? `OneOps oturumu kayitli. Son guncelleme: ${result.updatedAt || "-"}`
+      : "OneOps oturumu henuz kaydedilmedi.";
   } catch (error) {
     dom.controlStatusMsg.style.color = "#d64545";
-    dom.controlStatusMsg.textContent = error.message || "Control bilgileri yuklenemedi.";
+    dom.controlStatusMsg.textContent = error.message || "OneOps bilgileri yuklenemedi.";
   }
 }
 
@@ -1678,7 +1678,7 @@ async function saveControlIntegrationData() {
 
   if (dom.controlStatusMsg) {
     dom.controlStatusMsg.style.color = "#1f7a1f";
-    dom.controlStatusMsg.textContent = "Control baglanti bilgileri kaydedildi.";
+    dom.controlStatusMsg.textContent = "OneOps baglanti bilgileri kaydedildi.";
   }
 
   await renderControlIntegrationPanel();
@@ -2977,7 +2977,7 @@ if (dom.reportingSyncBtn) {
 
 if (dom.controlOpenLoginBtn) {
   dom.controlOpenLoginBtn.addEventListener("click", () => {
-    const url = (dom.controlLoginUrlInput?.value || "https://backend.flixbus.com/users/login").trim();
+    const url = (dom.controlLoginUrlInput?.value || "https://app.oneops.flixbus.com/users/login").trim();
     window.open(url, "_blank", "noopener");
   });
 }
@@ -2993,7 +2993,7 @@ if (dom.controlSaveBtn) {
     saveControlIntegrationData().catch((error) => {
       if (dom.controlStatusMsg) {
         dom.controlStatusMsg.style.color = "#d64545";
-        dom.controlStatusMsg.textContent = error.message || "Control bilgileri kaydedilemedi.";
+        dom.controlStatusMsg.textContent = error.message || "OneOps bilgileri kaydedilemedi.";
       }
     });
   });
