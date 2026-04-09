@@ -7,6 +7,7 @@ const MENUS = [
   { key: "pricing", label: "Fiyat Yukleme" },
   { key: "reports", label: "Tek Yon Fiyatlar" },
   { key: "reporting", label: "Raporlama" },
+  { key: "oneops", label: "OneOps Giris" },
   { key: "ocr", label: "Foto Tarama" },
   { key: "permissions", label: "Yetki Menusu" },
   { key: "logs", label: "Giris Kayitlari" },
@@ -2530,13 +2531,21 @@ async function activatePanel(menuKey) {
   if (menuKey === "reporting") {
     (async () => {
       await refreshReportingData();
-      await renderControlIntegrationPanel();
       if (!state.reportingRows.length) {
         await syncReportingData();
       }
     })().catch((error) => {
       if (dom.reportingSummary) {
         dom.reportingSummary.textContent = error.message || "Rapor verisi yuklenemedi.";
+      }
+    });
+  }
+
+  if (menuKey === "oneops") {
+    renderControlIntegrationPanel().catch((error) => {
+      if (dom.controlStatusMsg) {
+        dom.controlStatusMsg.style.color = "#d64545";
+        dom.controlStatusMsg.textContent = error.message || "OneOps bilgileri yuklenemedi.";
       }
     });
   }
