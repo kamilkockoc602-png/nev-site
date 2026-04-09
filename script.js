@@ -7,13 +7,12 @@ const MENUS = [
   { key: "pricing", label: "Fiyat Yukleme" },
   { key: "reports", label: "Tek Yon Fiyatlar" },
   { key: "reporting", label: "Raporlama" },
-  { key: "control", label: "Control Baglanti" },
   { key: "ocr", label: "Foto Tarama" },
   { key: "permissions", label: "Yetki Menusu" },
   { key: "logs", label: "Giris Kayitlari" },
 ];
 
-const ADMIN_ONLY_MENUS = new Set(["control", "permissions", "logs"]);
+const ADMIN_ONLY_MENUS = new Set(["permissions", "logs"]);
 
 const dom = {
   loginView: document.getElementById("loginView"),
@@ -2504,21 +2503,13 @@ async function activatePanel(menuKey) {
   if (menuKey === "reporting") {
     (async () => {
       await refreshReportingData();
+      await renderControlIntegrationPanel();
       if (!state.reportingRows.length) {
         await syncReportingData();
       }
     })().catch((error) => {
       if (dom.reportingSummary) {
         dom.reportingSummary.textContent = error.message || "Rapor verisi yuklenemedi.";
-      }
-    });
-  }
-
-  if (menuKey === "control") {
-    renderControlIntegrationPanel().catch((error) => {
-      if (dom.controlStatusMsg) {
-        dom.controlStatusMsg.style.color = "#d64545";
-        dom.controlStatusMsg.textContent = error.message || "Control paneli acilamadi.";
       }
     });
   }
@@ -2545,6 +2536,7 @@ async function handleLogin(username, password) {
     await refreshPricesData();
     await refreshPricingUploadsData();
     await refreshNotificationsData();
+    await renderControlIntegrationPanel().catch(() => null);
     startNotificationPolling();
   } catch (error) {
     showMessage(error.message || "Giris basarisiz.");
@@ -2563,6 +2555,7 @@ async function verifySession() {
     await refreshPricesData();
     await refreshPricingUploadsData();
     await refreshNotificationsData();
+    await renderControlIntegrationPanel().catch(() => null);
     startNotificationPolling();
   } catch {
     setToken("");

@@ -249,28 +249,17 @@
               <tbody id="reportingTableBody"></tbody>
             </table>
           </div>
-        </div>
 
-        <div id="panelControl" class="panel-block hidden" data-menu="control">
-          <h4>Control Baglanti</h4>
-          <p class="subtle">Control tarafina giris yapip gerekli baglanti bilgilerini buraya kaydet. Sonraki adimda gecikme/plaka/doluluk verisini otomatik cekecegiz.</p>
-
-          <section class="control-guide-wrap">
-            <h5>Yonlendirme Adimlari</h5>
-            <ol class="control-steps">
-              <li>Control giris ekranini ac ve hesabinla giris yap.</li>
-              <li>Tarayici geliştirici araclarindan gerekli oturum bilgisini al (Cookie veya token).</li>
-              <li>Asagidaki alanlara yapistirip Kaydet butonuna bas.</li>
-            </ol>
+          <section class="control-guide-wrap" style="margin-top:1rem;">
+            <h5>Control Giris Yardimcisi</h5>
+            <p class="subtle">Buradan Control sayfasini acip giris yapabilirsin. Gerekli cookie/session bilgisini ayni yerde kaydedebilirsin.</p>
 
             <div class="actions">
               <button id="controlOpenLoginBtn" type="button" class="btn btn-primary">Control Giris Sayfasini Ac</button>
               <button id="controlOpenOpsBtn" type="button" class="btn btn-ghost">Ops Portal Ac</button>
             </div>
-          </section>
 
-          <section class="control-form-wrap">
-            <div class="control-form-grid">
+            <div class="control-form-grid" style="margin-top:.7rem;">
               <label>
                 <span>Control Base URL</span>
                 <input id="controlBaseUrlInput" type="text" placeholder="https://backend.flixbus.com" />
@@ -283,7 +272,7 @@
 
               <label class="control-wide-field">
                 <span>Cookie / Session Header</span>
-                <textarea id="controlCookieInput" rows="4" placeholder="ornek: _session=...; other=... "></textarea>
+                <textarea id="controlCookieInput" rows="3" placeholder="ornek: hJSessionUser=...; msal.cache.encryption=... "></textarea>
               </label>
 
               <label class="control-wide-field">
