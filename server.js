@@ -613,10 +613,17 @@ function normalizeVehiclePlate(raw) {
     return "";
   }
 
+  // Common compact Turkish format: 34LSS22
   const compact = text.replace(/\s+/g, "");
   const compactMatch = compact.match(/^(\d{2})([A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{1,3})(\d{2,4})$/);
   if (compactMatch) {
     return `${compactMatch[1]} ${compactMatch[2]} ${compactMatch[3]}`;
+  }
+
+  // Extended OneOps formats also appear as 01HAZER01 or 34ABCD12345.
+  const compactExtended = compact.match(/^(\d{2})([A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{1,8})(\d{1,6})$/);
+  if (compactExtended) {
+    return `${compactExtended[1]} ${compactExtended[2]} ${compactExtended[3]}`;
   }
 
   const spaced = text.match(/\b(\d{2})\s*([A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{1,3})\s*(\d{2,4})\b/);
@@ -624,7 +631,45 @@ function normalizeVehiclePlate(raw) {
     return `${spaced[1]} ${spaced[2]} ${spaced[3]}`;
   }
 
+  const spacedExtended = text.match(/\b(\d{2})[\s-]*([A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{1,8})[\s-]*(\d{1,6})\b/);
+  if (spacedExtended) {
+    return `${spacedExtended[1]} ${spacedExtended[2]} ${spacedExtended[3]}`;
+  }
+
+  // As a last resort, keep mixed alnum identifiers from OneOps if clearly plate-like.
+  const letters = /[A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]/.test(text);
+  const digits = /\d/.test(text);
+  if (letters && digits && text.length >= 6 && text.length <= 24) {
+    return text;
+  }
+
   return "";
+}
+
+function collectStringLeaves(obj, out = []) {
+  if (obj == null) {
+    return out;
+  }
+
+  if (typeof obj === "string") {
+    out.push(obj);
+    return out;
+  }
+
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      collectStringLeaves(item, out);
+    }
+    return out;
+  }
+
+  if (typeof obj === "object") {
+    for (const value of Object.values(obj)) {
+      collectStringLeaves(value, out);
+    }
+  }
+
+  return out;
 }
 
 function collectCandidatePlateValues(obj, out = []) {
@@ -663,6 +708,16 @@ function extractVehiclePlateFromPayload(payload) {
       return normalized;
     }
   }
+
+  // Fallback: scan all string leaves for plate-like values.
+  const leafStrings = collectStringLeaves(payload, []);
+  for (const value of leafStrings) {
+    const normalized = normalizeVehiclePlate(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
   return "";
 }
 
@@ -718,7 +773,7 @@ function extractVehiclePlateFromText(text) {
     }
   }
 
-  const freePattern = /\b\d{2}[\s-]?[A-Za-z\u00C7\u011E\u0130\u00D6\u015E\u00DC\u00E7\u011F\u0131\u00F6\u015F\u00FC]{1,3}[\s-]?\d{2,4}\b/g;
+  const freePattern = /\b\d{2}[\s-]?[A-Za-z\u00C7\u011E\u0130\u00D6\u015E\u00DC\u00E7\u011F\u0131\u00F6\u015F\u00FC]{1,8}[\s-]?\d{1,6}\b/g;
   const freeMatches = source.match(freePattern) || [];
   for (const value of freeMatches) {
     const normalized = normalizeVehiclePlate(value);
