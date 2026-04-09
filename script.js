@@ -52,7 +52,9 @@ const dom = {
   controlLoginUrlInput: document.getElementById("controlLoginUrlInput"),
   controlCookieInput: document.getElementById("controlCookieInput"),
   controlCsrfInput: document.getElementById("controlCsrfInput"),
+  controlSessionTestUrlInput: document.getElementById("controlSessionTestUrlInput"),
   controlSaveBtn: document.getElementById("controlSaveBtn"),
+  controlTestBtn: document.getElementById("controlTestBtn"),
   controlReloadBtn: document.getElementById("controlReloadBtn"),
   controlStatusMsg: document.getElementById("controlStatusMsg"),
   pricingUploadForm: document.getElementById("pricingUploadForm"),
@@ -1652,6 +1654,9 @@ async function renderControlIntegrationPanel() {
     if (dom.controlCsrfInput) {
       dom.controlCsrfInput.value = result.csrfToken || "";
     }
+    if (dom.controlSessionTestUrlInput) {
+      dom.controlSessionTestUrlInput.value = result.sessionTestUrl || "https://app.oneops.flixbus.com/ops-portal/";
+    }
 
     dom.controlStatusMsg.style.color = "var(--muted)";
     dom.controlStatusMsg.textContent = result.hasCookie
@@ -1669,6 +1674,7 @@ async function saveControlIntegrationData() {
     loginUrl: dom.controlLoginUrlInput?.value || "",
     cookieHeader: dom.controlCookieInput?.value || "",
     csrfToken: dom.controlCsrfInput?.value || "",
+    sessionTestUrl: dom.controlSessionTestUrlInput?.value || "",
   };
 
   await apiFetch("/api/control-integration", {
@@ -1682,6 +1688,27 @@ async function saveControlIntegrationData() {
   }
 
   await renderControlIntegrationPanel();
+}
+
+async function testControlIntegrationSession() {
+  const testUrl = String(dom.controlSessionTestUrlInput?.value || "").trim();
+  const result = await apiFetch("/api/control-integration/test", {
+    method: "POST",
+    body: JSON.stringify({ testUrl }),
+  });
+
+  if (!dom.controlStatusMsg) {
+    return;
+  }
+
+  if (result.authenticated) {
+    dom.controlStatusMsg.style.color = "#1f7a1f";
+    dom.controlStatusMsg.textContent = `${result.message} (HTTP ${result.statusCode})`;
+    return;
+  }
+
+  dom.controlStatusMsg.style.color = "#d64545";
+  dom.controlStatusMsg.textContent = `${result.message} (HTTP ${result.statusCode})`;
 }
 
 async function refreshTariffData(query = "", append = false) {
@@ -2999,9 +3026,26 @@ if (dom.controlSaveBtn) {
   });
 }
 
+if (dom.controlTestBtn) {
+  dom.controlTestBtn.addEventListener("click", () => {
+    if (dom.controlStatusMsg) {
+      dom.controlStatusMsg.style.color = "var(--muted)";
+      dom.controlStatusMsg.textContent = "OneOps oturumu test ediliyor...";
+    }
+    testControlIntegrationSession().catch((error) => {
+      if (dom.controlStatusMsg) {
+        dom.controlStatusMsg.style.color = "#d64545";
+        dom.controlStatusMsg.textContent = error.message || "OneOps oturum testi basarisiz.";
+      }
+    });
+  });
+}
+
 if (dom.controlReloadBtn) {
   dom.controlReloadBtn.addEventListener("click", () => {
-    renderControlIntegrationPanel().catch(() => null);
+    renderControlIntegrationPanel()
+      .then(() => testControlIntegrationSession())
+      .catch(() => null);
   });
 }
 

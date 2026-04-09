@@ -1755,26 +1755,33 @@ app.post("/api/operations-reports/sync", requireAuth, async (req, res) => {
 
 app.get("/api/control-integration", requireAuth, requireAdmin, (req, res) => {
   const baseUrl = getMeta("control_base_url", "https://backend.flixbus.com");
-  const loginUrl = getMeta("control_login_url", "https://backend.flixbus.com/users/login");
+  const loginUrl = getMeta("control_login_url", "https://app.oneops.flixbus.com/users/login");
   const cookieHeader = getMeta("control_cookie_header", "");
   const csrfToken = getMeta("control_csrf_token", "");
+  const sessionTestUrl = getMeta("control_session_test_url", "https://app.oneops.flixbus.com/ops-portal/");
   const updatedAt = getMeta("control_updated_at", "");
+  const lastCheckAt = getMeta("control_last_check_at", "");
+  const lastCheckStatus = getMeta("control_last_check_status", "");
 
   res.json({
     baseUrl,
     loginUrl,
     cookieHeader,
     csrfToken,
+    sessionTestUrl,
     hasCookie: Boolean(cookieHeader),
     updatedAt,
+    lastCheckAt,
+    lastCheckStatus,
   });
 });
 
 app.patch("/api/control-integration", requireAuth, requireAdmin, (req, res) => {
   const baseUrl = String(req.body?.baseUrl || "https://backend.flixbus.com").trim().slice(0, 400);
-  const loginUrl = String(req.body?.loginUrl || "https://backend.flixbus.com/users/login").trim().slice(0, 500);
+  const loginUrl = String(req.body?.loginUrl || "https://app.oneops.flixbus.com/users/login").trim().slice(0, 500);
   const cookieHeader = String(req.body?.cookieHeader || "").trim().slice(0, 12000);
   const csrfToken = String(req.body?.csrfToken || "").trim().slice(0, 1000);
+  const sessionTestUrl = String(req.body?.sessionTestUrl || "https://app.oneops.flixbus.com/ops-portal/").trim().slice(0, 1000);
 
   if (baseUrl && !/^https?:\/\//i.test(baseUrl)) {
     res.status(400).json({ message: "Control Base URL gecersiz." });
@@ -1784,11 +1791,16 @@ app.patch("/api/control-integration", requireAuth, requireAdmin, (req, res) => {
     res.status(400).json({ message: "Login URL gecersiz." });
     return;
   }
+  if (sessionTestUrl && !/^https?:\/\//i.test(sessionTestUrl)) {
+    res.status(400).json({ message: "Oturum Test URL gecersiz." });
+    return;
+  }
 
   setMeta("control_base_url", baseUrl);
   setMeta("control_login_url", loginUrl);
   setMeta("control_cookie_header", cookieHeader);
   setMeta("control_csrf_token", csrfToken);
+  setMeta("control_session_test_url", sessionTestUrl);
   setMeta("control_updated_at", nowStamp());
 
   addPricingNotification(
@@ -1797,6 +1809,59 @@ app.patch("/api/control-integration", requireAuth, requireAdmin, (req, res) => {
   );
 
   res.json({ ok: true });
+});
+
+app.post("/api/control-integration/test", requireAuth, requireAdmin, async (req, res) => {
+  const cookieHeader = getMeta("control_cookie_header", "");
+  const csrfToken = getMeta("control_csrf_token", "");
+  const fallbackUrl = getMeta("control_session_test_url", "https://app.oneops.flixbus.com/ops-portal/");
+  const testUrl = String(req.body?.testUrl || fallbackUrl).trim().slice(0, 1000);
+
+  if (!cookieHeader) {
+    res.status(400).json({ message: "Kayitli OneOps cookie bulunamadi." });
+    return;
+  }
+
+  if (!/^https?:\/\//i.test(testUrl)) {
+    res.status(400).json({ message: "Oturum Test URL gecersiz." });
+    return;
+  }
+
+  try {
+    const response = await fetch(testUrl, {
+      method: "GET",
+      headers: {
+        Cookie: cookieHeader,
+        "X-CSRF-Token": csrfToken,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        Accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+      },
+      redirect: "follow",
+    });
+
+    const finalUrl = String(response.url || testUrl);
+    const redirectedToLogin = /\/users\/login|\/login/i.test(finalUrl);
+    const unauthorized = response.status === 401 || response.status === 403;
+    const authenticated = !redirectedToLogin && !unauthorized && response.status < 500;
+
+    setMeta("control_last_check_at", nowStamp());
+    setMeta("control_last_check_status", authenticated ? "ok" : "invalid");
+
+    res.json({
+      ok: true,
+      authenticated,
+      statusCode: response.status,
+      finalUrl,
+      checkedAt: getMeta("control_last_check_at", ""),
+      message: authenticated
+        ? "OneOps oturumu gecerli gorunuyor."
+        : "OneOps oturumu gecersiz veya suresi dolmus olabilir. Yeniden giris yapip kaydet.",
+    });
+  } catch (error) {
+    setMeta("control_last_check_at", nowStamp());
+    setMeta("control_last_check_status", "error");
+    res.status(502).json({ message: error.message || "OneOps oturum testi basarisiz." });
+  }
 });
 
 app.patch("/api/operations-reports/:id", requireAuth, (req, res) => {
