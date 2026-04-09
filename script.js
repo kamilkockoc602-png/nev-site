@@ -1549,7 +1549,9 @@ function renderReportingPanel() {
 
   rows.forEach((row) => {
     const tr = document.createElement("tr");
-    const occupancyText = Number.isFinite(Number(row.occupancyPercent))
+    const hasOccupancyPercent = row.occupancyPercent !== null && row.occupancyPercent !== undefined && row.occupancyPercent !== "";
+    const hasSeatCount = row.seatsAvailable !== null && row.seatsAvailable !== undefined && row.seatsAvailable !== "";
+    const occupancyText = hasOccupancyPercent
       ? `%${Math.max(0, Math.min(100, Number(row.occupancyPercent)))}`
       : (row.occupancyLevel === "veri-yok" ? "Veri yok" : (row.occupancyLevel || "-"));
     const delayMinutes = Number(row.delayMinutes) || 0;
@@ -1571,7 +1573,7 @@ function renderReportingPanel() {
       <td>
         <input class="report-plate-input" type="text" maxlength="32" value="${escapeHtml(row.vehiclePlate || "")}" placeholder="34 ABC 123" />
       </td>
-      <td>${occupancyText}${Number.isFinite(Number(row.seatsAvailable)) ? ` (Bos: ${Number(row.seatsAvailable)})` : ""}</td>
+      <td>${occupancyText}${hasSeatCount ? ` (Bos: ${Number(row.seatsAvailable)})` : ""}</td>
       <td>
         <input class="report-note-input" type="text" maxlength="400" value="${escapeHtml(row.note || "")}" placeholder="Not" />
       </td>

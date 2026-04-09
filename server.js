@@ -418,8 +418,8 @@ function parseIsoToStamp(value) {
 }
 
 function estimateOccupancyPercent(item) {
-  const seats = Number(item?.available?.seats);
-  if (Number.isFinite(seats)) {
+  const seats = toFiniteNumber(item?.available?.seats);
+  if (seats != null) {
     const estimated = Math.round((1 - seats / 46) * 100);
     return Math.max(0, Math.min(100, estimated));
   }
@@ -586,13 +586,13 @@ async function fetchRouteAvailabilityMap(reportDateIso, origin, target) {
 
       const departureTime = parseIsoToStamp(item?.departure?.date || "");
       const arrivalTime = parseIsoToStamp(item?.arrival?.date || "");
-      const seatsAvailable = Number(item?.available?.seats);
+      const seatsAvailable = toFiniteNumber(item?.available?.seats);
       const occupancyPercent = estimateOccupancyPercent(item);
       const occupancyLevel = String(item?.remaining?.capacity || "").trim();
 
       map.set(rideUuid, {
-        seatsAvailable: Number.isFinite(seatsAvailable) ? seatsAvailable : null,
-        occupancyPercent: Number.isFinite(occupancyPercent) ? occupancyPercent : null,
+        seatsAvailable: seatsAvailable != null ? seatsAvailable : null,
+        occupancyPercent: toFiniteNumber(occupancyPercent),
         occupancyLevel,
         payloadJson: JSON.stringify(item || {}),
       });
@@ -749,6 +749,12 @@ async function fetchOneOpsVehiclePlate(rideUuid) {
 }
 
 function toFiniteNumber(value) {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value === "string" && value.trim() === "") {
+    return null;
+  }
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
 }
@@ -965,8 +971,8 @@ async function collectOperationsReportRows(reportDateIso) {
       tripNumber: timing.tripNumber || "",
       departureTime: timing.departureTime || fromUnixSecondsToStamp(ride?.planned?.timestamp, ride?.planned?.tz),
       arrivalTime: timing.arrivalTime || "",
-      seatsAvailable: Number.isFinite(Number(base.seatsAvailable)) ? Number(base.seatsAvailable) : null,
-      occupancyPercent: Number.isFinite(Number(base.occupancyPercent)) ? Number(base.occupancyPercent) : null,
+      seatsAvailable: toFiniteNumber(base.seatsAvailable),
+      occupancyPercent: toFiniteNumber(base.occupancyPercent),
       occupancyLevel: String(base.occupancyLevel || "veri-yok"),
       delayMinutes,
       isDelayed: delayMinutes !== 0 ? 1 : 0,
@@ -2068,8 +2074,8 @@ app.get("/api/operations-reports", requireAuth, (req, res) => {
       tripNumber: row.trip_number || "",
       departureTime: row.departure_time || "",
       arrivalTime: row.arrival_time || "",
-      seatsAvailable: Number.isFinite(Number(row.seats_available)) ? Number(row.seats_available) : null,
-      occupancyPercent: Number.isFinite(Number(row.occupancy_percent)) ? Number(row.occupancy_percent) : null,
+      seatsAvailable: toFiniteNumber(row.seats_available),
+      occupancyPercent: toFiniteNumber(row.occupancy_percent),
       occupancyLevel: row.occupancy_level || "",
       isDelayed: Boolean(row.is_delayed),
       delayMinutes: Number(row.delay_minutes) || 0,
