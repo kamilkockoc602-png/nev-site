@@ -639,32 +639,6 @@ function normalizeVehiclePlate(raw) {
   return "";
 }
 
-function collectStringLeaves(obj, out = []) {
-  if (obj == null) {
-    return out;
-  }
-
-  if (typeof obj === "string") {
-    out.push(obj);
-    return out;
-  }
-
-  if (Array.isArray(obj)) {
-    for (const item of obj) {
-      collectStringLeaves(item, out);
-    }
-    return out;
-  }
-
-  if (typeof obj === "object") {
-    for (const value of Object.values(obj)) {
-      collectStringLeaves(value, out);
-    }
-  }
-
-  return out;
-}
-
 function collectCandidatePlateValues(obj, out = []) {
   if (!obj || typeof obj !== "object") {
     return out;
@@ -697,15 +671,6 @@ function extractVehiclePlateFromPayload(payload) {
   const candidates = collectCandidatePlateValues(payload, []);
   for (const item of candidates) {
     const normalized = normalizeVehiclePlate(item);
-    if (normalized) {
-      return normalized;
-    }
-  }
-
-  // Fallback: scan all string leaves for plate-like values.
-  const leafStrings = collectStringLeaves(payload, []);
-  for (const value of leafStrings) {
-    const normalized = normalizeVehiclePlate(value);
     if (normalized) {
       return normalized;
     }
@@ -766,15 +731,6 @@ function extractVehiclePlateFromText(text) {
     }
   }
 
-  const freePattern = /\b\d{2}[\s-]?[A-Za-z\u00C7\u011E\u0130\u00D6\u015E\u00DC\u00E7\u011F\u0131\u00F6\u015F\u00FC]{1,8}[\s-]?\d{2,6}\b/g;
-  const freeMatches = source.match(freePattern) || [];
-  for (const value of freeMatches) {
-    const normalized = normalizeVehiclePlate(value);
-    if (normalized) {
-      return normalized;
-    }
-  }
-
   return "";
 }
 
@@ -819,27 +775,32 @@ function extractPlateFromOneOpsAssignmentArea(htmlOrText) {
 }
 
 function extractPlateNearChangeButton(htmlOrText) {
-  const text = htmlToPlainText(htmlOrText);
-  if (!text) {
+  const raw = String(htmlOrText || "");
+  const text = htmlToPlainText(raw);
+  if (!text && !raw) {
     return "";
   }
 
-  // OneOps Vehicle Info genelde: "209756 - 34LSS22 - Tourismo ... Active ... Change"
-  const nearChangePattern = /([0-9]{2}[A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{1,8}[0-9]{2,6})[^\n]{0,160}?Change/i;
-  const nearChangeMatch = nearChangePattern.exec(text.replace(/\s+/g, " "));
-  if (nearChangeMatch) {
-    const normalized = normalizeVehiclePlate(nearChangeMatch[1]);
-    if (normalized) {
-      return normalized;
-    }
-  }
+  const sources = [raw, text.replace(/\s+/g, " ")];
 
-  // Vehicle Info satirinda tire ile ayrilan parca icinde plaka bulunur.
-  const vehicleInfoLine = /\b\d{3,8}\s*-\s*([0-9A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC\s-]{4,30})\s*-\s*[^\n]{0,140}/i.exec(text);
-  if (vehicleInfoLine) {
-    const normalized = normalizeVehiclePlate(vehicleInfoLine[1]);
-    if (normalized) {
-      return normalized;
+  for (const src of sources) {
+    // OneOps Vehicle Info genelde: "209756 - 34LSS22 - Tourismo ... Active ... Change"
+    const nearChangePattern = /([0-9]{2}[A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{2,8}[0-9]{2,6})[\s\S]{0,220}?Change/i;
+    const nearChangeMatch = nearChangePattern.exec(src);
+    if (nearChangeMatch) {
+      const normalized = normalizeVehiclePlate(nearChangeMatch[1]);
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    // Vehicle Info satirinda tire ile ayrilan parca icinde plaka bulunur.
+    const vehicleInfoLine = /\b\d{3,8}\s*-\s*([0-9A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{6,20})\s*-\s*/i.exec(src);
+    if (vehicleInfoLine) {
+      const normalized = normalizeVehiclePlate(vehicleInfoLine[1]);
+      if (normalized) {
+        return normalized;
+      }
     }
   }
 
@@ -2137,6 +2098,8 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
         delay_minutes = excluded.delay_minutes,
         vehicle_plate = CASE
           WHEN COALESCE(TRIM(excluded.vehicle_plate), '') <> '' THEN excluded.vehicle_plate
+          WHEN COALESCE(TRIM(operations_reports.vehicle_plate), '') = '' THEN ''
+          WHEN operations_reports.vehicle_plate GLOB '[0-9][0-9] [A-Z] [0-9]' THEN ''
           ELSE operations_reports.vehicle_plate
         END,
         payload_json = excluded.payload_json,
