@@ -629,6 +629,67 @@ async function lookupOriginStationByName(originName) {
   return null;
 }
 
+function lookupOriginStationFromHistory(originName) {
+  const query = slugTr(originName);
+  if (!query) {
+    return null;
+  }
+
+  const byOrigin = db
+    .prepare(
+      `
+      SELECT origin_name AS city_name, from_station_id AS station_id, COUNT(*) AS cnt
+      FROM operations_reports
+      WHERE COALESCE(TRIM(from_station_id), '') <> ''
+      GROUP BY origin_name, from_station_id
+      ORDER BY cnt DESC
+      `
+    )
+    .all();
+
+  const byDestination = db
+    .prepare(
+      `
+      SELECT destination_name AS city_name, to_station_id AS station_id, COUNT(*) AS cnt
+      FROM operations_reports
+      WHERE COALESCE(TRIM(to_station_id), '') <> ''
+      GROUP BY destination_name, to_station_id
+      ORDER BY cnt DESC
+      `
+    )
+    .all();
+
+  const candidates = [...byOrigin, ...byDestination]
+    .map((row) => ({
+      cityName: String(row.city_name || "").trim(),
+      stationId: String(row.station_id || "").trim(),
+      count: Number(row.cnt || 0),
+    }))
+    .filter((row) => row.cityName && row.stationId);
+
+  if (!candidates.length) {
+    return null;
+  }
+
+  const exact = candidates.find((row) => slugTr(row.cityName) === query);
+  if (exact) {
+    return {
+      originName: toTurkishTitleCase(exact.cityName),
+      fromStationId: exact.stationId,
+    };
+  }
+
+  const partial = candidates.find((row) => slugTr(row.cityName).includes(query) || query.includes(slugTr(row.cityName)));
+  if (partial) {
+    return {
+      originName: toTurkishTitleCase(partial.cityName),
+      fromStationId: partial.stationId,
+    };
+  }
+
+  return null;
+}
+
 async function resolveReportingOrigin(originInput) {
   const raw = String(originInput || REPORTING_SOURCE.originName).trim();
   if (!raw) {
@@ -642,6 +703,13 @@ async function resolveReportingOrigin(originInput) {
   const fromStatic = REPORTING_ORIGIN_STATIC.get(slugTr(raw));
   if (fromStatic) {
     return fromStatic;
+  }
+
+  const fromHistory = lookupOriginStationFromHistory(raw);
+  if (fromHistory) {
+    REPORTING_ORIGIN_STATIC.set(slugTr(raw), fromHistory);
+    REPORTING_ORIGIN_STATIC.set(slugTr(fromHistory.originName), fromHistory);
+    return fromHistory;
   }
 
   const looked = await lookupOriginStationByName(raw);
