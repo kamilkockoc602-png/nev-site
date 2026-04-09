@@ -56,6 +56,32 @@ function normalizeSearchText(value) {
     .trim();
 }
 
+function slugTr(value) {
+  return String(value || "")
+    .toLocaleLowerCase("tr-TR")
+    .replace(/ı/g, "i")
+    .replace(/ğ/g, "g")
+    .replace(/ü/g, "u")
+    .replace(/ş/g, "s")
+    .replace(/ö/g, "o")
+    .replace(/ç/g, "c")
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function toTurkishTitleCase(text) {
+  return String(text || "")
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => {
+      const first = word.charAt(0).toLocaleUpperCase("tr-TR");
+      const rest = word.slice(1).toLocaleLowerCase("tr-TR");
+      return `${first}${rest}`;
+    })
+    .join(" ");
+}
+
 function parseTurkishNumber(raw) {
   const text = String(raw || "").trim();
   if (!text) {
@@ -1790,6 +1816,8 @@ setInterval(() => {
 
 safeRefreshPrices("startup");
 
+let reportingSyncRunning = false;
+
 async function autoSyncReportingDates() {
   const today = todayIsoInIstanbul();
   const tomorrow = shiftIsoDate(today, 1);
@@ -2493,7 +2521,6 @@ app.post("/api/admin/prices/refresh", requireAuth, requireAdmin, async (req, res
   }
 });
 
-let reportingSyncRunning = false;
 async function syncOperationsReportsForDate(reportDate, options = {}) {
   if (reportingSyncRunning) {
     return { date: reportDate, count: 0, skipped: true };
