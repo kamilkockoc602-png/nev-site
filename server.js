@@ -304,6 +304,8 @@ CREATE TABLE IF NOT EXISTS operations_reports (
   destination_name TEXT NOT NULL,
   route_label TEXT NOT NULL,
   ride_uuid TEXT NOT NULL,
+  from_station_id TEXT NOT NULL DEFAULT '',
+  to_station_id TEXT NOT NULL DEFAULT '',
   line_code TEXT,
   trip_number TEXT,
   departure_time TEXT,
@@ -334,6 +336,16 @@ const pricingUploadColumns = db.prepare("PRAGMA table_info(pricing_uploads)").al
 const hasDescriptionColumn = pricingUploadColumns.some((col) => col.name === "description");
 if (!hasDescriptionColumn) {
   db.exec("ALTER TABLE pricing_uploads ADD COLUMN description TEXT NOT NULL DEFAULT ''");
+}
+
+const reportingColumns = db.prepare("PRAGMA table_info(operations_reports)").all();
+const hasFromStationColumn = reportingColumns.some((col) => col.name === "from_station_id");
+if (!hasFromStationColumn) {
+  db.exec("ALTER TABLE operations_reports ADD COLUMN from_station_id TEXT NOT NULL DEFAULT ''");
+}
+const hasToStationColumn = reportingColumns.some((col) => col.name === "to_station_id");
+if (!hasToStationColumn) {
+  db.exec("ALTER TABLE operations_reports ADD COLUMN to_station_id TEXT NOT NULL DEFAULT ''");
 }
 
 const tariffRouteMap = new Map();
@@ -431,7 +443,43 @@ const REPORTING_TARGETS = [
   { destinationName: "Izmir", toStationId: "9b6a8396-3ecb-11ea-8017-02437075395e" },
 ];
 
-async function fetchRouteReportRows(reportDateIso, origin, target) {
+const REPORTING_TARGET_MAP = new Map(
+  REPORTING_TARGETS.map((item) => [String(item.toStationId), item.destinationName])
+);
+
+function getIstanbulDayRangeMs(reportDateIso) {
+  const raw = String(reportDateIso || "").trim();
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) {
+    return null;
+  }
+
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const from = Date.parse(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T00:00:00+03:00`);
+  const to = Date.parse(`${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}T23:59:59+03:00`);
+
+  if (!Number.isFinite(from) || !Number.isFinite(to)) {
+    return null;
+  }
+
+  return { from, to };
+}
+
+function fromUnixSecondsToStamp(seconds, tz = "Europe/Istanbul") {
+  const sec = Number(seconds);
+  if (!Number.isFinite(sec) || sec <= 0) {
+    return "";
+  }
+
+  return new Date(sec * 1000).toLocaleString("tr-TR", {
+    timeZone: String(tz || "Europe/Istanbul"),
+    hour12: false,
+  });
+}
+
+async function fetchRouteAvailabilityMap(reportDateIso, origin, target) {
   const dotDate = toDotDate(reportDateIso);
   if (!dotDate) {
     throw new Error("Rapor tarihi gecersiz.");
@@ -456,7 +504,7 @@ async function fetchRouteReportRows(reportDateIso, origin, target) {
 
   const data = await res.json();
   const trips = Array.isArray(data?.trips) ? data.trips : [];
-  const rows = [];
+  const map = new Map();
 
   for (const trip of trips) {
     const resultObj = trip?.results && typeof trip.results === "object" ? trip.results : {};
@@ -477,45 +525,116 @@ async function fetchRouteReportRows(reportDateIso, origin, target) {
       const occupancyPercent = estimateOccupancyPercent(item);
       const occupancyLevel = String(item?.remaining?.capacity || "").trim();
 
-      rows.push({
-        reportDate: reportDateIso,
-        originName: origin.originName,
-        destinationName: target.destinationName,
-        routeLabel: `${origin.originName} -> ${target.destinationName}`,
-        rideUuid,
-        lineCode: String(item?.transfer_type_key || "direct").trim(),
-        tripNumber: String(item?.uid || "").trim(),
-        departureTime,
-        arrivalTime,
+      map.set(rideUuid, {
         seatsAvailable: Number.isFinite(seatsAvailable) ? seatsAvailable : null,
         occupancyPercent: Number.isFinite(occupancyPercent) ? occupancyPercent : null,
         occupancyLevel,
-        payloadJson: JSON.stringify(item),
+        payloadJson: JSON.stringify(item || {}),
       });
     }
   }
 
-  if (!rows.length) {
+  return map;
+}
+
+async function fetchLiveDelayMinutes(rideUuid, fromStationId, toStationId) {
+  const url = `https://global.api.flixbus.com/gis/v1/ride/${encodeURIComponent(rideUuid)}/trip-info/live?from_station_uuid=${encodeURIComponent(fromStationId)}&to_station_uuid=${encodeURIComponent(toStationId)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    return 0;
+  }
+
+  const data = await res.json();
+  const stops = Array.isArray(data?.stops) ? data.stops : [];
+  const originStop = stops.find((stop) => String(stop?.stop_uuid || "") === String(fromStationId));
+  const sec = Number(originStop?.departure?.deviation_seconds);
+  if (!Number.isFinite(sec)) {
+    return 0;
+  }
+  return Math.round(sec / 60);
+}
+
+async function fetchTripDetailsTiming(rideUuid, fromStationId, toStationId) {
+  const uid = `direct:${rideUuid}:${fromStationId}:${toStationId}`;
+  const url = `https://global.api.flixbus.com/search/service/v2/trip/details?trip=${encodeURIComponent(uid)}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    return { departureTime: "", arrivalTime: "", tripNumber: "", lineCode: "" };
+  }
+
+  const data = await res.json();
+  const itinerary = Array.isArray(data?.itinerary) ? data.itinerary : [];
+  const ridePart = itinerary.find((part) => String(part?.type || "") === "ride") || {};
+  const segments = Array.isArray(ridePart?.segments) ? ridePart.segments : [];
+  const firstSeg = segments[0] || {};
+  const lastSeg = segments[segments.length - 1] || {};
+
+  return {
+    departureTime: parseIsoToStamp(firstSeg?.departure_date || data?.departure?.date || ""),
+    arrivalTime: parseIsoToStamp(lastSeg?.arrival_date || data?.arrival?.date || ""),
+    tripNumber: String(data?.uid || "").trim(),
+    lineCode: String(ridePart?.line?.code || "").trim(),
+  };
+}
+
+async function fetchSiirtDepartures(reportDateIso) {
+  const range = getIstanbulDayRangeMs(reportDateIso);
+  if (!range) {
+    throw new Error("Rapor tarihi gecersiz.");
+  }
+
+  const url = `https://global.api.flixbus.com/gis/v1/station/${REPORTING_SOURCE.fromStationId}/timetable/departures/from-timestamp/${range.from}/to-timestamp/${range.to}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error("Siirt kalkisli seferler alinamadi.");
+  }
+
+  const data = await res.json();
+  const rides = Array.isArray(data?.rides) ? data.rides : [];
+  return rides.filter((ride) => REPORTING_TARGET_MAP.has(String(ride?.to_stop_uuid || "")));
+}
+
+async function collectOperationsReportRows(reportDateIso) {
+  const departures = await fetchSiirtDepartures(reportDateIso);
+  const availabilityMaps = new Map();
+  for (const target of REPORTING_TARGETS) {
+    const map = await fetchRouteAvailabilityMap(reportDateIso, REPORTING_SOURCE, target);
+    availabilityMaps.set(target.toStationId, map);
+  }
+
+  const rows = [];
+  for (const ride of departures) {
+    const rideUuid = String(ride?.ride_uuid || "").trim();
+    const toStationId = String(ride?.to_stop_uuid || "").trim();
+    if (!rideUuid || !toStationId) {
+      continue;
+    }
+
+    const destinationName = REPORTING_TARGET_MAP.get(toStationId) || "Hedef";
+    const base = availabilityMaps.get(toStationId)?.get(rideUuid) || {};
+    const timing = await fetchTripDetailsTiming(rideUuid, REPORTING_SOURCE.fromStationId, toStationId);
+    const delayMinutes = await fetchLiveDelayMinutes(rideUuid, REPORTING_SOURCE.fromStationId, toStationId);
+
     rows.push({
       reportDate: reportDateIso,
-      originName: origin.originName,
-      destinationName: target.destinationName,
-      routeLabel: `${origin.originName} -> ${target.destinationName}`,
-      rideUuid: `placeholder:${target.toStationId}`,
-      lineCode: "no-data",
-      tripNumber: "",
-      departureTime: "",
-      arrivalTime: "",
-      seatsAvailable: null,
-      occupancyPercent: null,
-      occupancyLevel: "veri-yok",
-      payloadJson: JSON.stringify({
-        noData: true,
-        reason: "Public API bu tarih icin detayli sefer satiri dondurmedi.",
-      }),
+      originName: REPORTING_SOURCE.originName,
+      destinationName,
+      routeLabel: `${REPORTING_SOURCE.originName} -> ${destinationName}`,
+      rideUuid,
+      lineCode: timing.lineCode || String(ride?.line_code || "").trim(),
+      tripNumber: timing.tripNumber || "",
+      departureTime: timing.departureTime || fromUnixSecondsToStamp(ride?.planned?.timestamp, ride?.planned?.tz),
+      arrivalTime: timing.arrivalTime || "",
+      seatsAvailable: Number.isFinite(Number(base.seatsAvailable)) ? Number(base.seatsAvailable) : null,
+      occupancyPercent: Number.isFinite(Number(base.occupancyPercent)) ? Number(base.occupancyPercent) : null,
+      occupancyLevel: String(base.occupancyLevel || "veri-yok"),
+      delayMinutes,
+      isDelayed: delayMinutes !== 0 ? 1 : 0,
+      payloadJson: base.payloadJson || JSON.stringify(ride || {}),
     });
   }
 
+  rows.sort((a, b) => String(a.departureTime || "").localeCompare(String(b.departureTime || ""), "tr"));
   return rows;
 }
 
@@ -748,6 +867,15 @@ setInterval(() => {
 }, UPDATE_INTERVAL_MS);
 
 safeRefreshPrices("startup");
+
+setInterval(() => {
+  const today = todayIsoInIstanbul();
+  syncOperationsReportsForDate(today, { emitNotification: false }).catch((error) => {
+    console.error("Raporlama otomatik senkron hatasi:", error.message);
+  });
+}, 15 * 60 * 1000);
+
+syncOperationsReportsForDate(todayIsoInIstanbul(), { emitNotification: false }).catch(() => null);
 
 app.use(express.json({ limit: "25mb" }));
 app.use(express.static(__dirname));
@@ -1433,6 +1561,119 @@ app.post("/api/admin/prices/refresh", requireAuth, requireAdmin, async (req, res
   }
 });
 
+let reportingSyncRunning = false;
+async function syncOperationsReportsForDate(reportDate, options = {}) {
+  if (reportingSyncRunning) {
+    return { date: reportDate, count: 0, skipped: true };
+  }
+
+  reportingSyncRunning = true;
+  try {
+    const collected = await collectOperationsReportRows(reportDate);
+    const stamp = nowStamp();
+
+    const upsert = db.prepare(
+      `
+      INSERT INTO operations_reports (
+        report_date,
+        origin_name,
+        destination_name,
+        route_label,
+        ride_uuid,
+        from_station_id,
+        to_station_id,
+        line_code,
+        trip_number,
+        departure_time,
+        arrival_time,
+        seats_available,
+        occupancy_percent,
+        occupancy_level,
+        is_delayed,
+        delay_minutes,
+        payload_json,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(report_date, ride_uuid) DO UPDATE SET
+        destination_name = excluded.destination_name,
+        route_label = excluded.route_label,
+        from_station_id = excluded.from_station_id,
+        to_station_id = excluded.to_station_id,
+        line_code = excluded.line_code,
+        trip_number = excluded.trip_number,
+        departure_time = excluded.departure_time,
+        arrival_time = excluded.arrival_time,
+        seats_available = excluded.seats_available,
+        occupancy_percent = excluded.occupancy_percent,
+        occupancy_level = excluded.occupancy_level,
+        is_delayed = excluded.is_delayed,
+        delay_minutes = excluded.delay_minutes,
+        payload_json = excluded.payload_json,
+        updated_at = excluded.updated_at
+      `
+    );
+
+    const selectExisting = db.prepare(
+      "SELECT id, ride_uuid FROM operations_reports WHERE report_date = ? AND origin_name = ?"
+    );
+    const deleteById = db.prepare("DELETE FROM operations_reports WHERE id = ?");
+
+    const trx = db.transaction(() => {
+      if (!collected.length) {
+        db.prepare("DELETE FROM operations_reports WHERE report_date = ? AND origin_name = ?")
+          .run(reportDate, REPORTING_SOURCE.originName);
+        return;
+      }
+
+      const keepSet = new Set(collected.map((row) => String(row.rideUuid || "")));
+      const existing = selectExisting.all(reportDate, REPORTING_SOURCE.originName);
+      for (const oldRow of existing) {
+        if (!keepSet.has(String(oldRow.ride_uuid || ""))) {
+          deleteById.run(oldRow.id);
+        }
+      }
+
+      for (const row of collected) {
+        upsert.run(
+          row.reportDate,
+          row.originName,
+          row.destinationName,
+          row.routeLabel,
+          row.rideUuid,
+          REPORTING_SOURCE.fromStationId,
+          REPORTING_TARGETS.find((x) => x.destinationName === row.destinationName)?.toStationId || "",
+          row.lineCode,
+          row.tripNumber,
+          row.departureTime,
+          row.arrivalTime,
+          row.seatsAvailable,
+          row.occupancyPercent,
+          row.occupancyLevel,
+          row.isDelayed,
+          row.delayMinutes,
+          row.payloadJson,
+          stamp,
+          stamp
+        );
+      }
+    });
+
+    trx();
+
+    if (options.emitNotification && options.actor) {
+      addPricingNotification(
+        options.actor,
+        `${options.actor} raporlama verisini yeniledi (${reportDate}, ${collected.length} sefer).`
+      );
+    }
+
+    return { date: reportDate, count: collected.length, skipped: false };
+  } finally {
+    reportingSyncRunning = false;
+  }
+}
+
 app.get("/api/operations-reports", requireAuth, (req, res) => {
   const date = String(req.query.date || todayIsoInIstanbul()).trim();
   const origin = String(req.query.origin || "Siirt").trim();
@@ -1501,80 +1742,11 @@ app.post("/api/operations-reports/sync", requireAuth, async (req, res) => {
   }
 
   try {
-    const collected = [];
-    for (const target of REPORTING_TARGETS) {
-      const routeRows = await fetchRouteReportRows(reportDate, REPORTING_SOURCE, target);
-      collected.push(...routeRows);
-    }
-
-    const upsert = db.prepare(
-      `
-      INSERT INTO operations_reports (
-        report_date,
-        origin_name,
-        destination_name,
-        route_label,
-        ride_uuid,
-        line_code,
-        trip_number,
-        departure_time,
-        arrival_time,
-        seats_available,
-        occupancy_percent,
-        occupancy_level,
-        is_delayed,
-        delay_minutes,
-        vehicle_plate,
-        note,
-        payload_json,
-        created_at,
-        updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, '', '', ?, ?, ?)
-      ON CONFLICT(report_date, ride_uuid) DO UPDATE SET
-        destination_name = excluded.destination_name,
-        route_label = excluded.route_label,
-        line_code = excluded.line_code,
-        trip_number = excluded.trip_number,
-        departure_time = excluded.departure_time,
-        arrival_time = excluded.arrival_time,
-        seats_available = excluded.seats_available,
-        occupancy_percent = excluded.occupancy_percent,
-        occupancy_level = excluded.occupancy_level,
-        payload_json = excluded.payload_json,
-        updated_at = excluded.updated_at
-      `
-    );
-
-    const stamp = nowStamp();
-    const trx = db.transaction((rows) => {
-      for (const row of rows) {
-        upsert.run(
-          row.reportDate,
-          row.originName,
-          row.destinationName,
-          row.routeLabel,
-          row.rideUuid,
-          row.lineCode,
-          row.tripNumber,
-          row.departureTime,
-          row.arrivalTime,
-          row.seatsAvailable,
-          row.occupancyPercent,
-          row.occupancyLevel,
-          row.payloadJson,
-          stamp,
-          stamp
-        );
-      }
+    const result = await syncOperationsReportsForDate(reportDate, {
+      emitNotification: true,
+      actor: req.auth.user.username,
     });
-    trx(collected);
-
-    addPricingNotification(
-      req.auth.user.username,
-      `${req.auth.user.username} raporlama verisini yeniledi (${reportDate}, ${collected.length} sefer).`
-    );
-
-    res.json({ ok: true, date: reportDate, count: collected.length });
+    res.json({ ok: true, date: result.date, count: result.count, skipped: result.skipped });
   } catch (error) {
     res.status(500).json({ message: error.message || "Rapor verisi senkronize edilemedi." });
   }
@@ -1588,10 +1760,12 @@ app.patch("/api/operations-reports/:id", requireAuth, (req, res) => {
   }
 
   const delayMinutesRaw = Number(req.body?.delayMinutes);
-  const delayMinutes = Number.isFinite(delayMinutesRaw) ? Math.max(0, Math.round(delayMinutesRaw)) : 0;
+  const delayMinutes = Number.isFinite(delayMinutesRaw)
+    ? Math.max(-720, Math.min(720, Math.round(delayMinutesRaw)))
+    : 0;
   const vehiclePlate = String(req.body?.vehiclePlate || "").trim().slice(0, 32);
   const note = String(req.body?.note || "").trim().slice(0, 400);
-  const isDelayed = delayMinutes > 0 ? 1 : 0;
+  const isDelayed = delayMinutes !== 0 ? 1 : 0;
 
   const found = db.prepare("SELECT id FROM operations_reports WHERE id = ?").get(id);
   if (!found) {

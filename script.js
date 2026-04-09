@@ -1531,7 +1531,7 @@ function renderReportingPanel() {
     return;
   }
 
-  const delayedCount = rows.filter((row) => Number(row.delayMinutes) > 0).length;
+  const delayedCount = rows.filter((row) => Number(row.delayMinutes) !== 0).length;
   dom.reportingSummary.textContent = `${state.reportingDate} icin ${rows.length} sefer listelendi. Rotarli sefer: ${delayedCount}.`;
 
   rows.forEach((row) => {
@@ -1540,8 +1540,10 @@ function renderReportingPanel() {
       ? `%${Math.max(0, Math.min(100, Number(row.occupancyPercent)))}`
       : (row.occupancyLevel === "veri-yok" ? "Veri yok" : (row.occupancyLevel || "-"));
     const delayMinutes = Number(row.delayMinutes) || 0;
-    const delayBadgeText = delayMinutes > 0 ? `${delayMinutes} dk gec` : "R";
-    const delayBadgeClass = delayMinutes > 0 ? "delay-badge-late" : "delay-badge-on-time";
+    const delayBadgeText = delayMinutes > 0
+      ? `+${delayMinutes} dk`
+      : (delayMinutes < 0 ? `${delayMinutes} dk` : "R");
+    const delayBadgeClass = delayMinutes !== 0 ? "delay-badge-late" : "delay-badge-on-time";
 
     tr.innerHTML = `
       <td>${escapeHtml(row.routeLabel || "-")}</td>
@@ -1550,7 +1552,7 @@ function renderReportingPanel() {
       <td>
         <div class="report-delay-wrap">
           <span class="report-delay-badge ${delayBadgeClass}">${delayBadgeText}</span>
-          <input class="report-delay-input" type="number" min="0" step="1" value="${delayMinutes}" />
+          <input class="report-delay-input" type="number" min="-720" max="720" step="1" value="${delayMinutes}" />
         </div>
       </td>
       <td>
