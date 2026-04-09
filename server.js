@@ -473,6 +473,10 @@ const REPORTING_SOURCE = {
   fromStationId: "45e1a606-8cd1-46bc-aebd-7f67a4909a4d",
 };
 
+const REPORTING_ORIGIN_STATIC = new Map([
+  [slugTr(REPORTING_SOURCE.originName), { originName: REPORTING_SOURCE.originName, fromStationId: REPORTING_SOURCE.fromStationId }],
+]);
+
 const REPORTING_KNOWN_TARGETS = [
   { destinationName: "Marmaris", toStationId: "66615e19-06cb-4c6f-93df-c3bf05b40e6a" },
   { destinationName: "Antalya", toStationId: "9b6c0630-3ecb-11ea-8017-02437075395e" },
@@ -507,6 +511,121 @@ function resolveDestinationNameFromRide(ride, toStationId) {
   }
 
   return REPORTING_KNOWN_TARGET_MAP.get(String(toStationId || "")) || "Hedef";
+}
+
+function getControlAuthHeaders() {
+  const cookieHeader = String(getMeta("control_cookie_header", "") || "").trim();
+  const csrfToken = String(getMeta("control_csrf_token", "") || "").trim();
+  if (!cookieHeader) {
+    return null;
+  }
+
+  return {
+    Cookie: cookieHeader,
+    "X-CSRF-Token": csrfToken,
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    Accept: "application/json,text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+  };
+}
+
+function collectStationCandidates(node, out = []) {
+  if (!node || typeof node !== "object") {
+    return out;
+  }
+
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      collectStationCandidates(item, out);
+    }
+    return out;
+  }
+
+  const id = String(node.id || node.uuid || node.station_id || node.stationId || node.stop_uuid || "").trim();
+  const name = String(node.name || node.city_name || node.display_name || node.label || node.title || "").trim();
+  if (id && name && /^[0-9a-fA-F-]{32,36}$/.test(id)) {
+    out.push({ id, name });
+  }
+
+  for (const value of Object.values(node)) {
+    if (value && typeof value === "object") {
+      collectStationCandidates(value, out);
+    }
+  }
+
+  return out;
+}
+
+async function lookupOriginStationByName(originName) {
+  const query = String(originName || "").trim();
+  if (!query) {
+    return null;
+  }
+
+  const headers = getControlAuthHeaders();
+  if (!headers) {
+    return null;
+  }
+
+  const endpoints = [
+    `https://global.api.flixbus.com/gis/v1/station/search/${encodeURIComponent(query)}?locale=tr`,
+    `https://global.api.flixbus.com/gis/v1/station/search?query=${encodeURIComponent(query)}&locale=tr`,
+  ];
+
+  const querySlug = slugTr(query);
+  for (const url of endpoints) {
+    try {
+      const res = await fetch(url, { headers, redirect: "follow" });
+      if (!res.ok) {
+        continue;
+      }
+
+      const data = await res.json();
+      const candidates = collectStationCandidates(data, []);
+      if (!candidates.length) {
+        continue;
+      }
+
+      const exact = candidates.find((item) => slugTr(item.name) === querySlug);
+      if (exact) {
+        return { originName: toTurkishTitleCase(exact.name), fromStationId: exact.id };
+      }
+
+      const close = candidates.find((item) => slugTr(item.name).includes(querySlug) || querySlug.includes(slugTr(item.name)));
+      const selected = close || candidates[0];
+      if (selected) {
+        return { originName: toTurkishTitleCase(selected.name), fromStationId: selected.id };
+      }
+    } catch {
+      // next endpoint
+    }
+  }
+
+  return null;
+}
+
+async function resolveReportingOrigin(originInput) {
+  const raw = String(originInput || REPORTING_SOURCE.originName).trim();
+  if (!raw) {
+    return { originName: REPORTING_SOURCE.originName, fromStationId: REPORTING_SOURCE.fromStationId };
+  }
+
+  if (/^[0-9a-fA-F-]{32,36}$/.test(raw)) {
+    return { originName: raw, fromStationId: raw };
+  }
+
+  const fromStatic = REPORTING_ORIGIN_STATIC.get(slugTr(raw));
+  if (fromStatic) {
+    return fromStatic;
+  }
+
+  const looked = await lookupOriginStationByName(raw);
+  if (looked) {
+    REPORTING_ORIGIN_STATIC.set(slugTr(raw), looked);
+    REPORTING_ORIGIN_STATIC.set(slugTr(looked.originName), looked);
+    return looked;
+  }
+
+  throw new Error(`Kalkis sehri bulunamadi: ${raw}. OneOps baglantisi acik oldugunda tekrar dene.`);
 }
 
 async function fetchStationNameById(stationId) {
@@ -1313,16 +1432,16 @@ async function fetchTripDetailsTiming(rideUuid, fromStationId, toStationId) {
   };
 }
 
-async function fetchSiirtDepartures(reportDateIso) {
+async function fetchOriginDepartures(origin, reportDateIso) {
   const range = getIstanbulDayRangeMs(reportDateIso);
   if (!range) {
     throw new Error("Rapor tarihi gecersiz.");
   }
 
-  const url = `https://global.api.flixbus.com/gis/v1/station/${REPORTING_SOURCE.fromStationId}/timetable/departures/from-timestamp/${range.from}/to-timestamp/${range.to}`;
+  const url = `https://global.api.flixbus.com/gis/v1/station/${encodeURIComponent(origin.fromStationId)}/timetable/departures/from-timestamp/${range.from}/to-timestamp/${range.to}`;
   const res = await fetch(url);
   if (!res.ok) {
-    throw new Error("Siirt kalkisli seferler alinamadi.");
+    throw new Error(`${origin.originName} kalkisli seferler alinamadi.`);
   }
 
   const data = await res.json();
@@ -1330,8 +1449,8 @@ async function fetchSiirtDepartures(reportDateIso) {
   return rides;
 }
 
-async function collectOperationsReportRows(reportDateIso) {
-  const departures = await fetchSiirtDepartures(reportDateIso);
+async function collectOperationsReportRows(reportDateIso, origin = REPORTING_SOURCE) {
+  const departures = await fetchOriginDepartures(origin, reportDateIso);
   const availabilityMaps = new Map();
   const oneOpsSummaryCache = new Map();
   const stationNameCache = new Map();
@@ -1353,7 +1472,7 @@ async function collectOperationsReportRows(reportDateIso) {
 
   for (const target of targetByStation.values()) {
     try {
-      const map = await fetchRouteAvailabilityMap(reportDateIso, REPORTING_SOURCE, target);
+      const map = await fetchRouteAvailabilityMap(reportDateIso, origin, target);
       availabilityMaps.set(target.toStationId, map);
     } catch {
       availabilityMaps.set(target.toStationId, new Map());
@@ -1380,8 +1499,8 @@ async function collectOperationsReportRows(reportDateIso) {
       }
     }
     const base = availabilityMaps.get(toStationId)?.get(rideUuid) || {};
-    const timing = await fetchTripDetailsTiming(rideUuid, REPORTING_SOURCE.fromStationId, toStationId);
-    const liveSnapshot = await fetchLiveTripSnapshot(rideUuid, REPORTING_SOURCE.fromStationId, toStationId);
+    const timing = await fetchTripDetailsTiming(rideUuid, origin.fromStationId, toStationId);
+    const liveSnapshot = await fetchLiveTripSnapshot(rideUuid, origin.fromStationId, toStationId);
     let vehiclePlate = "";
     let oneOpsSummary = emptyOneOpsSummary();
 
@@ -1414,9 +1533,9 @@ async function collectOperationsReportRows(reportDateIso) {
 
     rows.push({
       reportDate: reportDateIso,
-      originName: REPORTING_SOURCE.originName,
+      originName: origin.originName,
       destinationName,
-      routeLabel: `${REPORTING_SOURCE.originName} -> ${destinationName}`,
+      routeLabel: `${origin.originName} -> ${destinationName}`,
       rideUuid,
       toStationId,
       lineCode: timing.lineCode || String(ride?.line_code || "").trim(),
@@ -2382,7 +2501,8 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
 
   reportingSyncRunning = true;
   try {
-    const collected = await collectOperationsReportRows(reportDate);
+    const origin = await resolveReportingOrigin(options.originName || REPORTING_SOURCE.originName);
+    const collected = await collectOperationsReportRows(reportDate, origin);
     const stamp = nowStamp();
 
     const upsert = db.prepare(
@@ -2462,12 +2582,12 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
     const trx = db.transaction(() => {
       if (!collected.length) {
         db.prepare("DELETE FROM operations_reports WHERE report_date = ? AND origin_name = ?")
-          .run(reportDate, REPORTING_SOURCE.originName);
+          .run(reportDate, origin.originName);
         return;
       }
 
       const keepSet = new Set(collected.map((row) => String(row.rideUuid || "")));
-      const existing = selectExisting.all(reportDate, REPORTING_SOURCE.originName);
+      const existing = selectExisting.all(reportDate, origin.originName);
       for (const oldRow of existing) {
         if (!keepSet.has(String(oldRow.ride_uuid || ""))) {
           deleteById.run(oldRow.id);
@@ -2481,7 +2601,7 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
           row.destinationName,
           row.routeLabel,
           row.rideUuid,
-          REPORTING_SOURCE.fromStationId,
+          origin.fromStationId,
           String(row.toStationId || ""),
           row.lineCode,
           row.tripNumber,
@@ -2509,11 +2629,11 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
     if (options.emitNotification && options.actor) {
       addPricingNotification(
         options.actor,
-        `${options.actor} raporlama verisini yeniledi (${reportDate}, ${collected.length} sefer).`
+        `${options.actor} raporlama verisini yeniledi (${origin.originName}, ${reportDate}, ${collected.length} sefer).`
       );
     }
 
-    return { date: reportDate, count: collected.length, skipped: false };
+    return { date: reportDate, origin: origin.originName, count: collected.length, skipped: false };
   } finally {
     reportingSyncRunning = false;
   }
@@ -2521,13 +2641,21 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
 
 app.get("/api/operations-reports", requireAuth, async (req, res) => {
   const date = String(req.query.date || todayIsoInIstanbul()).trim();
-  const origin = String(req.query.origin || "Siirt").trim();
+  const originInput = String(req.query.origin || REPORTING_SOURCE.originName).trim();
+
+  let origin;
+  try {
+    origin = await resolveReportingOrigin(originInput);
+  } catch (error) {
+    res.status(400).json({ message: error.message || "Kalkis sehri gecersiz." });
+    return;
+  }
 
   // Frontend'de butona basmadan veri güncel olsun.
   try {
-    await syncOperationsReportsForDate(date, { emitNotification: false });
+    await syncOperationsReportsForDate(date, { emitNotification: false, originName: origin.originName });
   } catch (error) {
-    console.error(`GET /api/operations-reports otomatik sync hatasi (${date}):`, error.message);
+    console.error(`GET /api/operations-reports otomatik sync hatasi (${origin.originName}, ${date}):`, error.message);
   }
 
   const rows = db
@@ -2561,11 +2689,11 @@ app.get("/api/operations-reports", requireAuth, async (req, res) => {
       ORDER BY departure_time ASC, id ASC
       `
     )
-    .all(date, origin);
+    .all(date, origin.originName);
 
   res.json({
     date,
-    origin,
+    origin: origin.originName,
     rows: rows.map((row) => ({
       id: Number(row.id),
       reportDate: row.report_date,
@@ -2595,6 +2723,7 @@ app.get("/api/operations-reports", requireAuth, async (req, res) => {
 
 app.post("/api/operations-reports/sync", requireAuth, async (req, res) => {
   const reportDate = String(req.body?.date || todayIsoInIstanbul()).trim();
+  const originInput = String(req.body?.origin || REPORTING_SOURCE.originName).trim();
   const dotDate = toDotDate(reportDate);
   if (!dotDate) {
     res.status(400).json({ message: "Rapor tarihi gecersiz." });
@@ -2602,6 +2731,16 @@ app.post("/api/operations-reports/sync", requireAuth, async (req, res) => {
   }
 
   try {
+    const result = await syncOperationsReportsForDate(reportDate, {
+      emitNotification: true,
+      actor: req.auth.user.username,
+      originName: originInput,
+    });
+    res.json({ ok: true, date: result.date, origin: result.origin, count: result.count, skipped: result.skipped });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Rapor verisi senkronize edilemedi." });
+  }
+});
 
 app.post("/api/operations-reports/plate-debug", requireAuth, requireAdmin, async (req, res) => {
   const rideUuid = String(req.body?.rideUuid || "").trim();
@@ -2637,15 +2776,6 @@ app.post("/api/operations-reports/plate-debug", requireAuth, requireAdmin, async
     });
   } catch (error) {
     res.status(500).json({ message: error.message || "Plaka debug islemi basarisiz." });
-  }
-});
-    const result = await syncOperationsReportsForDate(reportDate, {
-      emitNotification: true,
-      actor: req.auth.user.username,
-    });
-    res.json({ ok: true, date: result.date, count: result.count, skipped: result.skipped });
-  } catch (error) {
-    res.status(500).json({ message: error.message || "Rapor verisi senkronize edilemedi." });
   }
 });
 

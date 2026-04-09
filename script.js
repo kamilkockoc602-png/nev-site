@@ -1712,6 +1712,7 @@ async function debugPlateByRideUuid() {
 async function refreshReportingData() {
   const date = String(state.reportingDate || todayIsoDate()).trim();
   state.reportingDate = date;
+  state.reportingOrigin = String(dom.reportingOriginInput?.value || state.reportingOrigin || "Siirt").trim() || "Siirt";
 
   const result = await apiFetch(`/api/operations-reports?date=${encodeURIComponent(date)}&origin=${encodeURIComponent(state.reportingOrigin)}`);
   state.reportingRows = result.rows || [];
@@ -1737,6 +1738,7 @@ function ensureReportingAutoRefresh() {
 async function syncReportingData() {
   const date = String(state.reportingDate || todayIsoDate()).trim();
   state.reportingDate = date;
+  state.reportingOrigin = String(dom.reportingOriginInput?.value || state.reportingOrigin || "Siirt").trim() || "Siirt";
 
   if (dom.reportingSummary) {
     dom.reportingSummary.textContent = "Gunluk rapor cekiliyor...";
@@ -1744,7 +1746,7 @@ async function syncReportingData() {
 
   await apiFetch("/api/operations-reports/sync", {
     method: "POST",
-    body: JSON.stringify({ date }),
+    body: JSON.stringify({ date, origin: state.reportingOrigin }),
   });
 
   await refreshReportingData();
@@ -3115,6 +3117,18 @@ if (dom.reportingDateInput) {
   dom.reportingDateInput.addEventListener("change", () => {
     state.reportingDate = dom.reportingDateInput.value || todayIsoDate();
     refreshReportingData().catch(() => null);
+  });
+}
+
+if (dom.reportingOriginInput) {
+  state.reportingOrigin = dom.reportingOriginInput.value || "Siirt";
+  dom.reportingOriginInput.addEventListener("change", () => {
+    state.reportingOrigin = String(dom.reportingOriginInput.value || "Siirt").trim() || "Siirt";
+    refreshReportingData().catch((error) => {
+      if (dom.reportingSummary) {
+        dom.reportingSummary.textContent = error.message || "Kalkis sehri icin veri yuklenemedi.";
+      }
+    });
   });
 }
 
