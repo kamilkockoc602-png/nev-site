@@ -901,17 +901,17 @@ function extractOneOpsSummaryFromText(htmlOrText) {
 
   summary.plate = extractPlateNearChangeButton(raw) || extractPlateFromOneOpsAssignmentArea(raw) || "";
 
-  const tryMatch = /Total\s*Revenue\s*\(TRY\)\s*:?\s*([^\n]+)/i.exec(text);
-  if (tryMatch) {
-    const amount = parseMoneyAmount(tryMatch[1]);
+  const tryBlockMatch = /Total\s*Revenue\s*\(TRY\)\s*:?\s*([\s\S]{0,60}?)(?:Total\s*Revenue\s*\(EUR\)|$)/i.exec(text);
+  if (tryBlockMatch) {
+    const amount = parseMoneyAmount(tryBlockMatch[1]);
     if (amount != null) {
       summary.revenueTry = amount;
     }
   }
 
-  const eurMatch = /Total\s*Revenue\s*\(EUR\)\s*:?\s*([^\n]+)/i.exec(text);
-  if (eurMatch) {
-    const amount = parseMoneyAmount(eurMatch[1]);
+  const eurBlockMatch = /Total\s*Revenue\s*\(EUR\)\s*:?\s*([\s\S]{0,40}?)(?:$|Comments|Vehicle\s*Info|Radar)/i.exec(text);
+  if (eurBlockMatch) {
+    const amount = parseMoneyAmount(eurBlockMatch[1]);
     if (amount != null) {
       summary.revenueEur = amount;
     }
@@ -1054,14 +1054,7 @@ async function fetchVehiclePlateFromUrl(url, headers) {
       return { plate: summary.plate, summary, debug };
     }
 
-    const fromHtmlText = extractVehiclePlateFromText(text);
-    if (fromHtmlText) {
-      debug.matchedBy = "html:text-scan";
-      summary.plate = fromHtmlText;
-      debug.plate = summary.plate;
-    } else {
-      debug.note = "HTML var ama plaka yok";
-    }
+    debug.note = "HTML var ama guvenilir plaka alani bulunamadi";
 
     debug.revenueTry = summary.revenueTry;
     debug.revenueEur = summary.revenueEur;
@@ -1113,19 +1106,20 @@ async function probeOneOpsPlateByRideUuid(rideUuid) {
     const result = await fetchVehiclePlateFromUrl(url, headers);
     probes.push(result.debug);
     mergedSummary = mergeOneOpsSummary(mergedSummary, result.summary);
-    if (result.summary && result.summary.plate) {
-      return {
-        summary: mergedSummary,
-        probes,
-        note: "OneOps verisi bulundu.",
-      };
-    }
   }
+
+  const hasAnyData = Boolean(
+    mergedSummary.plate ||
+    mergedSummary.operatorName ||
+    mergedSummary.vehicleModel ||
+    mergedSummary.revenueTry != null ||
+    mergedSummary.revenueEur != null
+  );
 
   return {
     summary: mergedSummary,
     probes,
-    note: "OneOps verisi bulunamadi.",
+    note: hasAnyData ? "OneOps verisi bulundu." : "OneOps verisi bulunamadi.",
   };
 }
 
