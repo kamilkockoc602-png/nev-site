@@ -818,6 +818,34 @@ function extractPlateFromOneOpsAssignmentArea(htmlOrText) {
   return "";
 }
 
+function extractPlateNearChangeButton(htmlOrText) {
+  const text = htmlToPlainText(htmlOrText);
+  if (!text) {
+    return "";
+  }
+
+  // OneOps Vehicle Info genelde: "209756 - 34LSS22 - Tourismo ... Active ... Change"
+  const nearChangePattern = /([0-9]{2}[A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{1,8}[0-9]{2,6})[^\n]{0,160}?Change/i;
+  const nearChangeMatch = nearChangePattern.exec(text.replace(/\s+/g, " "));
+  if (nearChangeMatch) {
+    const normalized = normalizeVehiclePlate(nearChangeMatch[1]);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  // Vehicle Info satirinda tire ile ayrilan parca icinde plaka bulunur.
+  const vehicleInfoLine = /\b\d{3,8}\s*-\s*([0-9A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC\s-]{4,30})\s*-\s*[^\n]{0,140}/i.exec(text);
+  if (vehicleInfoLine) {
+    const normalized = normalizeVehiclePlate(vehicleInfoLine[1]);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
 async function fetchVehiclePlateFromUrl(url, headers) {
   try {
     const response = await fetch(url, {
@@ -847,6 +875,11 @@ async function fetchVehiclePlateFromUrl(url, headers) {
     }
 
     const text = await response.text();
+    const fromChangeArea = extractPlateNearChangeButton(text);
+    if (fromChangeArea) {
+      return fromChangeArea;
+    }
+
     const fromAssignmentArea = extractPlateFromOneOpsAssignmentArea(text);
     if (fromAssignmentArea) {
       return fromAssignmentArea;
