@@ -1688,10 +1688,14 @@ async function debugPlateByRideUuid() {
   const extractedTry = Number(result.extractedRevenueTry);
   const extractedEur = Number(result.extractedRevenueEur);
   const current = String(result.currentRow?.vehiclePlate || "").trim();
-  const firstProbe = Array.isArray(result.probes) && result.probes.length ? result.probes[0] : null;
-  const detail = firstProbe
-    ? ` | ilk endpoint: HTTP ${firstProbe.status || "-"}${firstProbe.matchedBy ? `, match=${firstProbe.matchedBy}` : ""}`
-    : "";
+  const probes = Array.isArray(result.probes) ? result.probes : [];
+  const successProbe = probes.find((p) => String(p?.matchedBy || "").trim()) || null;
+  const firstProbe = probes.length ? probes[0] : null;
+  const detail = successProbe
+    ? ` | eslesen endpoint: HTTP ${successProbe.status || "-"}, match=${successProbe.matchedBy}`
+    : (firstProbe
+      ? ` | ilk endpoint: HTTP ${firstProbe.status || "-"}${firstProbe.note ? `, not=${firstProbe.note}` : ""}`
+      : "");
 
   if (dom.reportingPlateDebugMsg) {
     if (extracted) {

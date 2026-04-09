@@ -960,6 +960,38 @@ function extractOneOpsSummaryFromPayload(payload) {
   return summary;
 }
 
+function extractJsonObjectsFromHtml(html) {
+  const source = String(html || "");
+  if (!source) {
+    return [];
+  }
+
+  const out = [];
+  const scriptPatterns = [
+    /<script[^>]*id=["']__NEXT_DATA__["'][^>]*>([\s\S]*?)<\/script>/gi,
+    /<script[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi,
+    /window\.__INITIAL_STATE__\s*=\s*({[\s\S]*?});/gi,
+    /window\.__PRELOADED_STATE__\s*=\s*({[\s\S]*?});/gi,
+  ];
+
+  for (const pattern of scriptPatterns) {
+    let match = pattern.exec(source);
+    while (match) {
+      const raw = String(match[1] || "").trim();
+      if (raw) {
+        try {
+          out.push(JSON.parse(raw));
+        } catch {
+          // Ignore non-JSON blobs.
+        }
+      }
+      match = pattern.exec(source);
+    }
+  }
+
+  return out;
+}
+
 async function fetchVehiclePlateFromUrl(url, headers) {
   const debug = {
     url,
@@ -1029,6 +1061,11 @@ async function fetchVehiclePlateFromUrl(url, headers) {
     }
 
     const text = await response.text();
+    const embeddedPayloads = extractJsonObjectsFromHtml(text);
+    for (const payload of embeddedPayloads) {
+      summary = mergeOneOpsSummary(summary, extractOneOpsSummaryFromPayload(payload));
+    }
+
     summary = mergeOneOpsSummary(summary, extractOneOpsSummaryFromText(text));
     const fromChangeArea = extractPlateNearChangeButton(text);
     if (fromChangeArea) {
@@ -1073,10 +1110,17 @@ function buildPlateProbeUrls(rideUuid) {
 
   return [
     `${oneOpsOrigin}/ops-portal/ride-control/ride/${encodeURIComponent(rideUuid)}`,
+    `${oneOpsOrigin}/ops-portal/ride-control/ride/${encodeURIComponent(rideUuid)}/summary`,
+    `${oneOpsOrigin}/ops-portal/ride-control/ride/${encodeURIComponent(rideUuid)}/vehicle-info`,
+    `${oneOpsOrigin}/ops-portal/ride-control/ride/${encodeURIComponent(rideUuid)}/revenue`,
     `${oneOpsOrigin}/ops-portal/ride-control/api/ride/${encodeURIComponent(rideUuid)}`,
+    `${oneOpsOrigin}/ops-portal/ride-control/api/rides/${encodeURIComponent(rideUuid)}`,
+    `${oneOpsOrigin}/ops-portal/api/ride-control/rides/${encodeURIComponent(rideUuid)}`,
     `${oneOpsOrigin}/ops-portal/api/ride-control/ride/${encodeURIComponent(rideUuid)}`,
     `${controlBaseOrigin}/ops-portal/ride-control/api/ride/${encodeURIComponent(rideUuid)}`,
+    `${controlBaseOrigin}/ops-portal/ride-control/api/rides/${encodeURIComponent(rideUuid)}`,
     `${controlBaseOrigin}/ride-control/api/ride/${encodeURIComponent(rideUuid)}`,
+    `${controlBaseOrigin}/ride-control/api/rides/${encodeURIComponent(rideUuid)}`,
     `${controlBaseOrigin}/api/ride-control/ride/${encodeURIComponent(rideUuid)}`,
   ];
 }
@@ -1329,7 +1373,7 @@ async function collectOperationsReportRows(reportDateIso) {
     const base = availabilityMaps.get(toStationId)?.get(rideUuid) || {};
     const timing = await fetchTripDetailsTiming(rideUuid, REPORTING_SOURCE.fromStationId, toStationId);
     const liveSnapshot = await fetchLiveTripSnapshot(rideUuid, REPORTING_SOURCE.fromStationId, toStationId);
-    let vehiclePlate = String(liveSnapshot.vehiclePlate || "").trim();
+    let vehiclePlate = "";
     let oneOpsSummary = emptyOneOpsSummary();
 
     if (!oneOpsSummaryCache.has(rideUuid)) {
@@ -1339,13 +1383,7 @@ async function collectOperationsReportRows(reportDateIso) {
     const oneOpsProbe = await oneOpsSummaryCache.get(rideUuid);
     oneOpsSummary = oneOpsProbe?.summary || emptyOneOpsSummary();
 
-    if (!vehiclePlate) {
-      vehiclePlate = String(oneOpsSummary.plate || "").trim();
-    }
-    if (oneOpsSummary.plate) {
-      // OneOps ekrani operasyonda tek dogru kaynak; varsa bununla ez.
-      vehiclePlate = String(oneOpsSummary.plate || "").trim();
-    }
+    vehiclePlate = String(oneOpsSummary.plate || "").trim();
 
     const operatorName = String(oneOpsSummary.operatorName || "").trim();
     const vehicleModel = String(oneOpsSummary.vehicleModel || "").trim();
