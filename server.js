@@ -678,25 +678,63 @@ function getOneOpsOrigin() {
   return "https://app.oneops.flixbus.com";
 }
 
-async function fetchOneOpsVehiclePlate(rideUuid) {
-  const cookieHeader = String(getMeta("control_cookie_header", "") || "").trim();
-  if (!cookieHeader) {
+function getControlBaseOrigin() {
+  const fromMeta = String(getMeta("control_base_url", "") || "").trim();
+  if (fromMeta) {
+    try {
+      return new URL(fromMeta).origin;
+    } catch {
+      // fallback below
+    }
+  }
+  return "https://backend.flixbus.com";
+}
+
+function extractVehiclePlateFromText(text) {
+  const source = String(text || "");
+  if (!source) {
     return "";
   }
 
-  const csrfToken = String(getMeta("control_csrf_token", "") || "").trim();
-  const origin = getOneOpsOrigin();
-  const url = `${origin}/ops-portal/ride-control/ride/${encodeURIComponent(rideUuid)}`;
+  const namedPatterns = [
+    /"licensePlate"\s*:\s*"([^"]+)"/gi,
+    /"vehiclePlate"\s*:\s*"([^"]+)"/gi,
+    /"plateNumber"\s*:\s*"([^"]+)"/gi,
+    /"registrationNumber"\s*:\s*"([^"]+)"/gi,
+    /"plaka"\s*:\s*"([^"]+)"/gi,
+    /"vehicle_registration_number"\s*:\s*"([^"]+)"/gi,
+    /\"licensePlate\"\s*:\s*\"([^\"]+)\"/gi,
+    /\"vehiclePlate\"\s*:\s*\"([^\"]+)\"/gi,
+  ];
 
+  for (const regex of namedPatterns) {
+    let match = regex.exec(source);
+    while (match) {
+      const normalized = normalizeVehiclePlate(match[1]);
+      if (normalized) {
+        return normalized;
+      }
+      match = regex.exec(source);
+    }
+  }
+
+  const freePattern = /\b\d{2}[\s-]?[A-Za-z\u00C7\u011E\u0130\u00D6\u015E\u00DC\u00E7\u011F\u0131\u00F6\u015F\u00FC]{1,3}[\s-]?\d{2,4}\b/g;
+  const freeMatches = source.match(freePattern) || [];
+  for (const value of freeMatches) {
+    const normalized = normalizeVehiclePlate(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return "";
+}
+
+async function fetchVehiclePlateFromUrl(url, headers) {
   try {
     const response = await fetch(url, {
       method: "GET",
-      headers: {
-        Cookie: cookieHeader,
-        "X-CSRF-Token": csrfToken,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        Accept: "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
-      },
+      headers,
       redirect: "follow",
     });
 
@@ -709,43 +747,58 @@ async function fetchOneOpsVehiclePlate(rideUuid) {
       return "";
     }
 
-    const html = await response.text();
-    if (!html) {
-      return "";
-    }
-
-    const jsonLikePatterns = [
-      /"licensePlate"\s*:\s*"([^"]+)"/gi,
-      /"vehiclePlate"\s*:\s*"([^"]+)"/gi,
-      /"plateNumber"\s*:\s*"([^"]+)"/gi,
-      /"registrationNumber"\s*:\s*"([^"]+)"/gi,
-      /"plaka"\s*:\s*"([^"]+)"/gi,
-    ];
-
-    for (const regex of jsonLikePatterns) {
-      let match = regex.exec(html);
-      while (match) {
-        const normalized = normalizeVehiclePlate(match[1]);
-        if (normalized) {
-          return normalized;
-        }
-        match = regex.exec(html);
+    const contentType = String(response.headers.get("content-type") || "").toLocaleLowerCase("tr-TR");
+    if (contentType.includes("application/json")) {
+      const payload = await response.json();
+      const fromPayload = extractVehiclePlateFromPayload(payload);
+      if (fromPayload) {
+        return fromPayload;
       }
+
+      return extractVehiclePlateFromText(JSON.stringify(payload || {}));
     }
 
-    const freePattern = /\b\d{2}\s?[A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{1,3}\s?\d{2,4}\b/g;
-    const freeMatches = html.match(freePattern) || [];
-    for (const value of freeMatches) {
-      const normalized = normalizeVehiclePlate(value);
-      if (normalized) {
-        return normalized;
-      }
-    }
-
-    return "";
+    const text = await response.text();
+    return extractVehiclePlateFromText(text);
   } catch {
     return "";
   }
+}
+
+async function fetchOneOpsVehiclePlate(rideUuid) {
+  const cookieHeader = String(getMeta("control_cookie_header", "") || "").trim();
+  if (!cookieHeader) {
+    return "";
+  }
+
+  const csrfToken = String(getMeta("control_csrf_token", "") || "").trim();
+  const oneOpsOrigin = getOneOpsOrigin();
+  const controlBaseOrigin = getControlBaseOrigin();
+
+  const probeUrls = [
+    `${oneOpsOrigin}/ops-portal/ride-control/ride/${encodeURIComponent(rideUuid)}`,
+    `${oneOpsOrigin}/ops-portal/ride-control/api/ride/${encodeURIComponent(rideUuid)}`,
+    `${oneOpsOrigin}/ops-portal/api/ride-control/ride/${encodeURIComponent(rideUuid)}`,
+    `${controlBaseOrigin}/ops-portal/ride-control/api/ride/${encodeURIComponent(rideUuid)}`,
+    `${controlBaseOrigin}/ride-control/api/ride/${encodeURIComponent(rideUuid)}`,
+    `${controlBaseOrigin}/api/ride-control/ride/${encodeURIComponent(rideUuid)}`,
+  ];
+
+  const headers = {
+    Cookie: cookieHeader,
+    "X-CSRF-Token": csrfToken,
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    Accept: "application/json,text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+  };
+
+  for (const url of probeUrls) {
+    const plate = await fetchVehiclePlateFromUrl(url, headers);
+    if (plate) {
+      return plate;
+    }
+  }
+
+  return "";
 }
 
 function toFiniteNumber(value) {
@@ -1958,7 +2011,7 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
         is_delayed = excluded.is_delayed,
         delay_minutes = excluded.delay_minutes,
         vehicle_plate = CASE
-          WHEN COALESCE(TRIM(operations_reports.vehicle_plate), '') = '' THEN excluded.vehicle_plate
+          WHEN COALESCE(TRIM(excluded.vehicle_plate), '') <> '' THEN excluded.vehicle_plate
           ELSE operations_reports.vehicle_plate
         END,
         payload_json = excluded.payload_json,
