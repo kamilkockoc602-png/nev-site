@@ -206,6 +206,7 @@ const MENUS = [
   "routes",
   "pricing",
   "reports",
+  "reporting",
   "ocr",
   "permissions",
   "logs",
@@ -295,6 +296,30 @@ CREATE TABLE IF NOT EXISTS pricing_notifications (
   created_at TEXT NOT NULL,
   is_read INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS operations_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  report_date TEXT NOT NULL,
+  origin_name TEXT NOT NULL,
+  destination_name TEXT NOT NULL,
+  route_label TEXT NOT NULL,
+  ride_uuid TEXT NOT NULL,
+  line_code TEXT,
+  trip_number TEXT,
+  departure_time TEXT,
+  arrival_time TEXT,
+  seats_available INTEGER,
+  occupancy_percent INTEGER,
+  occupancy_level TEXT,
+  is_delayed INTEGER NOT NULL DEFAULT 0,
+  delay_minutes INTEGER NOT NULL DEFAULT 0,
+  vehicle_plate TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  payload_json TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(report_date, ride_uuid)
+);
 `);
 
 const pricingItemColumns = db.prepare("PRAGMA table_info(pricing_upload_items)").all();
@@ -344,6 +369,135 @@ function nowStamp() {
   });
 }
 
+function toDotDate(dateText) {
+  const raw = String(dateText || "").trim();
+  const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) {
+    return "";
+  }
+  return `${m[3]}.${m[2]}.${m[1]}`;
+}
+
+function todayIsoInIstanbul() {
+  const raw = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Istanbul" });
+  const m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    return `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
+  }
+  return raw;
+}
+
+function parseIsoToStamp(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) {
+    return text;
+  }
+
+  return date.toLocaleString("tr-TR", {
+    timeZone: "Europe/Istanbul",
+    hour12: false,
+  });
+}
+
+function estimateOccupancyPercent(item) {
+  const seats = Number(item?.available?.seats);
+  if (Number.isFinite(seats)) {
+    const estimated = Math.round((1 - seats / 46) * 100);
+    return Math.max(0, Math.min(100, estimated));
+  }
+
+  const level = String(item?.remaining?.capacity || "").toLocaleLowerCase("tr-TR");
+  if (level === "low") return 85;
+  if (level === "medium") return 65;
+  if (level === "high") return 35;
+  return null;
+}
+
+const REPORTING_SOURCE = {
+  originName: "Siirt",
+  fromStationId: "45e1a606-8cd1-46bc-aebd-7f67a4909a4d",
+};
+
+const REPORTING_TARGETS = [
+  { destinationName: "Marmaris", toStationId: "66615e19-06cb-4c6f-93df-c3bf05b40e6a" },
+  { destinationName: "Antalya", toStationId: "9b6c0630-3ecb-11ea-8017-02437075395e" },
+  { destinationName: "Esenler", toStationId: "9b6a8316-3ecb-11ea-8017-02437075395e" },
+  { destinationName: "Ankara", toStationId: "9b6a837a-3ecb-11ea-8017-02437075395e" },
+  { destinationName: "Izmir", toStationId: "9b6a8396-3ecb-11ea-8017-02437075395e" },
+];
+
+async function fetchRouteReportRows(reportDateIso, origin, target) {
+  const dotDate = toDotDate(reportDateIso);
+  if (!dotDate) {
+    throw new Error("Rapor tarihi gecersiz.");
+  }
+
+  const params = new URLSearchParams({
+    from_station_id: origin.fromStationId,
+    to_station_id: target.toStationId,
+    departure_date: dotDate,
+    products: '{"adult":1}',
+    currency: "TRY",
+    locale: "tr",
+    search_by: "stations",
+    include_after_midnight_rides: "1",
+  });
+
+  const url = `https://global.api.flixbus.com/search/service/v4/search?${params.toString()}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`${origin.originName} - ${target.destinationName} seferleri alinamadi.`);
+  }
+
+  const data = await res.json();
+  const trips = Array.isArray(data?.trips) ? data.trips : [];
+  const rows = [];
+
+  for (const trip of trips) {
+    const resultObj = trip?.results && typeof trip.results === "object" ? trip.results : {};
+    for (const item of Object.values(resultObj)) {
+      if (!item || String(item?.status || "") === "unavailable") {
+        continue;
+      }
+
+      const leg = Array.isArray(item?.legs) && item.legs.length ? item.legs[0] : null;
+      const rideUuid = String(leg?.ride_id || "").trim();
+      if (!rideUuid) {
+        continue;
+      }
+
+      const departureTime = parseIsoToStamp(item?.departure?.date || "");
+      const arrivalTime = parseIsoToStamp(item?.arrival?.date || "");
+      const seatsAvailable = Number(item?.available?.seats);
+      const occupancyPercent = estimateOccupancyPercent(item);
+      const occupancyLevel = String(item?.remaining?.capacity || "").trim();
+
+      rows.push({
+        reportDate: reportDateIso,
+        originName: origin.originName,
+        destinationName: target.destinationName,
+        routeLabel: `${origin.originName} -> ${target.destinationName}`,
+        rideUuid,
+        lineCode: String(item?.transfer_type_key || "direct").trim(),
+        tripNumber: String(item?.uid || "").trim(),
+        departureTime,
+        arrivalTime,
+        seatsAvailable: Number.isFinite(seatsAvailable) ? seatsAvailable : null,
+        occupancyPercent: Number.isFinite(occupancyPercent) ? occupancyPercent : null,
+        occupancyLevel,
+        payloadJson: JSON.stringify(item),
+      });
+    }
+  }
+
+  return rows;
+}
+
 function defaultPermissions(fullAccess) {
   const entries = MENUS.map((menuKey) => {
     if (ADMIN_ONLY_MENUS.has(menuKey)) {
@@ -380,6 +534,43 @@ function ensureAdmin() {
 }
 
 ensureAdmin();
+
+const permissionRows = db
+  .prepare("SELECT id, is_admin, permissions FROM users")
+  .all();
+for (const row of permissionRows) {
+  let parsed = {};
+  try {
+    parsed = JSON.parse(row.permissions || "{}");
+  } catch {
+    parsed = {};
+  }
+
+  let changed = false;
+  for (const menuKey of MENUS) {
+    if (Object.prototype.hasOwnProperty.call(parsed, menuKey)) {
+      continue;
+    }
+
+    if (row.is_admin) {
+      parsed[menuKey] = true;
+    } else if (ADMIN_ONLY_MENUS.has(menuKey)) {
+      parsed[menuKey] = false;
+    } else if (menuKey === "dashboard") {
+      parsed[menuKey] = true;
+    } else if (menuKey === "reporting") {
+      parsed[menuKey] = Boolean(parsed.pricing || parsed.reports || parsed.routes);
+    } else {
+      parsed[menuKey] = false;
+    }
+    changed = true;
+  }
+
+  if (changed) {
+    db.prepare("UPDATE users SET permissions = ? WHERE id = ?")
+      .run(JSON.stringify(parsed), row.id);
+  }
+}
 
 function seedPricesIfEmpty() {
   const count = db.prepare("SELECT COUNT(*) AS total FROM route_prices").get().total;
@@ -1219,6 +1410,187 @@ app.post("/api/admin/prices/refresh", requireAuth, requireAdmin, async (req, res
   } catch (error) {
     res.status(500).json({ message: `Fiyatlar guncellenemedi: ${error.message}` });
   }
+});
+
+app.get("/api/operations-reports", requireAuth, (req, res) => {
+  const date = String(req.query.date || todayIsoInIstanbul()).trim();
+  const origin = String(req.query.origin || "Siirt").trim();
+
+  const rows = db
+    .prepare(
+      `
+      SELECT
+        id,
+        report_date,
+        origin_name,
+        destination_name,
+        route_label,
+        ride_uuid,
+        line_code,
+        trip_number,
+        departure_time,
+        arrival_time,
+        seats_available,
+        occupancy_percent,
+        occupancy_level,
+        is_delayed,
+        delay_minutes,
+        vehicle_plate,
+        note,
+        updated_at
+      FROM operations_reports
+      WHERE report_date = ? AND origin_name = ?
+      ORDER BY departure_time ASC, id ASC
+      `
+    )
+    .all(date, origin);
+
+  res.json({
+    date,
+    origin,
+    rows: rows.map((row) => ({
+      id: Number(row.id),
+      reportDate: row.report_date,
+      originName: row.origin_name,
+      destinationName: row.destination_name,
+      routeLabel: row.route_label,
+      rideUuid: row.ride_uuid,
+      lineCode: row.line_code || "",
+      tripNumber: row.trip_number || "",
+      departureTime: row.departure_time || "",
+      arrivalTime: row.arrival_time || "",
+      seatsAvailable: Number.isFinite(Number(row.seats_available)) ? Number(row.seats_available) : null,
+      occupancyPercent: Number.isFinite(Number(row.occupancy_percent)) ? Number(row.occupancy_percent) : null,
+      occupancyLevel: row.occupancy_level || "",
+      isDelayed: Boolean(row.is_delayed),
+      delayMinutes: Number(row.delay_minutes) || 0,
+      vehiclePlate: row.vehicle_plate || "",
+      note: row.note || "",
+      updatedAt: row.updated_at,
+    })),
+  });
+});
+
+app.post("/api/operations-reports/sync", requireAuth, async (req, res) => {
+  const reportDate = String(req.body?.date || todayIsoInIstanbul()).trim();
+  const dotDate = toDotDate(reportDate);
+  if (!dotDate) {
+    res.status(400).json({ message: "Rapor tarihi gecersiz." });
+    return;
+  }
+
+  try {
+    const collected = [];
+    for (const target of REPORTING_TARGETS) {
+      const routeRows = await fetchRouteReportRows(reportDate, REPORTING_SOURCE, target);
+      collected.push(...routeRows);
+    }
+
+    const upsert = db.prepare(
+      `
+      INSERT INTO operations_reports (
+        report_date,
+        origin_name,
+        destination_name,
+        route_label,
+        ride_uuid,
+        line_code,
+        trip_number,
+        departure_time,
+        arrival_time,
+        seats_available,
+        occupancy_percent,
+        occupancy_level,
+        is_delayed,
+        delay_minutes,
+        vehicle_plate,
+        note,
+        payload_json,
+        created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, '', '', ?, ?, ?)
+      ON CONFLICT(report_date, ride_uuid) DO UPDATE SET
+        destination_name = excluded.destination_name,
+        route_label = excluded.route_label,
+        line_code = excluded.line_code,
+        trip_number = excluded.trip_number,
+        departure_time = excluded.departure_time,
+        arrival_time = excluded.arrival_time,
+        seats_available = excluded.seats_available,
+        occupancy_percent = excluded.occupancy_percent,
+        occupancy_level = excluded.occupancy_level,
+        payload_json = excluded.payload_json,
+        updated_at = excluded.updated_at
+      `
+    );
+
+    const stamp = nowStamp();
+    const trx = db.transaction((rows) => {
+      for (const row of rows) {
+        upsert.run(
+          row.reportDate,
+          row.originName,
+          row.destinationName,
+          row.routeLabel,
+          row.rideUuid,
+          row.lineCode,
+          row.tripNumber,
+          row.departureTime,
+          row.arrivalTime,
+          row.seatsAvailable,
+          row.occupancyPercent,
+          row.occupancyLevel,
+          row.payloadJson,
+          stamp,
+          stamp
+        );
+      }
+    });
+    trx(collected);
+
+    addPricingNotification(
+      req.auth.user.username,
+      `${req.auth.user.username} raporlama verisini yeniledi (${reportDate}, ${collected.length} sefer).`
+    );
+
+    res.json({ ok: true, date: reportDate, count: collected.length });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Rapor verisi senkronize edilemedi." });
+  }
+});
+
+app.patch("/api/operations-reports/:id", requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ message: "Gecersiz rapor kaydi." });
+    return;
+  }
+
+  const delayMinutesRaw = Number(req.body?.delayMinutes);
+  const delayMinutes = Number.isFinite(delayMinutesRaw) ? Math.max(0, Math.round(delayMinutesRaw)) : 0;
+  const vehiclePlate = String(req.body?.vehiclePlate || "").trim().slice(0, 32);
+  const note = String(req.body?.note || "").trim().slice(0, 400);
+  const isDelayed = delayMinutes > 0 ? 1 : 0;
+
+  const found = db.prepare("SELECT id FROM operations_reports WHERE id = ?").get(id);
+  if (!found) {
+    res.status(404).json({ message: "Rapor kaydi bulunamadi." });
+    return;
+  }
+
+  db.prepare(
+    `
+    UPDATE operations_reports
+    SET delay_minutes = ?,
+        is_delayed = ?,
+        vehicle_plate = ?,
+        note = ?,
+        updated_at = ?
+    WHERE id = ?
+    `
+  ).run(delayMinutes, isDelayed, vehiclePlate, note, nowStamp(), id);
+
+  res.json({ ok: true });
 });
 
 app.get("/api/notifications", requireAuth, (req, res) => {

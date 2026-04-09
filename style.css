@@ -1248,6 +1248,47 @@ body[data-theme="dark"] .pricing-upload-table-wrap .data-table td:nth-child(2) {
   white-space: nowrap;
 }
 
+.reporting-toolbar {
+  margin-top: 0.75rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(180px, 240px)) minmax(220px, 1fr);
+  gap: 0.65rem;
+  align-items: end;
+}
+
+.reporting-toolbar-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.reporting-filter-row {
+  margin-top: 0.7rem;
+}
+
+.reporting-table input {
+  min-width: 0;
+  width: 100%;
+  padding: 0.42rem 0.52rem;
+  border-radius: 10px;
+  font-size: 0.82rem;
+}
+
+.reporting-table .report-delay-input {
+  min-width: 74px;
+}
+
+.reporting-table th:nth-child(4),
+.reporting-table th:nth-child(8),
+.reporting-table td:nth-child(4),
+.reporting-table td:nth-child(8) {
+  white-space: nowrap;
+}
+
+.reporting-table td:nth-child(6) {
+  font-weight: 700;
+}
+
 body[data-theme="dark"] .reports-table-wrap {
   border-color: rgba(156, 184, 204, 0.35);
   background: rgba(7, 22, 31, 0.96);
@@ -1270,6 +1311,12 @@ body[data-theme="dark"] .reports-table-wrap .data-table tbody tr:nth-child(even)
 
 body[data-theme="dark"] .reports-table-wrap .data-table td:nth-child(2) {
   color: #6ef2dd;
+}
+
+body[data-theme="dark"] .reporting-table input {
+  background: rgba(10, 27, 37, 0.7);
+  border-color: rgba(156, 184, 204, 0.32);
+  color: #d8e9f8;
 }
 
 .route-search {
@@ -1471,6 +1518,10 @@ body[data-theme="dark"] .reports-table-wrap .data-table td:nth-child(2) {
   }
 
   .pricing-upload-desc-editor {
+    grid-template-columns: 1fr;
+  }
+
+  .reporting-toolbar {
     grid-template-columns: 1fr;
   }
 

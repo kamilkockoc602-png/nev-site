@@ -207,6 +207,50 @@
           </div>
         </div>
 
+        <div id="panelReporting" class="panel-block hidden" data-menu="reporting">
+          <h4>Raporlama</h4>
+          <p class="subtle">Siirt kalkisli seferleri gunluk otomatik cek, rotar/plaka bilgisini kaydet ve doluluklari takip et.</p>
+
+          <div class="reporting-toolbar">
+            <label>
+              <span>Rapor Tarihi</span>
+              <input id="reportingDateInput" type="date" />
+            </label>
+            <label>
+              <span>Kalkis</span>
+              <input id="reportingOriginInput" type="text" value="Siirt" disabled />
+            </label>
+            <div class="reporting-toolbar-actions">
+              <button id="reportingSyncBtn" class="btn btn-primary" type="button">Gunluk Raporu Cek</button>
+              <button id="reportingRefreshBtn" class="btn btn-ghost" type="button">Yenile</button>
+            </div>
+          </div>
+
+          <div class="reporting-filter-row">
+            <input id="reportingFilterInput" type="text" placeholder="Sefer ara (ornek: Siirt -> Marmaris)" />
+          </div>
+
+          <p id="reportingSummary" class="subtle">Rapor verisi bekleniyor...</p>
+
+          <div class="reports-table-wrap">
+            <table class="data-table reporting-table">
+              <thead>
+                <tr>
+                  <th>Sefer</th>
+                  <th>Kalkis</th>
+                  <th>Varis</th>
+                  <th>Rotar</th>
+                  <th>Plaka</th>
+                  <th>Doluluk</th>
+                  <th>Not</th>
+                  <th>Kaydet</th>
+                </tr>
+              </thead>
+              <tbody id="reportingTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
         <div id="panelOcr" class="panel-block hidden" data-menu="ocr">
           <section class="ocr-tool">
             <h3>Fotograftan Excel Ciktisi</h3>

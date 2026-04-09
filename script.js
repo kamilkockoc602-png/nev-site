@@ -6,6 +6,7 @@ const MENUS = [
   { key: "routes", label: "Bakanlik Fiyati" },
   { key: "pricing", label: "Fiyat Yukleme" },
   { key: "reports", label: "Tek Yon Fiyatlar" },
+  { key: "reporting", label: "Raporlama" },
   { key: "ocr", label: "Foto Tarama" },
   { key: "permissions", label: "Yetki Menusu" },
   { key: "logs", label: "Giris Kayitlari" },
@@ -38,6 +39,13 @@ const dom = {
   reportSearchResetBtn: document.getElementById("reportSearchResetBtn"),
   reportSummary: document.getElementById("reportSummary"),
   reportTableBody: document.getElementById("reportTableBody"),
+  reportingDateInput: document.getElementById("reportingDateInput"),
+  reportingOriginInput: document.getElementById("reportingOriginInput"),
+  reportingSyncBtn: document.getElementById("reportingSyncBtn"),
+  reportingRefreshBtn: document.getElementById("reportingRefreshBtn"),
+  reportingFilterInput: document.getElementById("reportingFilterInput"),
+  reportingSummary: document.getElementById("reportingSummary"),
+  reportingTableBody: document.getElementById("reportingTableBody"),
   pricingUploadForm: document.getElementById("pricingUploadForm"),
   pricingDirectionType: document.getElementById("pricingDirectionType"),
   pricingValidFrom: document.getElementById("pricingValidFrom"),
@@ -86,6 +94,10 @@ const state = {
   tariffOffset: 0,
   tariffQuery: "",
   reportQuery: "",
+  reportingDate: "",
+  reportingOrigin: "Siirt",
+  reportingQuery: "",
+  reportingRows: [],
   tariffPageSize: 50,
   tariffSearchTimer: null,
   pricingUploads: [],
@@ -135,6 +147,14 @@ function normalizeSearchText(value) {
     .replace(/[^a-z0-9\s-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function todayIsoDate() {
+  const date = new Date();
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
 const KNOWN_DESTINATIONS = [
@@ -1493,6 +1513,101 @@ function renderReportsPanel() {
     : `Toplam ${rows.length} yuklenmis fiyat listeleniyor.`;
 }
 
+function renderReportingPanel() {
+  if (!dom.reportingTableBody || !dom.reportingSummary) {
+    return;
+  }
+
+  const query = normalizeSearchText(state.reportingQuery || "");
+  const allRows = Array.isArray(state.reportingRows) ? state.reportingRows : [];
+  const rows = query
+    ? allRows.filter((row) => normalizeSearchText(`${row.routeLabel} ${row.vehiclePlate || ""}`).includes(query))
+    : allRows;
+
+  dom.reportingTableBody.innerHTML = "";
+  if (!rows.length) {
+    dom.reportingTableBody.innerHTML = '<tr><td colspan="8">Bu tarihte rapor kaydi yok. Gunluk raporu cek butonuna bas.</td></tr>';
+    dom.reportingSummary.textContent = `${state.reportingDate || "-"} icin kayit bulunamadi.`;
+    return;
+  }
+
+  const delayedCount = rows.filter((row) => Number(row.delayMinutes) > 0).length;
+  dom.reportingSummary.textContent = `${state.reportingDate} icin ${rows.length} sefer listelendi. Rotarli sefer: ${delayedCount}.`;
+
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    const occupancyText = Number.isFinite(Number(row.occupancyPercent))
+      ? `%${Math.max(0, Math.min(100, Number(row.occupancyPercent)))}`
+      : (row.occupancyLevel || "-");
+
+    tr.innerHTML = `
+      <td>${escapeHtml(row.routeLabel || "-")}</td>
+      <td>${escapeHtml(row.departureTime || "-")}</td>
+      <td>${escapeHtml(row.arrivalTime || "-")}</td>
+      <td>
+        <input class="report-delay-input" type="number" min="0" step="1" value="${Number(row.delayMinutes) || 0}" />
+      </td>
+      <td>
+        <input class="report-plate-input" type="text" maxlength="32" value="${escapeHtml(row.vehiclePlate || "")}" placeholder="34 ABC 123" />
+      </td>
+      <td>${occupancyText}${Number.isFinite(Number(row.seatsAvailable)) ? ` (Bos: ${Number(row.seatsAvailable)})` : ""}</td>
+      <td>
+        <input class="report-note-input" type="text" maxlength="400" value="${escapeHtml(row.note || "")}" placeholder="Not" />
+      </td>
+      <td>
+        <button class="btn btn-small btn-ghost report-save-btn" type="button">Kaydet</button>
+      </td>
+    `;
+
+    tr.querySelector(".report-save-btn")?.addEventListener("click", async () => {
+      const delayInput = tr.querySelector(".report-delay-input");
+      const plateInput = tr.querySelector(".report-plate-input");
+      const noteInput = tr.querySelector(".report-note-input");
+
+      const payload = {
+        delayMinutes: Number(delayInput?.value || 0),
+        vehiclePlate: String(plateInput?.value || ""),
+        note: String(noteInput?.value || ""),
+      };
+
+      await apiFetch(`/api/operations-reports/${row.id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+
+      await refreshReportingData();
+    });
+
+    dom.reportingTableBody.appendChild(tr);
+  });
+}
+
+async function refreshReportingData() {
+  const date = String(state.reportingDate || todayIsoDate()).trim();
+  state.reportingDate = date;
+
+  const result = await apiFetch(`/api/operations-reports?date=${encodeURIComponent(date)}&origin=${encodeURIComponent(state.reportingOrigin)}`);
+  state.reportingRows = result.rows || [];
+  renderReportingPanel();
+}
+
+async function syncReportingData() {
+  const date = String(state.reportingDate || todayIsoDate()).trim();
+  state.reportingDate = date;
+
+  if (dom.reportingSummary) {
+    dom.reportingSummary.textContent = "Gunluk rapor cekiliyor...";
+  }
+
+  await apiFetch("/api/operations-reports/sync", {
+    method: "POST",
+    body: JSON.stringify({ date }),
+  });
+
+  await refreshReportingData();
+  await refreshNotificationsData();
+}
+
 async function refreshTariffData(query = "", append = false) {
   const q = String(query || "").trim();
   const nextOffset = append ? state.tariffOffset : 0;
@@ -2308,6 +2423,19 @@ async function activatePanel(menuKey) {
   if (menuKey === "reports") {
     renderReportsPanel();
   }
+
+  if (menuKey === "reporting") {
+    (async () => {
+      await refreshReportingData();
+      if (!state.reportingRows.length) {
+        await syncReportingData();
+      }
+    })().catch((error) => {
+      if (dom.reportingSummary) {
+        dom.reportingSummary.textContent = error.message || "Rapor verisi yuklenemedi.";
+      }
+    });
+  }
 }
 
 async function handleLogin(username, password) {
@@ -2732,6 +2860,39 @@ if (dom.reportSearchResetBtn) {
       dom.reportSearchInput.value = "";
     }
     renderReportsPanel();
+  });
+}
+
+if (dom.reportingDateInput) {
+  state.reportingDate = dom.reportingDateInput.value || todayIsoDate();
+  dom.reportingDateInput.value = state.reportingDate;
+
+  dom.reportingDateInput.addEventListener("change", () => {
+    state.reportingDate = dom.reportingDateInput.value || todayIsoDate();
+    refreshReportingData().catch(() => null);
+  });
+}
+
+if (dom.reportingFilterInput) {
+  dom.reportingFilterInput.addEventListener("input", () => {
+    state.reportingQuery = dom.reportingFilterInput.value || "";
+    renderReportingPanel();
+  });
+}
+
+if (dom.reportingRefreshBtn) {
+  dom.reportingRefreshBtn.addEventListener("click", () => {
+    refreshReportingData().catch(() => null);
+  });
+}
+
+if (dom.reportingSyncBtn) {
+  dom.reportingSyncBtn.addEventListener("click", () => {
+    syncReportingData().catch((error) => {
+      if (dom.reportingSummary) {
+        dom.reportingSummary.textContent = error.message || "Rapor senkronu basarisiz.";
+      }
+    });
   });
 }
 
