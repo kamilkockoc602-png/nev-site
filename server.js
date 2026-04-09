@@ -822,7 +822,7 @@ function extractPlateNearChangeButton(htmlOrText) {
 
   for (const src of sources) {
     // OneOps Vehicle Info genelde: "209756 - 34LSS22 - Tourismo ... Active ... Change"
-    const nearChangePattern = /([0-9]{2}[A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{2,8}[0-9]{2,6})[\s\S]{0,220}?Change/i;
+    const nearChangePattern = /([0-9]{2}[A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{2,8}[0-9]{2,6})[\s\S]{0,2000}?Change/i;
     const nearChangeMatch = nearChangePattern.exec(src);
     if (nearChangeMatch) {
       const normalized = normalizeVehiclePlate(nearChangeMatch[1]);
@@ -832,9 +832,18 @@ function extractPlateNearChangeButton(htmlOrText) {
     }
 
     // Vehicle Info satirinda tire ile ayrilan parca icinde plaka bulunur.
-    const vehicleInfoLine = /\b\d{3,8}\s*-\s*([0-9A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{6,20})\s*-\s*/i.exec(src);
+    const vehicleInfoLine = /\b\d{3,8}\s*[\-\u2013\u2014]\s*([0-9A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{6,20})\s*[\-\u2013\u2014]\s*/i.exec(src);
     if (vehicleInfoLine) {
       const normalized = normalizeVehiclePlate(vehicleInfoLine[1]);
+      if (normalized) {
+        return normalized;
+      }
+    }
+
+    // Bazi sayfalarda ayiraclar kaybolabiliyor: "209756 34LSS22 Tourismo..."
+    const compactLine = /\b\d{3,8}\s+([0-9]{2}[A-Z\u00C7\u011E\u0130\u00D6\u015E\u00DC]{2,8}[0-9]{2,6})\b/i.exec(src);
+    if (compactLine) {
+      const normalized = normalizeVehiclePlate(compactLine[1]);
       if (normalized) {
         return normalized;
       }
@@ -901,7 +910,7 @@ function extractOneOpsSummaryFromText(htmlOrText) {
 
   summary.plate = extractPlateNearChangeButton(raw) || extractPlateFromOneOpsAssignmentArea(raw) || "";
 
-  const tryBlockMatch = /Total\s*Revenue\s*\(TRY\)\s*:?\s*([\s\S]{0,60}?)(?:Total\s*Revenue\s*\(EUR\)|$)/i.exec(text);
+  const tryBlockMatch = /Total\s*Revenue\s*\(TRY\)\s*:?[\s\u00A0]*([\s\S]{0,120}?)(?:Total\s*Revenue\s*\(EUR\)|$)/i.exec(text);
   if (tryBlockMatch) {
     const amount = parseMoneyAmount(tryBlockMatch[1]);
     if (amount != null) {
@@ -909,7 +918,7 @@ function extractOneOpsSummaryFromText(htmlOrText) {
     }
   }
 
-  const eurBlockMatch = /Total\s*Revenue\s*\(EUR\)\s*:?\s*([\s\S]{0,40}?)(?:$|Comments|Vehicle\s*Info|Radar)/i.exec(text);
+  const eurBlockMatch = /Total\s*Revenue\s*\(EUR\)\s*:?[\s\u00A0]*([\s\S]{0,120}?)(?:$|Comments|Vehicle\s*Info|Radar)/i.exec(text);
   if (eurBlockMatch) {
     const amount = parseMoneyAmount(eurBlockMatch[1]);
     if (amount != null) {
@@ -1384,6 +1393,17 @@ async function collectOperationsReportRows(reportDateIso) {
     oneOpsSummary = oneOpsProbe?.summary || emptyOneOpsSummary();
 
     vehiclePlate = String(oneOpsSummary.plate || "").trim();
+
+    const hasAnyOneOpsData = Boolean(
+      oneOpsSummary.operatorName ||
+      oneOpsSummary.vehicleModel ||
+      oneOpsSummary.revenueTry != null ||
+      oneOpsSummary.revenueEur != null
+    );
+    if (hasAnyOneOpsData && !vehiclePlate) {
+      // OneOps'a erisip plaka bulamadiysak eski yanlis plakayi temizlemek icin bos gec.
+      vehiclePlate = "";
+    }
 
     const operatorName = String(oneOpsSummary.operatorName || "").trim();
     const vehicleModel = String(oneOpsSummary.vehicleModel || "").trim();
@@ -2409,6 +2429,12 @@ async function syncOperationsReportsForDate(reportDate, options = {}) {
         delay_minutes = excluded.delay_minutes,
         vehicle_plate = CASE
           WHEN COALESCE(TRIM(excluded.vehicle_plate), '') <> '' THEN excluded.vehicle_plate
+          WHEN (
+            COALESCE(TRIM(excluded.operator_name), '') <> '' OR
+            COALESCE(TRIM(excluded.vehicle_model), '') <> '' OR
+            excluded.revenue_try IS NOT NULL OR
+            excluded.revenue_eur IS NOT NULL
+          ) THEN ''
           WHEN COALESCE(TRIM(operations_reports.vehicle_plate), '') = '' THEN ''
           WHEN operations_reports.vehicle_plate GLOB '[0-9][0-9] [A-Z] [0-9]' THEN ''
           ELSE operations_reports.vehicle_plate
