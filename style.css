@@ -167,25 +167,37 @@ button {
 .login-core::after {
   content: "";
   position: absolute;
-  inset: -1px;
+  inset: -2px;
   border-radius: 18px;
   pointer-events: none;
 }
 
 .login-core::before {
-  background:
-    linear-gradient(90deg, rgba(117, 244, 255, 0.95), rgba(117, 244, 255, 0.1)) top left / 54px 2px no-repeat,
-    linear-gradient(0deg, rgba(117, 244, 255, 0.95), rgba(117, 244, 255, 0.1)) top left / 2px 54px no-repeat,
-    linear-gradient(-90deg, rgba(255, 86, 144, 0.95), rgba(255, 86, 144, 0.1)) bottom right / 54px 2px no-repeat,
-    linear-gradient(180deg, rgba(255, 86, 144, 0.95), rgba(255, 86, 144, 0.1)) bottom right / 2px 54px no-repeat;
-  opacity: 0.85;
+  border: 1px solid rgba(126, 157, 201, 0.25);
+  opacity: 1;
 }
 
 .login-core::after {
-  background: radial-gradient(circle at center, rgba(31, 133, 169, 0.35), rgba(31, 133, 169, 0));
-  filter: blur(14px);
-  opacity: 0;
-  transition: opacity 0.3s ease;
+  background:
+    conic-gradient(
+      from 0deg,
+      transparent 0deg 22deg,
+      rgba(116, 241, 255, 0.92) 22deg 36deg,
+      transparent 36deg 120deg,
+      rgba(255, 95, 153, 0.92) 120deg 134deg,
+      transparent 134deg 210deg,
+      rgba(116, 241, 255, 0.88) 210deg 224deg,
+      transparent 224deg 300deg,
+      rgba(255, 95, 153, 0.9) 300deg 314deg,
+      transparent 314deg 360deg
+    );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  padding: 2px;
+  filter: drop-shadow(0 0 8px rgba(114, 236, 255, 0.45)) drop-shadow(0 0 8px rgba(255, 95, 153, 0.32));
+  animation: edgeChase 3.6s linear infinite;
+  opacity: 0.98;
 }
 
 .login-orbit:hover {
@@ -206,6 +218,7 @@ button {
 .login-orbit:hover .login-core::after,
 .login-orbit:focus-within .login-core::after {
   opacity: 1;
+  animation-duration: 2.2s;
 }
 
 .login-orbit:hover .login-core::before,
@@ -298,6 +311,15 @@ h1 {
   }
   50% {
     filter: drop-shadow(0 0 13px rgba(255, 86, 144, 0.28));
+  }
+}
+
+@keyframes edgeChase {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
   }
 }
 
