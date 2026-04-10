@@ -150,27 +150,19 @@ button {
 }
 
 .login-ring {
+  --ring-angle: 0deg;
   position: absolute;
   width: 560px;
   height: 560px;
   border-radius: 50%;
-  background: repeating-conic-gradient(from 0deg, rgba(112, 149, 211, 0.44) 0deg 2.8deg, transparent 2.8deg 9deg);
+  background:
+    repeating-conic-gradient(from 0deg, rgba(112, 149, 211, 0.44) 0deg 2.8deg, transparent 2.8deg 9deg),
+    conic-gradient(from var(--ring-angle), transparent 0deg 298deg, rgba(109, 236, 255, 0.35) 306deg 320deg, rgba(138, 246, 255, 0.98) 320deg 338deg, rgba(109, 236, 255, 0.35) 338deg 352deg, transparent 352deg 360deg);
+  background-blend-mode: normal, screen;
   -webkit-mask: radial-gradient(circle, transparent 47%, #000 48%);
   mask: radial-gradient(circle, transparent 47%, #000 48%);
-  animation: none;
-  filter: drop-shadow(0 0 18px rgba(84, 213, 255, 0.2));
-}
-
-.login-ring::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 50%;
-  background: repeating-conic-gradient(from 0deg, rgba(124, 242, 255, 0.98) 0deg 2.8deg, transparent 2.8deg 9deg);
-  -webkit-mask: conic-gradient(from 0deg, transparent 0deg 300deg, #000 309deg 345deg, transparent 354deg 360deg);
-  mask: conic-gradient(from 0deg, transparent 0deg 300deg, #000 309deg 345deg, transparent 354deg 360deg);
-  animation: orbitSweep 4.8s linear infinite;
-  filter: drop-shadow(0 0 12px rgba(124, 242, 255, 0.72));
+  animation: ringHighlightSpin 4.8s linear infinite, ringShimmer 2.1s ease-in-out infinite;
+  filter: drop-shadow(0 0 18px rgba(84, 213, 255, 0.22));
 }
 
 .login-core {
@@ -273,12 +265,28 @@ h1 {
   }
 }
 
-@keyframes orbitSweep {
+@property --ring-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes ringHighlightSpin {
   from {
-    transform: rotate(0deg);
+    --ring-angle: 0deg;
   }
   to {
-    transform: rotate(360deg);
+    --ring-angle: 360deg;
+  }
+}
+
+@keyframes ringShimmer {
+  0%,
+  100% {
+    opacity: 0.94;
+  }
+  50% {
+    opacity: 1;
   }
 }
 
