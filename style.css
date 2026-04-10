@@ -129,7 +129,7 @@ button {
 
 .login-orbit {
   order: 2;
-  min-height: 620px;
+  min-height: 420px;
   display: grid;
   place-items: center;
   position: relative;
@@ -149,58 +149,93 @@ button {
   pointer-events: none;
 }
 
-.login-ring {
-  --ring-angle: 0deg;
-  position: absolute;
-  width: 560px;
-  height: 560px;
-  border-radius: 50%;
-  background:
-    repeating-conic-gradient(from 0deg, rgba(112, 149, 211, 0.44) 0deg 2.8deg, transparent 2.8deg 9deg),
-    conic-gradient(from var(--ring-angle), transparent 0deg 298deg, rgba(109, 236, 255, 0.35) 306deg 320deg, rgba(138, 246, 255, 0.98) 320deg 338deg, rgba(109, 236, 255, 0.35) 338deg 352deg, transparent 352deg 360deg);
-  background-blend-mode: normal, screen;
-  -webkit-mask: radial-gradient(circle, transparent 47%, #000 48%);
-  mask: radial-gradient(circle, transparent 47%, #000 48%);
-  animation: ringHighlightSpin 4.8s linear infinite, ringShimmer 2.1s ease-in-out infinite;
-  filter: drop-shadow(0 0 18px rgba(84, 213, 255, 0.22));
-}
-
 .login-core {
-  width: min(360px, 90%);
+  width: min(280px, 86%);
+  min-height: 96px;
   position: relative;
   z-index: 1;
-  border: 1px solid var(--stroke);
-  border-radius: 24px;
-  background: linear-gradient(165deg, rgba(9, 38, 58, 0.9), rgba(14, 31, 48, 0.85));
+  border: 1px solid rgba(118, 147, 191, 0.42);
+  border-radius: 18px;
+  background: linear-gradient(165deg, rgba(13, 24, 44, 0.94), rgba(20, 24, 41, 0.94));
   box-shadow: 0 18px 34px rgba(8, 18, 36, 0.35);
-  padding: 1.4rem 1.2rem;
+  padding: 1.05rem 1rem;
   color: #d9efff;
-  transition: transform 0.28s ease, box-shadow 0.28s ease;
+  transition: width 0.34s ease, min-height 0.34s ease, padding 0.34s ease, border-color 0.28s ease, transform 0.28s ease, box-shadow 0.28s ease;
+}
+
+.login-core::before,
+.login-core::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: 18px;
+  pointer-events: none;
+}
+
+.login-core::before {
+  background:
+    linear-gradient(90deg, rgba(117, 244, 255, 0.95), rgba(117, 244, 255, 0.1)) top left / 54px 2px no-repeat,
+    linear-gradient(0deg, rgba(117, 244, 255, 0.95), rgba(117, 244, 255, 0.1)) top left / 2px 54px no-repeat,
+    linear-gradient(-90deg, rgba(255, 86, 144, 0.95), rgba(255, 86, 144, 0.1)) bottom right / 54px 2px no-repeat,
+    linear-gradient(180deg, rgba(255, 86, 144, 0.95), rgba(255, 86, 144, 0.1)) bottom right / 2px 54px no-repeat;
+  opacity: 0.85;
+}
+
+.login-core::after {
+  background: radial-gradient(circle at center, rgba(31, 133, 169, 0.35), rgba(31, 133, 169, 0));
+  filter: blur(14px);
+  opacity: 0;
+  transition: opacity 0.3s ease;
 }
 
 .login-orbit:hover {
-  transform: translateY(-3px);
+  transform: translateY(-2px);
   border-color: rgba(123, 223, 247, 0.55);
   box-shadow: 0 28px 54px rgba(12, 33, 57, 0.34);
 }
 
-.login-orbit:hover .login-core {
-  transform: scale(1.015);
-  box-shadow: 0 22px 44px rgba(10, 31, 56, 0.42);
+.login-orbit:hover .login-core,
+.login-orbit:focus-within .login-core {
+  width: min(360px, 92%);
+  min-height: 320px;
+  padding: 1.25rem 1.1rem;
+  border-color: rgba(117, 244, 255, 0.52);
+  box-shadow: 0 24px 46px rgba(10, 31, 56, 0.46);
 }
 
-.login-orbit:hover .login-ring {
-  filter: drop-shadow(0 0 28px rgba(113, 236, 255, 0.4));
+.login-orbit:hover .login-core::after,
+.login-orbit:focus-within .login-core::after {
+  opacity: 1;
+}
+
+.login-orbit:hover .login-core::before,
+.login-orbit:focus-within .login-core::before {
+  animation: loginFramePulse 2.1s linear infinite;
 }
 
 .login-core h2 {
-  margin: 0.1rem 0 0.8rem;
+  margin: 0.15rem 0 0.25rem;
   text-align: center;
   color: #d9efff;
+  letter-spacing: 0.06em;
 }
 
 .login-form-stack {
-  margin-top: 0.3rem;
+  margin-top: 0.25rem;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transform: translateY(6px);
+  transition: max-height 0.34s ease, opacity 0.25s ease, transform 0.25s ease;
+}
+
+.login-orbit:hover .login-form-stack,
+.login-orbit:focus-within .login-form-stack {
+  max-height: 360px;
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .login-form-stack label span {
@@ -256,37 +291,13 @@ h1 {
   margin-top: 1.4rem;
 }
 
-@keyframes orbitSpin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@property --ring-angle {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
-
-@keyframes ringHighlightSpin {
-  from {
-    --ring-angle: 0deg;
-  }
-  to {
-    --ring-angle: 360deg;
-  }
-}
-
-@keyframes ringShimmer {
+@keyframes loginFramePulse {
   0%,
   100% {
-    opacity: 0.94;
+    filter: drop-shadow(0 0 8px rgba(117, 244, 255, 0.24));
   }
   50% {
-    opacity: 1;
+    filter: drop-shadow(0 0 13px rgba(255, 86, 144, 0.28));
   }
 }
 
@@ -1713,17 +1724,21 @@ body[data-theme="dark"] .delay-badge-late {
 
   .login-orbit {
     order: 2;
-    min-height: 520px;
+    min-height: 390px;
     padding: 0.8rem;
-  }
-
-  .login-ring {
-    width: 470px;
-    height: 470px;
   }
 
   .login-core {
     width: min(360px, 94%);
+    min-height: 320px;
+    padding: 1.2rem 1rem;
+  }
+
+  .login-form-stack {
+    max-height: 360px;
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
   }
 
   .view {
@@ -1806,16 +1821,12 @@ body[data-theme="dark"] .delay-badge-late {
 
 @media (max-width: 560px) {
   .login-orbit {
-    min-height: 460px;
-  }
-
-  .login-ring {
-    width: 390px;
-    height: 390px;
+    min-height: 350px;
   }
 
   .login-core {
     border-radius: 20px;
     padding: 1.1rem 0.9rem;
+    min-height: 305px;
   }
 }
