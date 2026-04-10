@@ -17,26 +17,33 @@
 
   <main class="app-shell">
     <section id="loginView" class="view active">
-      <div class="login-panel card fade-up">
-        <h1>Talep Edilen Fiyatlar</h1>
-        <p class="subtle">
-          
-        </p>
+      <div class="login-shell fade-up">
+        <div class="login-copy">
+          <p class="eyebrow">Kamilkoc Revenue Console</p>
+          <h1>Animasyonlu Giris Ekrani</h1>
+          <p class="subtle">Kullanici adi ve sifre ile giris yap. Dairesel animasyon aktif oturum ekranini canli hissettirir.</p>
+        </div>
 
-        <form id="loginForm" class="form-stack" autocomplete="off">
-          <label>
-            <span>Kullanici Adi</span>
-            <input id="loginUsername" type="text" placeholder="ornek: admin" required />
-          </label>
+        <div class="login-orbit card">
+          <div class="login-ring" aria-hidden="true"></div>
+          <div class="login-core">
+            <h2>Login</h2>
+            <form id="loginForm" class="form-stack login-form-stack" autocomplete="off">
+              <label>
+                <span>Kullanici Adi</span>
+                <input id="loginUsername" type="text" placeholder="ornek: admin" required />
+              </label>
 
-          <label>
-            <span>Sifre</span>
-            <input id="loginPassword" type="password" placeholder="Sifre" required />
-          </label>
+              <label>
+                <span>Sifre</span>
+                <input id="loginPassword" type="password" placeholder="Sifre" required />
+              </label>
 
-          <button type="submit" class="btn btn-primary">Giris Yap</button>
-          <p id="loginMessage" class="message"></p>
-        </form>
+              <button type="submit" class="btn btn-primary">Giris Yap</button>
+              <p id="loginMessage" class="message"></p>
+            </form>
+          </div>
+        </div>
       </div>
     </section>
 
