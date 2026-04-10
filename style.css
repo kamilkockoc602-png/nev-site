@@ -138,6 +138,34 @@ button {
   transition: transform 0.28s ease, box-shadow 0.28s ease, border-color 0.28s ease;
 }
 
+.login-orbit::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: 22px;
+  pointer-events: none;
+  background:
+    conic-gradient(
+      from 0deg,
+      transparent 0deg 18deg,
+      rgba(116, 241, 255, 0.95) 18deg 30deg,
+      transparent 30deg 108deg,
+      rgba(255, 95, 153, 0.95) 108deg 120deg,
+      transparent 120deg 198deg,
+      rgba(116, 241, 255, 0.92) 198deg 210deg,
+      transparent 210deg 288deg,
+      rgba(255, 95, 153, 0.92) 288deg 300deg,
+      transparent 300deg 360deg
+    );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  padding: 2px;
+  opacity: 0.95;
+  filter: drop-shadow(0 0 8px rgba(114, 236, 255, 0.42)) drop-shadow(0 0 8px rgba(255, 95, 153, 0.3));
+  animation: edgeChase 3.4s linear infinite;
+}
+
 .login-orbit::after {
   content: "";
   position: absolute;
@@ -178,26 +206,10 @@ button {
 }
 
 .login-core::after {
-  background:
-    conic-gradient(
-      from 0deg,
-      transparent 0deg 22deg,
-      rgba(116, 241, 255, 0.92) 22deg 36deg,
-      transparent 36deg 120deg,
-      rgba(255, 95, 153, 0.92) 120deg 134deg,
-      transparent 134deg 210deg,
-      rgba(116, 241, 255, 0.88) 210deg 224deg,
-      transparent 224deg 300deg,
-      rgba(255, 95, 153, 0.9) 300deg 314deg,
-      transparent 314deg 360deg
-    );
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  padding: 2px;
-  filter: drop-shadow(0 0 8px rgba(114, 236, 255, 0.45)) drop-shadow(0 0 8px rgba(255, 95, 153, 0.32));
-  animation: edgeChase 3.6s linear infinite;
-  opacity: 0.98;
+  background: radial-gradient(circle at center, rgba(31, 133, 169, 0.3), rgba(31, 133, 169, 0));
+  filter: blur(14px);
+  opacity: 0;
+  transition: opacity 0.3s ease;
 }
 
 .login-orbit:hover {
@@ -218,12 +230,12 @@ button {
 .login-orbit:hover .login-core::after,
 .login-orbit:focus-within .login-core::after {
   opacity: 1;
-  animation-duration: 2.2s;
 }
 
-.login-orbit:hover .login-core::before,
-.login-orbit:focus-within .login-core::before {
-  animation: loginFramePulse 2.1s linear infinite;
+.login-orbit:hover::before,
+.login-orbit:focus-within::before {
+  animation-duration: 2.1s;
+  filter: drop-shadow(0 0 10px rgba(114, 236, 255, 0.5)) drop-shadow(0 0 10px rgba(255, 95, 153, 0.36));
 }
 
 .login-core h2 {
@@ -302,16 +314,6 @@ h1 {
   display: grid;
   gap: 0.95rem;
   margin-top: 1.4rem;
-}
-
-@keyframes loginFramePulse {
-  0%,
-  100% {
-    filter: drop-shadow(0 0 8px rgba(117, 244, 255, 0.24));
-  }
-  50% {
-    filter: drop-shadow(0 0 13px rgba(255, 86, 144, 0.28));
-  }
 }
 
 @keyframes edgeChase {
