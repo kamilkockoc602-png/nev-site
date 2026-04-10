@@ -108,16 +108,19 @@ button {
 }
 
 .login-shell {
-  width: min(760px, 100%);
+  width: min(1120px, 100%);
   margin: 0 auto;
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 0;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.2rem;
   align-items: center;
 }
 
 .login-copy {
+  order: 1;
   padding: 1.4rem 1.1rem;
+  max-width: 520px;
+  text-align: left;
 }
 
 .login-copy h1 {
@@ -125,12 +128,14 @@ button {
 }
 
 .login-orbit {
+  order: 2;
   min-height: 620px;
   display: grid;
   place-items: center;
   position: relative;
   overflow: hidden;
   padding: 1.4rem;
+  transition: transform 0.28s ease, box-shadow 0.28s ease, border-color 0.28s ease;
 }
 
 .login-orbit::after {
@@ -149,12 +154,22 @@ button {
   width: 520px;
   height: 520px;
   border-radius: 50%;
-  background:
-    radial-gradient(circle at center, transparent 53%, rgba(61, 194, 178, 0.18) 54%, transparent 57%),
-    repeating-conic-gradient(from 0deg, rgba(138, 214, 255, 0.92) 0deg 2.6deg, rgba(138, 214, 255, 0.08) 2.6deg 7.5deg);
+  background: repeating-conic-gradient(from 0deg, rgba(112, 149, 211, 0.44) 0deg 2.8deg, transparent 2.8deg 9deg);
+  -webkit-mask: radial-gradient(circle, transparent 47%, #000 48%);
   mask: radial-gradient(circle, transparent 47%, #000 48%);
   animation: orbitSpin 11s linear infinite;
-  filter: drop-shadow(0 0 24px rgba(84, 213, 255, 0.34));
+  filter: drop-shadow(0 0 24px rgba(84, 213, 255, 0.26));
+}
+
+.login-ring::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, transparent 0deg 295deg, rgba(92, 229, 255, 0.42) 295deg 318deg, rgba(124, 242, 255, 0.96) 318deg 342deg, rgba(92, 229, 255, 0.42) 342deg 360deg);
+  -webkit-mask: radial-gradient(circle, transparent 47%, #000 48%);
+  mask: radial-gradient(circle, transparent 47%, #000 48%);
+  animation: orbitSpin 4.8s linear infinite;
 }
 
 .login-core {
@@ -167,6 +182,22 @@ button {
   box-shadow: 0 18px 34px rgba(8, 18, 36, 0.35);
   padding: 1.4rem 1.2rem;
   color: #d9efff;
+  transition: transform 0.28s ease, box-shadow 0.28s ease;
+}
+
+.login-orbit:hover {
+  transform: translateY(-3px);
+  border-color: rgba(123, 223, 247, 0.55);
+  box-shadow: 0 28px 54px rgba(12, 33, 57, 0.34);
+}
+
+.login-orbit:hover .login-core {
+  transform: scale(1.015);
+  box-shadow: 0 22px 44px rgba(10, 31, 56, 0.42);
+}
+
+.login-orbit:hover .login-ring {
+  filter: drop-shadow(0 0 28px rgba(113, 236, 255, 0.4));
 }
 
 .login-core h2 {
@@ -1652,10 +1683,18 @@ body[data-theme="dark"] .delay-badge-late {
 @media (max-width: 960px) {
   .login-shell {
     grid-template-columns: 1fr;
-    gap: 0;
+    gap: 0.8rem;
+  }
+
+  .login-copy {
+    order: 1;
+    padding: 0.4rem 0.4rem;
+    max-width: none;
+    text-align: left;
   }
 
   .login-orbit {
+    order: 2;
     min-height: 520px;
     padding: 0.8rem;
   }
@@ -1733,6 +1772,19 @@ body[data-theme="dark"] .delay-badge-late {
     margin-left: 0;
   }
 
+  .route-search {
+    grid-template-columns: 1fr;
+  }
+
+  .ocr-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .notif-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
 
 @media (max-width: 560px) {
   .login-orbit {
@@ -1747,18 +1799,5 @@ body[data-theme="dark"] .delay-badge-late {
   .login-core {
     border-radius: 20px;
     padding: 1.1rem 0.9rem;
-  }
-}
-  .route-search {
-    grid-template-columns: 1fr;
-  }
-
-  .ocr-form-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .notif-head {
-    flex-direction: column;
-    align-items: flex-start;
   }
 }
