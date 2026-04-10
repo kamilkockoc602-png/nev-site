@@ -138,45 +138,6 @@ button {
   transition: transform 0.28s ease, box-shadow 0.28s ease, border-color 0.28s ease;
 }
 
-.login-orbit::before {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border-radius: 22px;
-  pointer-events: none;
-  background:
-    conic-gradient(
-      from 0deg,
-      transparent 0deg 18deg,
-      rgba(116, 241, 255, 0.95) 18deg 30deg,
-      transparent 30deg 108deg,
-      rgba(255, 95, 153, 0.95) 108deg 120deg,
-      transparent 120deg 198deg,
-      rgba(116, 241, 255, 0.92) 198deg 210deg,
-      transparent 210deg 288deg,
-      rgba(255, 95, 153, 0.92) 288deg 300deg,
-      transparent 300deg 360deg
-    );
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  padding: 2px;
-  opacity: 0.95;
-  filter: drop-shadow(0 0 8px rgba(114, 236, 255, 0.42)) drop-shadow(0 0 8px rgba(255, 95, 153, 0.3));
-  animation: edgeChase 3.4s linear infinite;
-}
-
-.login-orbit::after {
-  content: "";
-  position: absolute;
-  inset: auto -160px -160px auto;
-  width: 320px;
-  height: 320px;
-  border-radius: 50%;
-  background: radial-gradient(circle, rgba(15, 157, 143, 0.18), rgba(15, 157, 143, 0));
-  pointer-events: none;
-}
-
 .login-core {
   width: min(280px, 86%);
   min-height: 96px;
@@ -189,27 +150,6 @@ button {
   padding: 1.05rem 1rem;
   color: #d9efff;
   transition: width 0.34s ease, min-height 0.34s ease, padding 0.34s ease, border-color 0.28s ease, transform 0.28s ease, box-shadow 0.28s ease;
-}
-
-.login-core::before,
-.login-core::after {
-  content: "";
-  position: absolute;
-  inset: -2px;
-  border-radius: 18px;
-  pointer-events: none;
-}
-
-.login-core::before {
-  border: 1px solid rgba(126, 157, 201, 0.25);
-  opacity: 1;
-}
-
-.login-core::after {
-  background: radial-gradient(circle at center, rgba(31, 133, 169, 0.3), rgba(31, 133, 169, 0));
-  filter: blur(14px);
-  opacity: 0;
-  transition: opacity 0.3s ease;
 }
 
 .login-orbit:hover {
@@ -227,16 +167,6 @@ button {
   box-shadow: 0 24px 46px rgba(10, 31, 56, 0.46);
 }
 
-.login-orbit:hover .login-core::after,
-.login-orbit:focus-within .login-core::after {
-  opacity: 1;
-}
-
-.login-orbit:hover::before,
-.login-orbit:focus-within::before {
-  animation-duration: 2.1s;
-  filter: drop-shadow(0 0 10px rgba(114, 236, 255, 0.5)) drop-shadow(0 0 10px rgba(255, 95, 153, 0.36));
-}
 
 .login-core h2 {
   margin: 0.15rem 0 0.25rem;
@@ -314,15 +244,6 @@ h1 {
   display: grid;
   gap: 0.95rem;
   margin-top: 1.4rem;
-}
-
-@keyframes edgeChase {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 label {
