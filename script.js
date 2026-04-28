@@ -3238,6 +3238,13 @@ function saveErrors(errors) {
   localStorage.setItem(ERRORS_KEY, JSON.stringify(errors));
 }
 
+window.deleteError = function(id) {
+  if (!confirm("Bu hatali islemi silmek istediginize emin misiniz?")) return;
+  const errors = loadErrors().filter(err => err.id !== id);
+  saveErrors(errors);
+  renderErrorList();
+};
+
 function renderErrorList() {
   if (!dom.errorListArea) return;
   const errors = loadErrors();
@@ -3248,14 +3255,17 @@ function renderErrorList() {
   
   dom.errorListArea.innerHTML = errors.map(err => {
     const photosHtml = Array.isArray(err.photos) 
-      ? err.photos.map(p => `<div class="error-photo-wrap"><img src="${p}" alt="Kanit" onclick="window.open().document.write('<img src=\\'${p}\\' style=\\'max-width:100%\\'>')" /></div>`).join("")
+      ? err.photos.map(p => `<div class="error-photo-wrap"><img src="${p}" alt="Foto" onclick="window.open().document.write('<img src=\\'${p}\\' style=\\'max-width:100%\\'>')" /></div>`).join("")
       : "";
     
     return `
       <div class="error-card fade-up">
         <div class="error-card-header">
-          <span class="error-card-title">${err.user || "Bilinmiyor"} (Islemi Yapan)</span>
-          <span class="error-card-meta">${new Date(err.date).toLocaleString("tr-TR")}</span>
+          <div>
+            <span class="error-card-title">${err.user || "Bilinmiyor"} (Islemi Yapan)</span>
+            <span class="error-card-meta" style="margin-left: 0.5rem;">${new Date(err.date).toLocaleString("tr-TR")}</span>
+          </div>
+          <button type="button" class="btn btn-small btn-ghost" style="color:#d64545; padding: 0.2rem 0.5rem;" onclick="window.deleteError(${err.id})">Sil</button>
         </div>
         <div class="error-card-desc">${err.desc}</div>
         <div class="error-photos">${photosHtml}</div>
