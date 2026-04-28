@@ -281,52 +281,38 @@
         </div>
 
         <div id="panelOneops" class="panel-block hidden" data-menu="oneops">
-          <h4>OneOps Giris</h4>
-          <p class="subtle">OneOps oturum bilgilerini bu ekrandan yonetebilirsin. Kayitli cookie/session bilgisi ayni sekilde korunur.</p>
+          <h4>Hatali Islemler</h4>
+          <p class="subtle">Hatali islem tespiti durumunda aciklamali fotograf yukleyebilirsin.</p>
 
-          <section class="control-guide-wrap" style="margin-top:1rem;">
-            <h5>OneOps Giris Yardimcisi</h5>
-            <p class="subtle">Buradan OneOps sekmesini acip giris yapabilirsin. Gerekli cookie/session bilgisini ayni yerde kaydedebilirsin.</p>
-
-            <div class="actions">
-              <button id="controlOpenLoginBtn" type="button" class="btn btn-primary">OneOps Giris Sayfasini Ac</button>
-              <button id="controlOpenOpsBtn" type="button" class="btn btn-ghost">OneOps Sekmesini Ac</button>
-            </div>
-
-            <div class="control-form-grid" style="margin-top:.7rem;">
+          <section class="error-report-wrap" style="margin-top:1rem;">
+            <h5>Yeni Bildirim Ekle</h5>
+            <form id="errorReportForm" class="form-stack" autocomplete="off" style="margin-top:.7rem;">
               <label>
-                <span>Control Base URL</span>
-                <input id="controlBaseUrlInput" type="text" placeholder="https://backend.flixbus.com" />
+                <span>Aciklama</span>
+                <textarea id="errorDescInput" rows="2" placeholder="Islem detayini veya durumu aciklayin" required></textarea>
               </label>
 
-              <label>
-                <span>OneOps Login URL</span>
-                <input id="controlLoginUrlInput" type="text" placeholder="https://app.oneops.flixbus.com/users/login" />
-              </label>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <label>
+                  <span>Islemi Yapan (Ad Soyad)</span>
+                  <input id="errorUserInput" type="text" placeholder="Ornek: Hasan Hazer" required />
+                </label>
+                <label>
+                  <span>Kanit Fotograflar (Coklu secim)</span>
+                  <input id="errorPhotosInput" type="file" accept="image/*" multiple required />
+                </label>
+              </div>
 
-              <label class="control-wide-field">
-                <span>Cookie / Session Header</span>
-                <textarea id="controlCookieInput" rows="3" placeholder="ornek: hJSessionUser=...; msal.cache.encryption=... "></textarea>
-              </label>
+              <button id="errorSubmitBtn" type="submit" class="btn btn-primary" style="margin-top:.5rem;">Kaydet ve Yukle</button>
+              <p id="errorUploadMsg" class="message"></p>
+            </form>
+          </section>
 
-              <label class="control-wide-field">
-                <span>CSRF Token (opsiyonel)</span>
-                <input id="controlCsrfInput" type="text" placeholder="X-CSRF-Token" />
-              </label>
-
-              <label class="control-wide-field">
-                <span>Oturum Test URL</span>
-                <input id="controlSessionTestUrlInput" type="text" placeholder="https://app.oneops.flixbus.com/ops-portal/" />
-              </label>
+          <section class="error-list-wrap" style="margin-top:2rem;">
+            <h5>Gecmis Bildirimler</h5>
+            <div id="errorListArea" class="error-grid" style="margin-top:.7rem;">
+              <p class="subtle">Henuz yuklenmis bir hatali islem bulunmuyor.</p>
             </div>
-
-            <div class="actions" style="margin-top:.6rem;">
-              <button id="controlSaveBtn" type="button" class="btn btn-primary">OneOps Bilgilerini Kaydet</button>
-              <button id="controlTestBtn" type="button" class="btn btn-ghost">Oturumu Test Et</button>
-              <button id="controlReloadBtn" type="button" class="btn btn-ghost">Durumu Yenile</button>
-            </div>
-
-            <p id="controlStatusMsg" class="message"></p>
           </section>
         </div>
 

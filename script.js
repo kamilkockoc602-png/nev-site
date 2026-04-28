@@ -1,4 +1,4 @@
-﻿const TOKEN_KEY = "bus_auth_token_v2";
+const TOKEN_KEY = "bus_auth_token_v2";
 const THEME_KEY = "bus_theme_v1";
 
 const MENUS = [
@@ -7,7 +7,7 @@ const MENUS = [
   { key: "pricing", label: "Fiyat Yukleme" },
   { key: "reports", label: "Tek Yon Fiyatlar" },
   { key: "reporting", label: "Raporlama" },
-  { key: "oneops", label: "OneOps Giris" },
+  { key: "oneops", label: "Hatali Islemler" },
   { key: "ocr", label: "Foto Tarama" },
   { key: "permissions", label: "Yetki Menusu" },
   { key: "logs", label: "Giris Kayitlari" },
@@ -53,17 +53,12 @@ const dom = {
   reportingRevenueCount: document.getElementById("reportingRevenueCount"),
   reportingSummary: document.getElementById("reportingSummary"),
   reportingTableBody: document.getElementById("reportingTableBody"),
-  controlOpenLoginBtn: document.getElementById("controlOpenLoginBtn"),
-  controlOpenOpsBtn: document.getElementById("controlOpenOpsBtn"),
-  controlBaseUrlInput: document.getElementById("controlBaseUrlInput"),
-  controlLoginUrlInput: document.getElementById("controlLoginUrlInput"),
-  controlCookieInput: document.getElementById("controlCookieInput"),
-  controlCsrfInput: document.getElementById("controlCsrfInput"),
-  controlSessionTestUrlInput: document.getElementById("controlSessionTestUrlInput"),
-  controlSaveBtn: document.getElementById("controlSaveBtn"),
-  controlTestBtn: document.getElementById("controlTestBtn"),
-  controlReloadBtn: document.getElementById("controlReloadBtn"),
-  controlStatusMsg: document.getElementById("controlStatusMsg"),
+  errorReportForm: document.getElementById("errorReportForm"),
+  errorDescInput: document.getElementById("errorDescInput"),
+  errorUserInput: document.getElementById("errorUserInput"),
+  errorPhotosInput: document.getElementById("errorPhotosInput"),
+  errorUploadMsg: document.getElementById("errorUploadMsg"),
+  errorListArea: document.getElementById("errorListArea"),
   pricingUploadForm: document.getElementById("pricingUploadForm"),
   pricingDirectionType: document.getElementById("pricingDirectionType"),
   pricingValidFrom: document.getElementById("pricingValidFrom"),
@@ -1760,36 +1755,8 @@ async function refreshControlIntegrationData() {
 }
 
 async function renderControlIntegrationPanel() {
-  if (!dom.controlStatusMsg) {
-    return;
-  }
-
-  try {
-    const result = await refreshControlIntegrationData();
-
-    if (dom.controlBaseUrlInput) {
-      dom.controlBaseUrlInput.value = result.baseUrl || "https://backend.flixbus.com";
-    }
-    if (dom.controlLoginUrlInput) {
-      dom.controlLoginUrlInput.value = result.loginUrl || "https://app.oneops.flixbus.com/users/login";
-    }
-    if (dom.controlCookieInput) {
-      dom.controlCookieInput.value = result.cookieHeader || "";
-    }
-    if (dom.controlCsrfInput) {
-      dom.controlCsrfInput.value = result.csrfToken || "";
-    }
-    if (dom.controlSessionTestUrlInput) {
-      dom.controlSessionTestUrlInput.value = result.sessionTestUrl || "https://app.oneops.flixbus.com/ops-portal/";
-    }
-
-    dom.controlStatusMsg.style.color = "var(--muted)";
-    dom.controlStatusMsg.textContent = result.hasCookie
-      ? `OneOps oturumu kayitli. Son guncelleme: ${result.updatedAt || "-"}`
-      : "OneOps oturumu henuz kaydedilmedi.";
-  } catch (error) {
-    dom.controlStatusMsg.style.color = "#d64545";
-    dom.controlStatusMsg.textContent = error.message || "OneOps bilgileri yuklenemedi.";
+  if (typeof renderErrorList === "function") {
+    renderErrorList();
   }
 }
 
@@ -3255,3 +3222,102 @@ if (dom.ocrApplyReviewBtn) {
 
 applyTheme(state.theme);
 verifySession();
+
+const ERRORS_KEY = "bus_errors_v1";
+
+function loadErrors() {
+  try {
+    const data = localStorage.getItem(ERRORS_KEY);
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveErrors(errors) {
+  localStorage.setItem(ERRORS_KEY, JSON.stringify(errors));
+}
+
+function renderErrorList() {
+  if (!dom.errorListArea) return;
+  const errors = loadErrors();
+  if (!errors.length) {
+    dom.errorListArea.innerHTML = '<p class="subtle">Henuz yuklenmis bir hatali islem bulunmuyor.</p>';
+    return;
+  }
+  
+  dom.errorListArea.innerHTML = errors.map(err => {
+    const photosHtml = Array.isArray(err.photos) 
+      ? err.photos.map(p => `<div class="error-photo-wrap"><img src="${p}" alt="Kanit" onclick="window.open().document.write('<img src=\\'${p}\\' style=\\'max-width:100%\\'>')" /></div>`).join("")
+      : "";
+    
+    return `
+      <div class="error-card fade-up">
+        <div class="error-card-header">
+          <span class="error-card-title">${err.user || "Bilinmiyor"} (Islemi Yapan)</span>
+          <span class="error-card-meta">${new Date(err.date).toLocaleString("tr-TR")}</span>
+        </div>
+        <div class="error-card-desc">${err.desc}</div>
+        <div class="error-photos">${photosHtml}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+if (dom.errorReportForm) {
+  dom.errorReportForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const desc = dom.errorDescInput?.value.trim() || "";
+    const user = dom.errorUserInput?.value.trim() || "";
+    const files = dom.errorPhotosInput?.files || [];
+    
+    if (!desc || !user || !files.length) return;
+    
+    if (dom.errorUploadMsg) {
+      dom.errorUploadMsg.style.color = "var(--muted)";
+      dom.errorUploadMsg.textContent = "Fotograflar isleniyor, lutfen bekleyin...";
+    }
+    
+    try {
+      const photos = [];
+      for (const file of files) {
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        photos.push(base64);
+      }
+      
+      const errors = loadErrors();
+      errors.unshift({
+        id: Date.now(),
+        date: new Date().toISOString(),
+        desc,
+        user,
+        photos
+      });
+      
+      saveErrors(errors);
+      
+      dom.errorReportForm.reset();
+      if (dom.errorUploadMsg) {
+        dom.errorUploadMsg.style.color = "#1f7a1f";
+        dom.errorUploadMsg.textContent = "Gonderim basarili!";
+      }
+      
+      renderErrorList();
+      setTimeout(() => {
+        if (dom.errorUploadMsg && dom.errorUploadMsg.textContent === "Gonderim basarili!") {
+          dom.errorUploadMsg.textContent = "";
+        }
+      }, 3000);
+    } catch(err) {
+      if (dom.errorUploadMsg) {
+        dom.errorUploadMsg.style.color = "#d64545";
+        dom.errorUploadMsg.textContent = "Yukleme sirasinda hata olustu.";
+      }
+    }
+  });
+}
