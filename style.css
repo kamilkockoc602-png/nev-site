@@ -61,13 +61,13 @@ button {
 }
 
 .orb-1 {
-  background: #ffd4a3;
+  background: radial-gradient(circle, #ff7f32 0%, transparent 70%);
   top: -8rem;
   left: -10rem;
 }
 
 .orb-2 {
-  background: #9bd7d1;
+  background: radial-gradient(circle, #0f9d8f 0%, transparent 70%);
   right: -12rem;
   bottom: -10rem;
   animation-delay: 2s;
@@ -114,6 +114,7 @@ button {
   grid-template-columns: 1fr 1fr;
   gap: 1.2rem;
   align-items: center;
+  animation: fadeUp 1s ease-out;
 }
 
 .login-copy {
@@ -125,6 +126,12 @@ button {
 
 .login-copy h1 {
   margin-top: 0.4rem;
+  background: linear-gradient(135deg, var(--ink), var(--accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 800;
+  line-height: 1.1;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.05));
 }
 
 .login-orbit {
@@ -149,6 +156,8 @@ button {
   box-shadow: 0 18px 34px rgba(8, 18, 36, 0.35);
   padding: 1.05rem 1rem;
   color: #d9efff;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   transition: width 0.34s ease, min-height 0.34s ease, padding 0.34s ease, border-color 0.28s ease, transform 0.28s ease, box-shadow 0.28s ease;
 }
 
