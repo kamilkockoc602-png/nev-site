@@ -1,6 +1,11 @@
 const TOKEN_KEY = "bus_auth_token_v2";
 const THEME_KEY = "bus_theme_v1";
 
+// Eski kalıcı oturumları temizle (isteğe bağlı güvenlik önlemi)
+if (localStorage.getItem(TOKEN_KEY)) {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
 const MENUS = [
   { key: "dashboard", label: "Genel Panel" },
   { key: "routes", label: "Bakanlik Fiyati" },
@@ -97,7 +102,7 @@ const dom = {
 };
 
 const state = {
-  token: localStorage.getItem(TOKEN_KEY) || "",
+  token: sessionStorage.getItem(TOKEN_KEY) || "",
   currentUser: null,
   usersCache: [],
   prices: [],
@@ -1187,9 +1192,9 @@ function toggleTheme() {
 function setToken(token) {
   state.token = token || "";
   if (state.token) {
-    localStorage.setItem(TOKEN_KEY, state.token);
+    sessionStorage.setItem(TOKEN_KEY, state.token);
   } else {
-    localStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
   }
 }
 
