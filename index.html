@@ -284,20 +284,31 @@
           <p class="subtle">Hatali islem tespiti durumunda aciklamali fotograf yukleyebilirsin.</p>
 
           <section class="error-report-wrap" style="margin-top:1rem;">
-            <h5>Yeni Bildirim Ekle</h5>
+            <div class="card-head">
+              <h5>Yeni Bildirim Ekle</h5>
+            </div>
             <form id="errorReportForm" class="form-stack" autocomplete="off" style="margin-top:.7rem;">
               <label>
                 <span>Aciklama</span>
                 <textarea id="errorDescInput" rows="2" placeholder="Islem detayini veya durumu aciklayin" required></textarea>
               </label>
 
-              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+              <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem;">
                 <label>
-                  <span>Islemi Yapan (Ad Soyad)</span>
-                  <input id="errorUserInput" type="text" placeholder="Ornek: Hasan Hazer" required />
+                  <span>Islemi Yapan</span>
+                  <input id="errorUserInput" type="text" placeholder="Ad Soyad" required />
                 </label>
                 <label>
-                  <span>Fotograf (Coklu secim)</span>
+                  <span>Aciliyet</span>
+                  <select id="errorPriorityInput">
+                    <option value="Dusuk">Dusuk</option>
+                    <option value="Orta" selected>Orta</option>
+                    <option value="Yuksek">Yuksek</option>
+                    <option value="Kritik">Kritik</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Fotograflar</span>
                   <input id="errorPhotosInput" type="file" accept="image/*" multiple required />
                 </label>
               </div>
@@ -308,8 +319,11 @@
           </section>
 
           <section class="error-list-wrap" style="margin-top:2rem;">
-            <h5>Gecmis Bildirimler</h5>
-            <div id="errorListArea" class="error-grid" style="margin-top:.7rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+              <h5>Gecmis Bildirimler</h5>
+              <input id="errorSearchInput" type="text" placeholder="Bildirimlerde ara..." style="max-width: 240px; padding: 0.5rem;" />
+            </div>
+            <div id="errorListArea" class="error-grid">
               <p class="subtle">Henuz yuklenmis bir hatali islem bulunmuyor.</p>
             </div>
           </section>

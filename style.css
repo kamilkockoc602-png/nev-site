@@ -1795,10 +1795,16 @@ body[data-theme="dark"] .delay-badge-late {
   background: var(--surface-soft);
   border: 1px solid var(--stroke);
   border-radius: 14px;
-  padding: 1rem;
+  padding: 1.2rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.8rem;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.03);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.error-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.06);
 }
 .error-card-header {
   display: flex;
@@ -1807,13 +1813,53 @@ body[data-theme="dark"] .delay-badge-late {
 }
 .error-card-title {
   font-weight: 700;
-  font-size: 1rem;
+  font-size: 1.05rem;
   color: var(--ink);
+  display: block;
+}
+.error-card-user-info {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.user-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 1.1rem;
 }
 .error-card-meta {
   color: var(--muted);
-  font-size: 0.85rem;
+  font-size: 0.82rem;
+  display: block;
+  margin-top: 0.1rem;
 }
+.error-card-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.badge {
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.priority-dusuk { background: #e3f2fd; color: #1e88e5; }
+.priority-orta { background: #fff3e0; color: #fb8c00; }
+.priority-yuksek { background: #fbe9e7; color: #d84315; }
+.priority-kritik { background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
+
+.status-yeni { background: #f3e5f5; color: #8e24aa; }
+.status-inceleniyor { background: #e0f2f1; color: #00897b; }
+.status-cozuldu { background: #e8f5e9; color: #2e7d32; }
 .error-card-desc {
   font-size: 0.95rem;
   margin-top: 0.2rem;
@@ -1842,5 +1888,14 @@ body[data-theme="dark"] .delay-badge-late {
 }
 .error-photo-wrap img:hover {
   transform: scale(1.05);
+}
+
+.error-card-footer {
+  margin-top: 0.5rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--stroke);
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
 }
 

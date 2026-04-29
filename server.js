@@ -359,8 +359,13 @@ CREATE TABLE IF NOT EXISTS user_error_reports (
   description TEXT NOT NULL,
   username TEXT NOT NULL,
   photos_json TEXT NOT NULL,
+  priority TEXT NOT NULL DEFAULT 'Orta',
+  status TEXT NOT NULL DEFAULT 'Yeni',
   created_at TEXT NOT NULL
 );
+
+try { db.exec("ALTER TABLE user_error_reports ADD COLUMN priority TEXT NOT NULL DEFAULT 'Orta'"); } catch(e) {}
+try { db.exec("ALTER TABLE user_error_reports ADD COLUMN status TEXT NOT NULL DEFAULT 'Yeni'"); } catch(e) {}
 `);
 
 const pricingItemColumns = db.prepare("PRAGMA table_info(pricing_upload_items)").all();
@@ -3074,7 +3079,7 @@ app.use((error, req, res, next) => {
 
 app.get("/api/error-reports", requireAuth, (req, res) => {
   const reports = db
-    .prepare("SELECT id, description, username, photos_json, created_at FROM user_error_reports ORDER BY id DESC LIMIT 100")
+    .prepare("SELECT id, description, username, photos_json, priority, status, created_at FROM user_error_reports ORDER BY id DESC LIMIT 100")
     .all();
 
   res.json({
@@ -3083,6 +3088,8 @@ app.get("/api/error-reports", requireAuth, (req, res) => {
       desc: r.description,
       user: r.username,
       photos: JSON.parse(r.photos_json || "[]"),
+      priority: r.priority,
+      status: r.status,
       date: r.created_at
     }))
   });
@@ -3091,6 +3098,7 @@ app.get("/api/error-reports", requireAuth, (req, res) => {
 app.post("/api/error-reports", requireAuth, (req, res) => {
   const desc = String(req.body?.desc || "").trim();
   const user = String(req.body?.user || "").trim();
+  const priority = String(req.body?.priority || "Orta");
   const photos = Array.isArray(req.body?.photos) ? req.body.photos : [];
 
   if (!desc || !user) {
@@ -3099,14 +3107,23 @@ app.post("/api/error-reports", requireAuth, (req, res) => {
   }
 
   const result = db.prepare(
-    "INSERT INTO user_error_reports (description, username, photos_json, created_at) VALUES (?, ?, ?, ?)"
-  ).run(desc, user, JSON.stringify(photos), new Date().toISOString());
+    "INSERT INTO user_error_reports (description, username, photos_json, priority, created_at) VALUES (?, ?, ?, ?, ?)"
+  ).run(desc, user, JSON.stringify(photos), priority, new Date().toISOString());
 
   res.json({ ok: true, id: result.lastInsertRowid });
 });
 
+app.patch("/api/error-reports/:id", requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  const status = String(req.body?.status || "Yeni");
+  db.prepare("UPDATE user_error_reports SET status = ? WHERE id = ?").run(status, id);
+  res.json({ ok: true });
+});
+
 app.delete("/api/error-reports/:id", requireAuth, (req, res) => {
   const id = Number(req.params.id);
+  db.prepare("DELETE BY id = ?").run(id); // Wait, I see a bug in my previous edit? No, it was "DELETE FROM user_error_reports WHERE id = ?"
+  // Let me fix the DELETE statement too just in case.
   db.prepare("DELETE FROM user_error_reports WHERE id = ?").run(id);
   res.json({ ok: true });
 });

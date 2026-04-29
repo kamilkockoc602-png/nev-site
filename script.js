@@ -99,6 +99,8 @@ const dom = {
   ocrReviewPanel: document.getElementById("ocrReviewPanel"),
   ocrReviewBody: document.getElementById("ocrReviewBody"),
   ocrApplyReviewBtn: document.getElementById("ocrApplyReviewBtn"),
+  errorPriorityInput: document.getElementById("errorPriorityInput"),
+  errorSearchInput: document.getElementById("errorSearchInput"),
 };
 
 const state = {
@@ -3238,13 +3240,34 @@ window.deleteError = async function(id) {
   }
 };
 
+window.updateErrorStatus = async function(id, status) {
+  try {
+    await apiFetch(`/api/error-reports/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status })
+    });
+    renderErrorList();
+  } catch (err) {
+    alert("Durum guncellenemedi: " + err.message);
+  }
+};
+
 async function renderErrorList() {
   if (!dom.errorListArea) return;
   try {
     const data = await apiFetch("/api/error-reports");
-    const errors = data.errors || [];
+    let errors = data.errors || [];
+    
+    const query = dom.errorSearchInput?.value.trim().toLowerCase() || "";
+    if (query) {
+      errors = errors.filter(err => 
+        err.desc.toLowerCase().includes(query) || 
+        err.user.toLowerCase().includes(query)
+      );
+    }
+
     if (!errors.length) {
-      dom.errorListArea.innerHTML = '<p class="subtle">Henuz yuklenmis bir hatali islem bulunmuyor.</p>';
+      dom.errorListArea.innerHTML = '<p class="subtle">Henuz yuklenmis veya kriterlere uygun bir hatali islem bulunmuyor.</p>';
       return;
     }
     
@@ -3253,23 +3276,43 @@ async function renderErrorList() {
         ? err.photos.map(p => `<div class="error-photo-wrap"><img src="${p}" alt="Foto" onclick="window.open().document.write('<img src=\\'${p}\\' style=\\'max-width:100%\\'>')" /></div>`).join("")
         : "";
       
+      const priorityClass = `priority-${(err.priority || "Orta").toLowerCase()}`;
+      const statusClass = `status-${(err.status || "Yeni").toLowerCase().replace(/\s/g, '-')}`;
+
       return `
         <div class="error-card fade-up">
           <div class="error-card-header">
-            <div>
-              <span class="error-card-title">${err.user || "Bilinmiyor"} (Islemi Yapan)</span>
-              <span class="error-card-meta" style="margin-left: 0.5rem;">${new Date(err.date).toLocaleString("tr-TR")}</span>
+            <div class="error-card-user-info">
+              <div class="user-avatar">${(err.user || "B").charAt(0).toUpperCase()}</div>
+              <div>
+                <span class="error-card-title">${err.user || "Bilinmiyor"}</span>
+                <span class="error-card-meta">${new Date(err.date).toLocaleString("tr-TR")}</span>
+              </div>
             </div>
-            <button type="button" class="btn btn-small btn-ghost" style="color:#d64545; padding: 0.2rem 0.5rem;" onclick="window.deleteError(${err.id})">Sil</button>
+            <div class="error-card-badges">
+              <span class="badge ${priorityClass}">${err.priority || "Orta"}</span>
+              <span class="badge ${statusClass}">${err.status || "Yeni"}</span>
+              <button type="button" class="btn btn-small btn-ghost" style="color:#d64545; border:none;" onclick="window.deleteError(${err.id})">Sil</button>
+            </div>
           </div>
           <div class="error-card-desc">${err.desc}</div>
           <div class="error-photos">${photosHtml}</div>
+          <div class="error-card-footer">
+            <button class="btn btn-small btn-ghost" onclick="window.updateErrorStatus(${err.id}, 'Inceleniyor')">Inceleniyor Yap</button>
+            <button class="btn btn-small btn-ghost" onclick="window.updateErrorStatus(${err.id}, 'Cozuldu')">Cozuldu Yap</button>
+          </div>
         </div>
       `;
     }).join("");
   } catch (err) {
     dom.errorListArea.innerHTML = '<p class="subtle" style="color:#d64545;">Hatalar yuklenemedi.</p>';
   }
+}
+
+if (dom.errorSearchInput) {
+  dom.errorSearchInput.addEventListener("input", () => {
+    renderErrorList();
+  });
 }
 
 if (dom.errorReportForm) {
@@ -3303,6 +3346,7 @@ if (dom.errorReportForm) {
         body: JSON.stringify({
           desc,
           user,
+          priority: dom.errorPriorityInput?.value || "Orta",
           photos
         })
       });
