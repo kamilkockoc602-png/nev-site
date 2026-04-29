@@ -3290,17 +3290,11 @@ async function renderErrorList() {
               </div>
             </div>
             <div class="error-card-badges">
-              <span class="badge ${priorityClass}">${err.priority || "Orta"}</span>
-              <span class="badge ${statusClass}">${err.status || "Yeni"}</span>
               <button type="button" class="btn btn-small btn-ghost" style="color:#d64545; border:none;" onclick="window.deleteError(${err.id})">Sil</button>
             </div>
           </div>
           <div class="error-card-desc">${err.desc}</div>
           <div class="error-photos">${photosHtml}</div>
-          <div class="error-card-footer">
-            <button class="btn btn-small btn-ghost" onclick="window.updateErrorStatus(${err.id}, 'Inceleniyor')">Inceleniyor Yap</button>
-            <button class="btn btn-small btn-ghost" onclick="window.updateErrorStatus(${err.id}, 'Cozuldu')">Cozuldu Yap</button>
-          </div>
         </div>
       `;
     }).join("");
