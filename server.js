@@ -353,6 +353,14 @@ CREATE TABLE IF NOT EXISTS operations_reports (
   updated_at TEXT NOT NULL,
   UNIQUE(report_date, ride_uuid)
 );
+
+CREATE TABLE IF NOT EXISTS user_error_reports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  description TEXT NOT NULL,
+  username TEXT NOT NULL,
+  photos_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `);
 
 const pricingItemColumns = db.prepare("PRAGMA table_info(pricing_upload_items)").all();
@@ -3062,6 +3070,45 @@ app.use((error, req, res, next) => {
   }
 
   next();
+});
+
+app.get("/api/error-reports", requireAuth, (req, res) => {
+  const reports = db
+    .prepare("SELECT id, description, username, photos_json, created_at FROM user_error_reports ORDER BY id DESC LIMIT 100")
+    .all();
+
+  res.json({
+    errors: reports.map(r => ({
+      id: r.id,
+      desc: r.description,
+      user: r.username,
+      photos: JSON.parse(r.photos_json || "[]"),
+      date: r.created_at
+    }))
+  });
+});
+
+app.post("/api/error-reports", requireAuth, (req, res) => {
+  const desc = String(req.body?.desc || "").trim();
+  const user = String(req.body?.user || "").trim();
+  const photos = Array.isArray(req.body?.photos) ? req.body.photos : [];
+
+  if (!desc || !user) {
+    res.status(400).json({ message: "Aciklama ve kullanici adi zorunlu." });
+    return;
+  }
+
+  const result = db.prepare(
+    "INSERT INTO user_error_reports (description, username, photos_json, created_at) VALUES (?, ?, ?, ?)"
+  ).run(desc, user, JSON.stringify(photos), new Date().toISOString());
+
+  res.json({ ok: true, id: result.lastInsertRowid });
+});
+
+app.delete("/api/error-reports/:id", requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  db.prepare("DELETE FROM user_error_reports WHERE id = ?").run(id);
+  res.json({ ok: true });
 });
 
 app.listen(PORT, () => {

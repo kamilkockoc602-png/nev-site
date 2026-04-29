@@ -3223,55 +3223,48 @@ if (dom.ocrApplyReviewBtn) {
 applyTheme(state.theme);
 verifySession();
 
-const ERRORS_KEY = "bus_errors_v1";
-
-function loadErrors() {
-  try {
-    const data = localStorage.getItem(ERRORS_KEY);
-    return data ? JSON.parse(data) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveErrors(errors) {
-  localStorage.setItem(ERRORS_KEY, JSON.stringify(errors));
-}
-
-window.deleteError = function(id) {
+window.deleteError = async function(id) {
   if (!confirm("Bu hatali islemi silmek istediginize emin misiniz?")) return;
-  const errors = loadErrors().filter(err => err.id !== id);
-  saveErrors(errors);
-  renderErrorList();
+  try {
+    await apiFetch(`/api/error-reports/${id}`, { method: "DELETE" });
+    renderErrorList();
+  } catch (err) {
+    alert("Silinemedi: " + err.message);
+  }
 };
 
-function renderErrorList() {
+async function renderErrorList() {
   if (!dom.errorListArea) return;
-  const errors = loadErrors();
-  if (!errors.length) {
-    dom.errorListArea.innerHTML = '<p class="subtle">Henuz yuklenmis bir hatali islem bulunmuyor.</p>';
-    return;
-  }
-  
-  dom.errorListArea.innerHTML = errors.map(err => {
-    const photosHtml = Array.isArray(err.photos) 
-      ? err.photos.map(p => `<div class="error-photo-wrap"><img src="${p}" alt="Foto" onclick="window.open().document.write('<img src=\\'${p}\\' style=\\'max-width:100%\\'>')" /></div>`).join("")
-      : "";
+  try {
+    const data = await apiFetch("/api/error-reports");
+    const errors = data.errors || [];
+    if (!errors.length) {
+      dom.errorListArea.innerHTML = '<p class="subtle">Henuz yuklenmis bir hatali islem bulunmuyor.</p>';
+      return;
+    }
     
-    return `
-      <div class="error-card fade-up">
-        <div class="error-card-header">
-          <div>
-            <span class="error-card-title">${err.user || "Bilinmiyor"} (Islemi Yapan)</span>
-            <span class="error-card-meta" style="margin-left: 0.5rem;">${new Date(err.date).toLocaleString("tr-TR")}</span>
+    dom.errorListArea.innerHTML = errors.map(err => {
+      const photosHtml = Array.isArray(err.photos) 
+        ? err.photos.map(p => `<div class="error-photo-wrap"><img src="${p}" alt="Foto" onclick="window.open().document.write('<img src=\\'${p}\\' style=\\'max-width:100%\\'>')" /></div>`).join("")
+        : "";
+      
+      return `
+        <div class="error-card fade-up">
+          <div class="error-card-header">
+            <div>
+              <span class="error-card-title">${err.user || "Bilinmiyor"} (Islemi Yapan)</span>
+              <span class="error-card-meta" style="margin-left: 0.5rem;">${new Date(err.date).toLocaleString("tr-TR")}</span>
+            </div>
+            <button type="button" class="btn btn-small btn-ghost" style="color:#d64545; padding: 0.2rem 0.5rem;" onclick="window.deleteError(${err.id})">Sil</button>
           </div>
-          <button type="button" class="btn btn-small btn-ghost" style="color:#d64545; padding: 0.2rem 0.5rem;" onclick="window.deleteError(${err.id})">Sil</button>
+          <div class="error-card-desc">${err.desc}</div>
+          <div class="error-photos">${photosHtml}</div>
         </div>
-        <div class="error-card-desc">${err.desc}</div>
-        <div class="error-photos">${photosHtml}</div>
-      </div>
-    `;
-  }).join("");
+      `;
+    }).join("");
+  } catch (err) {
+    dom.errorListArea.innerHTML = '<p class="subtle" style="color:#d64545;">Hatalar yuklenemedi.</p>';
+  }
 }
 
 if (dom.errorReportForm) {
@@ -3300,16 +3293,14 @@ if (dom.errorReportForm) {
         photos.push(base64);
       }
       
-      const errors = loadErrors();
-      errors.unshift({
-        id: Date.now(),
-        date: new Date().toISOString(),
-        desc,
-        user,
-        photos
+      await apiFetch("/api/error-reports", {
+        method: "POST",
+        body: JSON.stringify({
+          desc,
+          user,
+          photos
+        })
       });
-      
-      saveErrors(errors);
       
       dom.errorReportForm.reset();
       if (dom.errorUploadMsg) {
