@@ -363,10 +363,10 @@ CREATE TABLE IF NOT EXISTS user_error_reports (
   status TEXT NOT NULL DEFAULT 'Yeni',
   created_at TEXT NOT NULL
 );
+`);
 
 try { db.exec("ALTER TABLE user_error_reports ADD COLUMN priority TEXT NOT NULL DEFAULT 'Orta'"); } catch(e) {}
 try { db.exec("ALTER TABLE user_error_reports ADD COLUMN status TEXT NOT NULL DEFAULT 'Yeni'"); } catch(e) {}
-`);
 
 const pricingItemColumns = db.prepare("PRAGMA table_info(pricing_upload_items)").all();
 const hasRowDirectionColumn = pricingItemColumns.some((col) => col.name === "row_direction");
@@ -3122,8 +3122,6 @@ app.patch("/api/error-reports/:id", requireAuth, (req, res) => {
 
 app.delete("/api/error-reports/:id", requireAuth, (req, res) => {
   const id = Number(req.params.id);
-  db.prepare("DELETE BY id = ?").run(id); // Wait, I see a bug in my previous edit? No, it was "DELETE FROM user_error_reports WHERE id = ?"
-  // Let me fix the DELETE statement too just in case.
   db.prepare("DELETE FROM user_error_reports WHERE id = ?").run(id);
   res.json({ ok: true });
 });
