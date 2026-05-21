@@ -3175,6 +3175,42 @@ function parseCsvList(raw) {
     .filter(Boolean);
 }
 
+function createSmtpTransport() {
+  const smtpHost = String(process.env.SMTP_HOST || "smtp.gmail.com").trim();
+  const smtpPort = parseInt(process.env.SMTP_PORT || "465", 10);
+  const smtpUser = String(process.env.SMTP_USER || "").trim();
+  const smtpPass = String(process.env.SMTP_PASS || "").trim();
+
+  if (!smtpUser || !smtpPass) {
+    throw new Error("SMTP_USER ve SMTP_PASS tanimli degil.");
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465,
+    requireTLS: smtpPort !== 465,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
+    },
+    connectionTimeout: 20000,
+    greetingTimeout: 15000,
+    socketTimeout: 30000,
+    tls: {
+      servername: smtpHost,
+      minVersion: "TLSv1.2",
+    },
+  });
+
+  return {
+    transporter,
+    smtpHost,
+    smtpPort,
+    smtpUser,
+  };
+}
+
 // oBilet Scraper (Puppeteer Tabanlı)
 async function scrapeObilet(origin, destination, dateIso) {
   const originSlug = slugTr(origin).replace(/\s+/g, "-");
@@ -3258,26 +3294,9 @@ async function scrapeObilet(origin, destination, dateIso) {
 
 // Nodemailer ile E-posta Gönderim Servisi
 async function sendPriceChangeEmail(emailList, target, changes) {
-  const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
-  const smtpPort = parseInt(process.env.SMTP_PORT || "465", 10);
-  const smtpUser = String(process.env.SMTP_USER || "").trim();
-  const smtpPass = String(process.env.SMTP_PASS || "").trim();
-
-  if (!smtpUser || !smtpPass) {
-    throw new Error("SMTP_USER ve SMTP_PASS tanimli degil.");
-  }
+  const { transporter, smtpUser } = createSmtpTransport();
 
   const smtpFrom = process.env.SMTP_FROM || `"oBilet Fiyat Takip" <${smtpUser}>`;
-
-  const transporter = nodemailer.createTransport({
-    host: smtpHost,
-    port: smtpPort,
-    secure: smtpPort === 465,
-    auth: {
-      user: smtpUser,
-      pass: smtpPass
-    }
-  });
 
   const changeRows = changes.map(c => {
     const isDrop = c.newPrice < c.oldPrice;
@@ -3358,25 +3377,9 @@ async function sendPriceChangeEmail(emailList, target, changes) {
 }
 
 async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, changes) {
-  const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
-  const smtpPort = parseInt(process.env.SMTP_PORT || "465", 10);
-  const smtpUser = String(process.env.SMTP_USER || "").trim();
-  const smtpPass = String(process.env.SMTP_PASS || "").trim();
-
-  if (!smtpUser || !smtpPass) {
-    throw new Error("SMTP_USER ve SMTP_PASS tanimli degil.");
-  }
+  const { transporter, smtpUser } = createSmtpTransport();
 
   const smtpFrom = process.env.SMTP_FROM || `"oBilet Fiyat Takip" <${smtpUser}>`;
-  const transporter = nodemailer.createTransport({
-    host: smtpHost,
-    port: smtpPort,
-    secure: smtpPort === 465,
-    auth: {
-      user: smtpUser,
-      pass: smtpPass,
-    },
-  });
 
   const formattedDate = String(target.date || "").split("-").reverse().join(".");
   const checkedAt = nowStamp();
@@ -3460,26 +3463,12 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
 
 // Test E-postası Gönderim Fonksiyonu
 async function sendTestEmail(emailAddress) {
-  const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
-  const smtpPort = parseInt(process.env.SMTP_PORT || "465", 10);
-  const smtpUser = String(process.env.SMTP_USER || "").trim();
-  const smtpPass = String(process.env.SMTP_PASS || "").trim();
-
-  if (!smtpUser || !smtpPass) {
-    throw new Error("SMTP_USER ve SMTP_PASS tanimli degil.");
-  }
+  const { transporter, smtpHost, smtpPort, smtpUser } = createSmtpTransport();
 
   const smtpFrom = process.env.SMTP_FROM || `"oBilet Fiyat Takip" <${smtpUser}>`;
 
-  const transporter = nodemailer.createTransport({
-    host: smtpHost,
-    port: smtpPort,
-    secure: smtpPort === 465,
-    auth: {
-      user: smtpUser,
-      pass: smtpPass
-    }
-  });
+  // E-posta göndermeden önce SMTP el sıkışmasını doğrula.
+  await transporter.verify();
 
   const mailOptions = {
     from: smtpFrom,
@@ -3526,6 +3515,13 @@ async function refreshObiletPricesTask() {
           journey.operator.toLocaleLowerCase("tr-TR").includes(op)
         )
       );
+
+      if (trackedJourneys.length === 0) {
+        addPricingNotification(
+          "oBilet Fiyat Takip",
+          `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} icin hedef firmalarda sefer verisi bulunamadi. oBilet bot korumasi nedeniyle veri donmuyor olabilir.`
+        );
+      }
         
       const changes = [];
       const now = nowStamp();
@@ -3674,7 +3670,9 @@ app.post("/api/obilet/test-email", requireAuth, async (req, res) => {
     await sendTestEmail(email);
     res.json({ ok: true, message: "Test e-postasi basariyla gonderildi." });
   } catch (error) {
-    res.status(500).json({ message: `SMTP Hatası: ${error.message}. Lütfen .env dosyasındaki şifreyi kontrol edin.` });
+    res.status(500).json({
+      message: `SMTP Hatasi: ${error.message}. Railway Variables icinde SMTP_HOST/PORT/USER/PASS degerlerini kontrol edin. Gmail icin 587 portu da denenebilir.`,
+    });
   }
 });
 
