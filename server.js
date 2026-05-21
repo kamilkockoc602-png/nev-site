@@ -3175,7 +3175,7 @@ function parseCsvList(raw) {
     .filter(Boolean);
 }
 
-function createSmtpTransport() {
+function createSmtpTransportsWithFallback() {
   const smtpHost = String(process.env.SMTP_HOST || "smtp.gmail.com").trim();
   const smtpPort = parseInt(process.env.SMTP_PORT || "465", 10);
   const smtpUser = String(process.env.SMTP_USER || "").trim();
@@ -3185,30 +3185,67 @@ function createSmtpTransport() {
     throw new Error("SMTP_USER ve SMTP_PASS tanimli degil.");
   }
 
-  const transporter = nodemailer.createTransport({
-    host: smtpHost,
-    port: smtpPort,
-    secure: smtpPort === 465,
-    requireTLS: smtpPort !== 465,
-    auth: {
-      user: smtpUser,
-      pass: smtpPass,
-    },
-    connectionTimeout: 20000,
-    greetingTimeout: 15000,
-    socketTimeout: 30000,
-    tls: {
-      servername: smtpHost,
-      minVersion: "TLSv1.2",
-    },
+  const candidatePorts = [];
+  if (Number.isFinite(smtpPort)) {
+    candidatePorts.push(smtpPort);
+  }
+  if (!candidatePorts.includes(465)) {
+    candidatePorts.push(465);
+  }
+  if (!candidatePorts.includes(587)) {
+    candidatePorts.push(587);
+  }
+
+  const transporters = candidatePorts.map((port) => {
+    const secure = port === 465;
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port,
+      secure,
+      requireTLS: !secure,
+      auth: {
+        user: smtpUser,
+        pass: smtpPass,
+      },
+      connectionTimeout: 20000,
+      greetingTimeout: 15000,
+      socketTimeout: 30000,
+      tls: {
+        servername: smtpHost,
+        minVersion: "TLSv1.2",
+      },
+    });
+
+    return { transporter, port, secure };
   });
 
   return {
-    transporter,
+    transporters,
     smtpHost,
-    smtpPort,
     smtpUser,
   };
+}
+
+async function sendMailWithSmtpFallback(mailOptions) {
+  const { transporters, smtpHost, smtpUser } = createSmtpTransportsWithFallback();
+  const errors = [];
+
+  for (const entry of transporters) {
+    try {
+      await entry.transporter.verify();
+      const info = await entry.transporter.sendMail(mailOptions);
+      return {
+        info,
+        smtpHost,
+        smtpUser,
+        smtpPort: entry.port,
+      };
+    } catch (error) {
+      errors.push(`${entry.port}/${entry.secure ? "SSL" : "STARTTLS"}: ${error.message}`);
+    }
+  }
+
+  throw new Error(`SMTP baglanti basarisiz (${smtpHost}). Denenen portlar: ${errors.join(" | ")}`);
 }
 
 // oBilet Scraper (Puppeteer Tabanlı)
@@ -3294,7 +3331,7 @@ async function scrapeObilet(origin, destination, dateIso) {
 
 // Nodemailer ile E-posta Gönderim Servisi
 async function sendPriceChangeEmail(emailList, target, changes) {
-  const { transporter, smtpUser } = createSmtpTransport();
+  const { smtpUser } = createSmtpTransportsWithFallback();
 
   const smtpFrom = process.env.SMTP_FROM || `"oBilet Fiyat Takip" <${smtpUser}>`;
 
@@ -3371,13 +3408,14 @@ async function sendPriceChangeEmail(emailList, target, changes) {
     html: htmlContent
   };
 
-  const info = await transporter.sendMail(mailOptions);
+  const { info, smtpPort } = await sendMailWithSmtpFallback(mailOptions);
+  console.log(`[E-posta] SMTP portu kullanildi: ${smtpPort}`);
   console.log(`[E-posta] Basariyla gonderildi: ${info.messageId}`);
   return info;
 }
 
 async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, changes) {
-  const { transporter, smtpUser } = createSmtpTransport();
+  const { smtpUser } = createSmtpTransportsWithFallback();
 
   const smtpFrom = process.env.SMTP_FROM || `"oBilet Fiyat Takip" <${smtpUser}>`;
 
@@ -3451,24 +3489,22 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
   `;
 
   const subjectPrefix = hasChanges ? "DEGISIKLIK VAR" : "Degisiklik yok";
-  const info = await transporter.sendMail({
+  const { info, smtpPort } = await sendMailWithSmtpFallback({
     from: smtpFrom,
     to: emailList,
     subject: `oBilet ${subjectPrefix}: ${target.origin} - ${target.destination} (${formattedDate})`,
     html,
   });
+  console.log(`[E-posta] SMTP portu kullanildi: ${smtpPort}`);
   console.log(`[E-posta] Periyodik rapor gonderildi: ${info.messageId}`);
   return info;
 }
 
 // Test E-postası Gönderim Fonksiyonu
 async function sendTestEmail(emailAddress) {
-  const { transporter, smtpHost, smtpPort, smtpUser } = createSmtpTransport();
+  const { smtpUser } = createSmtpTransportsWithFallback();
 
   const smtpFrom = process.env.SMTP_FROM || `"oBilet Fiyat Takip" <${smtpUser}>`;
-
-  // E-posta göndermeden önce SMTP el sıkışmasını doğrula.
-  await transporter.verify();
 
   const mailOptions = {
     from: smtpFrom,
@@ -3488,7 +3524,8 @@ async function sendTestEmail(emailAddress) {
     `
   };
 
-  return await transporter.sendMail(mailOptions);
+  const result = await sendMailWithSmtpFallback(mailOptions);
+  return result.info;
 }
 
 // oBilet Fiyat Senkronizasyonu Arka Plan Görevi
