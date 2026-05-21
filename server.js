@@ -3245,7 +3245,88 @@ async function sendMailWithSmtpFallback(mailOptions) {
     }
   }
 
-  throw new Error(`SMTP baglanti basarisiz (${smtpHost}). Denenen portlar: ${errors.join(" | ")}`);
+  const smtpErrorMessage = `SMTP baglanti basarisiz (${smtpHost}). Denenen portlar: ${errors.join(" | ")}`;
+
+  const resendApiKey = String(process.env.RESEND_API_KEY || "").trim();
+  if (resendApiKey) {
+    try {
+      const resendResponse = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: mailOptions.from,
+          to: Array.isArray(mailOptions.to)
+            ? mailOptions.to
+            : String(mailOptions.to || "")
+                .split(",")
+                .map((x) => x.trim())
+                .filter(Boolean),
+          subject: mailOptions.subject,
+          html: mailOptions.html,
+        }),
+      });
+
+      const resendData = await resendResponse.json().catch(() => ({}));
+      if (resendResponse.ok && resendData?.id) {
+        return {
+          info: { messageId: resendData.id },
+          smtpHost: "resend-api",
+          smtpUser,
+          smtpPort: 443,
+        };
+      }
+      errors.push(`Resend API: ${resendData?.message || resendData?.name || resendResponse.status}`);
+    } catch (error) {
+      errors.push(`Resend API: ${error.message}`);
+    }
+  }
+
+  const brevoApiKey = String(process.env.BREVO_API_KEY || "").trim();
+  if (brevoApiKey) {
+    try {
+      const match = String(mailOptions.from || "").match(/^(.*?)\s*<([^>]+)>$/);
+      const senderName = match ? match[1].replace(/^"|"$/g, "").trim() : "oBilet Fiyat Takip";
+      const senderEmail = match ? match[2].trim() : smtpUser;
+      const recipients = (Array.isArray(mailOptions.to)
+        ? mailOptions.to
+        : String(mailOptions.to || "")
+            .split(",")
+            .map((x) => x.trim())
+            .filter(Boolean)).map((email) => ({ email }));
+
+      const brevoResponse = await fetch("https://api.brevo.com/v3/smtp/email", {
+        method: "POST",
+        headers: {
+          "api-key": brevoApiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sender: { name: senderName || "oBilet Fiyat Takip", email: senderEmail },
+          to: recipients,
+          subject: mailOptions.subject,
+          htmlContent: mailOptions.html,
+        }),
+      });
+
+      const brevoData = await brevoResponse.json().catch(() => ({}));
+      if (brevoResponse.ok && brevoData?.messageId) {
+        return {
+          info: { messageId: brevoData.messageId },
+          smtpHost: "brevo-api",
+          smtpUser,
+          smtpPort: 443,
+        };
+      }
+      errors.push(`Brevo API: ${brevoData?.message || brevoResponse.status}`);
+    } catch (error) {
+      errors.push(`Brevo API: ${error.message}`);
+    }
+  }
+
+  throw new Error(`${smtpErrorMessage}${errors.length ? ` | Fallbackler: ${errors.join(" | ")}` : ""}`);
 }
 
 // oBilet Scraper (Puppeteer Tabanlı)
