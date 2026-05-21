@@ -13,6 +13,7 @@ const MENUS = [
   { key: "reports", label: "Tek Yon Fiyatlar" },
   { key: "reporting", label: "Raporlama" },
   { key: "oneops", label: "Hatali Islemler" },
+  { key: "obilet_tracker", label: "oBilet Takip" },
   { key: "ocr", label: "Foto Tarama" },
   { key: "permissions", label: "Yetki Menusu" },
   { key: "logs", label: "Giris Kayitlari" },
@@ -2653,6 +2654,16 @@ async function activatePanel(menuKey) {
       }
     });
   }
+
+  if (menuKey === "obilet_tracker") {
+    initObiletPanel().catch((error) => {
+      const statusEl = document.getElementById("obiletActionStatus");
+      if (statusEl) {
+        statusEl.style.color = "#d64545";
+        statusEl.textContent = error.message || "oBilet paneli yuklenemedi.";
+      }
+    });
+  }
 }
 
 async function handleLogin(username, password) {
@@ -3364,4 +3375,240 @@ if (dom.errorReportForm) {
       }
     }
   });
+}
+
+// ============================================
+// oBILET TAKİP PANELİ - Frontend Fonksiyonları
+// ============================================
+
+const obiletState = {
+  targets: [],
+  expandedTargetId: null,
+};
+
+async function initObiletPanel() {
+  await renderObiletTargets();
+  setupObiletForm();
+  setupObiletActionButtons();
+}
+
+async function renderObiletTargets() {
+  const listEl = document.getElementById("obiletTargetsList");
+  if (!listEl) return;
+
+  listEl.innerHTML = `<div class="obilet-loading">⏳ Yükleniyor...</div>`;
+  try {
+    const result = await apiFetch("/api/obilet/targets");
+    obiletState.targets = result.targets || [];
+    renderObiletTargetCards(listEl);
+  } catch (err) {
+    listEl.innerHTML = `<div class="obilet-empty">Takip listesi yüklenemedi: ${err.message}</div>`;
+  }
+}
+
+function renderObiletTargetCards(listEl) {
+  if (!obiletState.targets.length) {
+    listEl.innerHTML = `
+      <div class="obilet-empty">
+        <span>📋</span>
+        <p>Henüz takip edilen hat yok. Aşağıdaki formu kullanarak yeni bir hat ekleyin.</p>
+      </div>`;
+    return;
+  }
+
+  listEl.innerHTML = obiletState.targets.map(t => {
+    const dateFormatted = (t.date || "").split("-").reverse().join(".");
+    const emails = (t.email_notifications || "").split(",").map(e => e.trim()).filter(Boolean);
+    return `
+      <div class="obilet-target-card" data-id="${t.id}">
+        <div class="obilet-card-header">
+          <div class="obilet-card-route">
+            <span class="obilet-route-icon">🚌</span>
+            <div>
+              <strong>${t.origin.toUpperCase()} ➔ ${t.destination.toUpperCase()}</strong>
+              <span class="obilet-date-badge">${dateFormatted}</span>
+            </div>
+          </div>
+          <div class="obilet-card-actions">
+            <button class="btn btn-sm btn-ghost obilet-expand-btn" data-id="${t.id}" title="Fiyatları Göster">📊 Fiyatlar</button>
+            <button class="btn btn-sm btn-danger obilet-delete-btn" data-id="${t.id}" title="Sil">🗑</button>
+          </div>
+        </div>
+        <div class="obilet-card-meta">
+          <span class="obilet-tag">🏢 ${t.operators}</span>
+          <span class="obilet-tag">📧 ${emails.length ? emails.join(", ") : "-"}</span>
+          <span class="obilet-tag ${t.is_active ? 'obilet-active' : 'obilet-passive'}">
+            ${t.is_active ? '✅ Aktif' : '⏸ Pasif'}
+          </span>
+        </div>
+        <div class="obilet-prices-area hidden" id="pricesArea-${t.id}">
+          <div class="obilet-loading">⏳ Fiyatlar yükleniyor...</div>
+        </div>
+      </div>`;
+  }).join("");
+
+  // Event listeners
+  listEl.querySelectorAll(".obilet-delete-btn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      if (!confirm("Bu takip hattını silmek istediğinize emin misiniz?")) return;
+      try {
+        await apiFetch(`/api/obilet/targets/${id}`, { method: "DELETE" });
+        await renderObiletTargets();
+      } catch (err) {
+        alert("Silme işlemi başarısız: " + err.message);
+      }
+    });
+  });
+
+  listEl.querySelectorAll(".obilet-expand-btn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      const pricesArea = document.getElementById(`pricesArea-${id}`);
+      if (!pricesArea) return;
+
+      if (!pricesArea.classList.contains("hidden")) {
+        pricesArea.classList.add("hidden");
+        return;
+      }
+
+      pricesArea.classList.remove("hidden");
+      pricesArea.innerHTML = `<div class="obilet-loading">⏳ Fiyatlar yükleniyor...</div>`;
+
+      try {
+        const result = await apiFetch(`/api/obilet/prices/${id}`);
+        const prices = result.prices || [];
+        if (!prices.length) {
+          pricesArea.innerHTML = `<p class="obilet-empty-sm">Henüz fiyat verisi yok. "Şimdi Güncelle" butonunu kullanın.</p>`;
+          return;
+        }
+
+        pricesArea.innerHTML = `
+          <table class="obilet-prices-table">
+            <thead><tr><th>Firma</th><th>Saat</th><th>Fiyat</th><th>Son Güncelleme</th></tr></thead>
+            <tbody>
+              ${prices.map(p => `
+                <tr>
+                  <td><strong>${p.operator}</strong></td>
+                  <td>${p.departure_time}</td>
+                  <td class="obilet-price-cell">₺${p.price.toLocaleString("tr-TR")}</td>
+                  <td class="obilet-updated-cell">${p.last_updated}</td>
+                </tr>`).join("")}
+            </tbody>
+          </table>`;
+      } catch (err) {
+        pricesArea.innerHTML = `<p class="obilet-empty-sm">Fiyatlar yüklenemedi: ${err.message}</p>`;
+      }
+    });
+  });
+}
+
+function setupObiletForm() {
+  const form = document.getElementById("obiletAddForm");
+  if (!form) return;
+
+  // Remove existing listeners by replacing element
+  const newForm = form.cloneNode(true);
+  form.parentNode.replaceChild(newForm, form);
+
+  newForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const msgEl = document.getElementById("obiletFormMsg");
+    const submitBtn = newForm.querySelector('[type="submit"]');
+
+    const origin = document.getElementById("obiletOrigin").value.trim();
+    const destination = document.getElementById("obiletDestination").value.trim();
+    const date = document.getElementById("obiletDate").value.trim();
+    const operators = document.getElementById("obiletOperators").value.trim();
+    const emails = document.getElementById("obiletEmails").value.trim();
+
+    if (!origin || !destination || !date || !operators) {
+      msgEl.style.color = "#d64545";
+      msgEl.textContent = "Lütfen tüm zorunlu alanları doldurun.";
+      return;
+    }
+
+    try {
+      submitBtn.disabled = true;
+      submitBtn.textContent = "⏳ Ekleniyor...";
+      msgEl.textContent = "";
+
+      await apiFetch("/api/obilet/targets", {
+        method: "POST",
+        body: JSON.stringify({
+          origin,
+          destination,
+          date,
+          operators,
+          emailNotifications: emails,
+        }),
+      });
+
+      msgEl.style.color = "#1f7a1f";
+      msgEl.textContent = "✅ Hat başarıyla eklendi! Fiyatlar arka planda çekiliyor...";
+      newForm.reset();
+      await renderObiletTargets();
+
+      setTimeout(() => { if (msgEl) msgEl.textContent = ""; }, 5000);
+    } catch (err) {
+      msgEl.style.color = "#d64545";
+      msgEl.textContent = "Hata: " + err.message;
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "➕ Hat Ekle";
+    }
+  });
+}
+
+function setupObiletActionButtons() {
+  const refreshBtn = document.getElementById("obiletRefreshBtn");
+  if (refreshBtn) {
+    const newBtn = refreshBtn.cloneNode(true);
+    refreshBtn.parentNode.replaceChild(newBtn, refreshBtn);
+    newBtn.addEventListener("click", async () => {
+      const statusEl = document.getElementById("obiletActionStatus");
+      try {
+        newBtn.disabled = true;
+        newBtn.textContent = "⏳ Güncelleniyor...";
+        if (statusEl) { statusEl.style.color = "var(--muted)"; statusEl.textContent = "Fiyat güncellemesi arka planda başlatıldı. 1-2 dakika sürebilir."; }
+        await apiFetch("/api/obilet/refresh", { method: "POST" });
+        if (statusEl) statusEl.textContent = "✅ Güncelleme başlatıldı. Tamamlanınca panelde görünecek.";
+      } catch (err) {
+        if (statusEl) { statusEl.style.color = "#d64545"; statusEl.textContent = "Hata: " + err.message; }
+      } finally {
+        newBtn.disabled = false;
+        newBtn.textContent = "🔄 Şimdi Güncelle";
+      }
+    });
+  }
+
+  const testEmailBtn = document.getElementById("obiletTestEmailBtn");
+  if (testEmailBtn) {
+    const newBtn2 = testEmailBtn.cloneNode(true);
+    testEmailBtn.parentNode.replaceChild(newBtn2, testEmailBtn);
+    newBtn2.addEventListener("click", async () => {
+      const statusEl = document.getElementById("obiletActionStatus");
+      const emailInput = document.getElementById("obiletTestEmailAddr");
+      const email = emailInput ? emailInput.value.trim() : "hasan.hazer@kamilkoc.com";
+      if (!email) {
+        if (statusEl) { statusEl.style.color = "#d64545"; statusEl.textContent = "Lütfen test e-posta adresi girin."; }
+        return;
+      }
+      try {
+        newBtn2.disabled = true;
+        newBtn2.textContent = "⏳ Gönderiliyor...";
+        if (statusEl) { statusEl.style.color = "var(--muted)"; statusEl.textContent = "Test e-postası gönderiliyor..."; }
+        await apiFetch("/api/obilet/test-email", { method: "POST", body: JSON.stringify({ email }) });
+        if (statusEl) { statusEl.style.color = "#1f7a1f"; statusEl.textContent = `✅ Test e-postası ${email} adresine gönderildi!`; }
+      } catch (err) {
+        if (statusEl) { statusEl.style.color = "#d64545"; statusEl.textContent = "E-posta hatası: " + err.message; }
+      } finally {
+        newBtn2.disabled = false;
+        newBtn2.textContent = "📧 Test E-postası Gönder";
+      }
+    });
+  }
+
 }

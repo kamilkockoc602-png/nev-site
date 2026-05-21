@@ -1,3 +1,4 @@
+require("dotenv").config();
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
@@ -17,6 +18,17 @@ const DATA_DIR = configuredDataDir
   : path.join(__dirname, "data");
 const DB_PATH = path.join(DATA_DIR, "app.db");
 const UPDATE_INTERVAL_MS = 10 * 60 * 1000;
+const OBILET_CHECK_INTERVAL_MINUTES = Number.parseInt(
+  process.env.OBILET_CHECK_INTERVAL_MINUTES || "10",
+  10
+);
+const OBILET_CHECK_INTERVAL_MS =
+  (Number.isFinite(OBILET_CHECK_INTERVAL_MINUTES) && OBILET_CHECK_INTERVAL_MINUTES > 0
+    ? OBILET_CHECK_INTERVAL_MINUTES
+    : 10) * 60 * 1000;
+const OBILET_EMAIL_MODE = String(process.env.OBILET_EMAIL_MODE || "always")
+  .trim()
+  .toLocaleLowerCase("tr-TR");
 const PRICE_SOURCE_URL = process.env.PRICE_SOURCE_URL || "";
 const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || "admin").trim();
 const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || "1234").trim();
@@ -363,10 +375,33 @@ CREATE TABLE IF NOT EXISTS user_error_reports (
   status TEXT NOT NULL DEFAULT 'Yeni',
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS obilet_targets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  origin TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  date TEXT NOT NULL,
+  operators TEXT NOT NULL,
+  email_notifications TEXT NOT NULL,
+  telegram_chat_ids TEXT NOT NULL DEFAULT '',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS obilet_prices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  target_id INTEGER NOT NULL,
+  operator TEXT NOT NULL,
+  departure_time TEXT NOT NULL,
+  price INTEGER NOT NULL,
+  last_updated TEXT NOT NULL,
+  FOREIGN KEY (target_id) REFERENCES obilet_targets(id) ON DELETE CASCADE
+);
 `);
 
 try { db.exec("ALTER TABLE user_error_reports ADD COLUMN priority TEXT NOT NULL DEFAULT 'Orta'"); } catch(e) {}
 try { db.exec("ALTER TABLE user_error_reports ADD COLUMN status TEXT NOT NULL DEFAULT 'Yeni'"); } catch(e) {}
+try { db.exec("ALTER TABLE obilet_targets ADD COLUMN telegram_chat_ids TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 
 const pricingItemColumns = db.prepare("PRAGMA table_info(pricing_upload_items)").all();
 const hasRowDirectionColumn = pricingItemColumns.some((col) => col.name === "row_direction");
@@ -3125,6 +3160,532 @@ app.delete("/api/error-reports/:id", requireAuth, (req, res) => {
   db.prepare("DELETE FROM user_error_reports WHERE id = ?").run(id);
   res.json({ ok: true });
 });
+
+// ==========================================
+// oBiLET FIYAT TAKIP VE E-POSTA ENTEGRASYONU
+// ==========================================
+
+const puppeteer = require("puppeteer");
+const nodemailer = require("nodemailer");
+
+function parseCsvList(raw) {
+  return String(raw || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+// oBilet Scraper (Puppeteer Tabanlı)
+async function scrapeObilet(origin, destination, dateIso) {
+  const originSlug = slugTr(origin).replace(/\s+/g, "-");
+  const destSlug = slugTr(destination).replace(/\s+/g, "-");
+  const dateParts = dateIso.split("-");
+  const dateStr = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`; // DD-MM-YYYY
+  
+  const url = `https://www.obilet.com/otobus-bileti/${originSlug}-${destSlug}/${dateStr}`;
+  console.log(`[oBilet] Kazima baslatiliyor: ${url}`);
+  
+  const browser = await puppeteer.launch({
+    headless: "new",
+    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+  });
+  
+  try {
+    const page = await browser.newPage();
+    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+    await page.setViewport({ width: 1280, height: 800 });
+    
+    // Sayfaya git ve 45 saniye zaman aşımı tanı
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 45000 });
+    
+    // Seferlerin yüklenmesini bekle
+    try {
+      await page.waitForSelector(".journey-item, #journeys, [data-journey-id]", { timeout: 15000 });
+    } catch (e) {
+      console.log("[oBilet] Sefer secicisi zaman asimina ugradi. Sayfa dogrudan taranacak.");
+    }
+    
+    // Sayfa içerisindeki verileri ayrıştır
+    const journeys = await page.evaluate(() => {
+      const items = [];
+      const cards = document.querySelectorAll(".journey-item, [data-journey-id], li.journey");
+      
+      cards.forEach(card => {
+        try {
+          // Firma adı
+          const logoImg = card.querySelector(".partner-logo, img[alt]");
+          let operator = logoImg ? logoImg.getAttribute("alt") || "" : "";
+          if (!operator) {
+            const partnerNameEl = card.querySelector(".partner-name, .partner, .company");
+            operator = partnerNameEl ? partnerNameEl.innerText.trim() : "";
+          }
+          
+          // Sefer saati
+          const timeEl = card.querySelector(".time, .time-label, .departure-time, .time-container");
+          let time = timeEl ? timeEl.innerText.trim() : "";
+          const timeMatch = time.match(/\d{2}:\d{2}/);
+          time = timeMatch ? timeMatch[0] : time;
+          
+          // Fiyat
+          const priceEl = card.querySelector(".price, .price-label, .amount, .price-container, .price-amount");
+          let priceText = priceEl ? priceEl.innerText.trim() : "";
+          const priceVal = parseInt(priceText.replace(/[^0-9]/g, ""), 10) || 0;
+          
+          if (operator && time && priceVal > 0) {
+            items.push({
+              operator: operator.trim(),
+              time: time.trim(),
+              price: priceVal
+            });
+          }
+        } catch (err) {
+          // kart bazlı hata yutulsun
+        }
+      });
+      
+      return items;
+    });
+    
+    console.log(`[oBilet] Basariyla ${journeys.length} adet sefer yuklendi.`);
+    return journeys;
+  } catch (error) {
+    console.error(`[oBilet] Kazima hatasi: ${error.message}`);
+    throw error;
+  } finally {
+    await browser.close();
+  }
+}
+
+// Nodemailer ile E-posta Gönderim Servisi
+async function sendPriceChangeEmail(emailList, target, changes) {
+  const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
+  const smtpPort = parseInt(process.env.SMTP_PORT || "465", 10);
+  const smtpUser = String(process.env.SMTP_USER || "").trim();
+  const smtpPass = String(process.env.SMTP_PASS || "").trim();
+
+  if (!smtpUser || !smtpPass) {
+    throw new Error("SMTP_USER ve SMTP_PASS tanimli degil.");
+  }
+
+  const smtpFrom = process.env.SMTP_FROM || `"oBilet Fiyat Takip" <${smtpUser}>`;
+
+  const transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass
+    }
+  });
+
+  const changeRows = changes.map(c => {
+    const isDrop = c.newPrice < c.oldPrice;
+    const direction = isDrop ? "📉 Fiyat DÜŞTÜ" : "📈 Fiyat YÜKSELDİ";
+    const directionColor = isDrop ? "#27ae60" : "#c0392b";
+    return `
+      <tr style="border-bottom: 1px solid #eaeaea;">
+        <td style="padding: 12px; font-weight: bold; color: #2c3e50; font-family: sans-serif;">${c.operator}</td>
+        <td style="padding: 12px; color: #7f8c8d; font-family: sans-serif; text-align: center;">${c.departure_time}</td>
+        <td style="padding: 12px; color: #7f8c8d; font-family: sans-serif; text-decoration: line-through; text-align: center;">${c.oldPrice} TL</td>
+        <td style="padding: 12px; font-weight: bold; color: ${directionColor}; font-family: sans-serif; text-align: center;">${c.newPrice} TL</td>
+        <td style="padding: 12px; font-weight: bold; color: ${directionColor}; font-family: sans-serif; text-align: center;">${direction}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const formattedDate = target.date.split("-").reverse().join("."); // YYYY-MM-DD -> DD.MM.YYYY
+
+  const htmlContent = `
+    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 650px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 15px rgba(0,0,0,0.05);">
+      <!-- Header -->
+      <div style="background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); padding: 25px; text-align: center; color: white;">
+        <h1 style="margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.5px; font-family: sans-serif;">oBilet Fiyat Değişiklik Bildirimi</h1>
+        <p style="margin: 5px 0 0 0; opacity: 0.9; font-size: 14px; font-family: sans-serif;">Kamil Koç Fiyat Takip Servisi</p>
+      </div>
+      
+      <!-- Content -->
+      <div style="padding: 30px; background-color: #ffffff;">
+        <div style="background-color: #f8f9fa; border-left: 4px solid #2a5298; padding: 15px; border-radius: 4px; margin-bottom: 25px;">
+          <h3 style="margin: 0 0 5px 0; color: #2c3e50; font-size: 15px; font-family: sans-serif;">Güzergah Bilgileri</h3>
+          <p style="margin: 0; color: #555555; font-size: 14px; font-family: sans-serif; line-height: 1.5;">
+            <strong>Hat:</strong> ${target.origin.toUpperCase()} ➔ ${target.destination.toUpperCase()} <br/>
+            <strong>Tarih:</strong> ${formattedDate}
+          </p>
+        </div>
+        
+        <h4 style="margin: 0 0 12px 0; color: #2c3e50; font-size: 14px; font-family: sans-serif; border-bottom: 2px solid #2a5298; padding-bottom: 6px;">Fiyat Değişiklik Detayları</h4>
+        <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 13px;">
+          <thead>
+            <tr style="background-color: #f1f3f5; color: #495057; border-bottom: 2px solid #ddd;">
+              <th style="padding: 12px; font-family: sans-serif;">Firma</th>
+              <th style="padding: 12px; font-family: sans-serif; text-align: center;">Saat</th>
+              <th style="padding: 12px; font-family: sans-serif; text-align: center;">Eski Fiyat</th>
+              <th style="padding: 12px; font-family: sans-serif; text-align: center;">Yeni Fiyat</th>
+              <th style="padding: 12px; font-family: sans-serif; text-align: center;">Durum</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${changeRows}
+          </tbody>
+        </table>
+        
+        <div style="margin-top: 30px; text-align: center;">
+          <a href="http://localhost:3000" style="background-color: #2a5298; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 13px; display: inline-block; box-shadow: 0 2px 5px rgba(0,0,0,0.1); font-family: sans-serif;">
+            Yönetim Paneline Git
+          </a>
+        </div>
+      </div>
+      
+      <!-- Footer -->
+      <div style="background-color: #f1f3f5; padding: 15px; text-align: center; color: #7f8c8d; font-size: 11px; border-top: 1px solid #e0e0e0; font-family: sans-serif; line-height: 1.4;">
+        Bu e-posta otobüs fiyat yönetim paneli tarafından otomatik olarak gönderilmiştir. <br/>
+        © 2026 Kamil Koç Fiyat Takip Sistemi. Tüm Hakları Saklıdır.
+      </div>
+    </div>
+  `;
+
+  const mailOptions = {
+    from: smtpFrom,
+    to: emailList,
+    subject: `🚨 Fiyat Değişikliği: ${target.origin} - ${target.destination} (${formattedDate})`,
+    html: htmlContent
+  };
+
+  const info = await transporter.sendMail(mailOptions);
+  console.log(`[E-posta] Basariyla gonderildi: ${info.messageId}`);
+  return info;
+}
+
+async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, changes) {
+  const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
+  const smtpPort = parseInt(process.env.SMTP_PORT || "465", 10);
+  const smtpUser = String(process.env.SMTP_USER || "").trim();
+  const smtpPass = String(process.env.SMTP_PASS || "").trim();
+
+  if (!smtpUser || !smtpPass) {
+    throw new Error("SMTP_USER ve SMTP_PASS tanimli degil.");
+  }
+
+  const smtpFrom = process.env.SMTP_FROM || `"oBilet Fiyat Takip" <${smtpUser}>`;
+  const transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
+    },
+  });
+
+  const formattedDate = String(target.date || "").split("-").reverse().join(".");
+  const checkedAt = nowStamp();
+  const hasChanges = changes.length > 0;
+
+  const currentPriceRows = trackedJourneys
+    .map(
+      (item) => `
+      <tr>
+        <td style="padding:8px;border-bottom:1px solid #ececec;">${item.operator}</td>
+        <td style="padding:8px;border-bottom:1px solid #ececec;text-align:center;">${item.time}</td>
+        <td style="padding:8px;border-bottom:1px solid #ececec;text-align:right;"><strong>${item.price} TL</strong></td>
+      </tr>`
+    )
+    .join("");
+
+  const changesRows = changes
+    .map(
+      (c) => `
+      <tr>
+        <td style="padding:8px;border-bottom:1px solid #ececec;">${c.operator}</td>
+        <td style="padding:8px;border-bottom:1px solid #ececec;text-align:center;">${c.departure_time}</td>
+        <td style="padding:8px;border-bottom:1px solid #ececec;text-align:right;">${c.oldPrice} TL</td>
+        <td style="padding:8px;border-bottom:1px solid #ececec;text-align:right;"><strong>${c.newPrice} TL</strong></td>
+      </tr>`
+    )
+    .join("");
+
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;border:1px solid #e6e6e6;border-radius:10px;overflow:hidden;">
+      <div style="padding:16px 20px;background:#12354a;color:#fff;">
+        <h2 style="margin:0;font-size:18px;">oBilet 10 Dakikalik Fiyat Raporu</h2>
+      </div>
+      <div style="padding:18px 20px;">
+        <p style="margin:0 0 10px 0;"><strong>Hat:</strong> ${target.origin.toUpperCase()} -> ${target.destination.toUpperCase()}</p>
+        <p style="margin:0 0 10px 0;"><strong>Tarih:</strong> ${formattedDate}</p>
+        <p style="margin:0 0 16px 0;"><strong>Kontrol Zamani:</strong> ${checkedAt}</p>
+
+        <p style="margin:0 0 8px 0;"><strong>Durum:</strong> ${hasChanges ? "Degisiklik var" : "Degisiklik yok"}</p>
+
+        ${hasChanges ? `
+          <h3 style="margin:14px 0 8px 0;font-size:15px;">Degisen Fiyatlar</h3>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead>
+              <tr style="background:#f5f5f5;">
+                <th style="padding:8px;text-align:left;">Firma</th>
+                <th style="padding:8px;text-align:center;">Saat</th>
+                <th style="padding:8px;text-align:right;">Eski</th>
+                <th style="padding:8px;text-align:right;">Yeni</th>
+              </tr>
+            </thead>
+            <tbody>${changesRows}</tbody>
+          </table>
+        ` : `<p style="margin:8px 0 12px 0;color:#2f4f5f;">Takip edilen firmalarda bu turda fiyat degisikligi algilanmadi.</p>`}
+
+        <h3 style="margin:16px 0 8px 0;font-size:15px;">Anlik Fiyatlar</h3>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="background:#f5f5f5;">
+              <th style="padding:8px;text-align:left;">Firma</th>
+              <th style="padding:8px;text-align:center;">Saat</th>
+              <th style="padding:8px;text-align:right;">Fiyat</th>
+            </tr>
+          </thead>
+          <tbody>${currentPriceRows || '<tr><td colspan="3" style="padding:8px;">Takip edilen firmalar icin sefer verisi bulunamadi.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  const subjectPrefix = hasChanges ? "DEGISIKLIK VAR" : "Degisiklik yok";
+  const info = await transporter.sendMail({
+    from: smtpFrom,
+    to: emailList,
+    subject: `oBilet ${subjectPrefix}: ${target.origin} - ${target.destination} (${formattedDate})`,
+    html,
+  });
+  console.log(`[E-posta] Periyodik rapor gonderildi: ${info.messageId}`);
+  return info;
+}
+
+// Test E-postası Gönderim Fonksiyonu
+async function sendTestEmail(emailAddress) {
+  const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
+  const smtpPort = parseInt(process.env.SMTP_PORT || "465", 10);
+  const smtpUser = String(process.env.SMTP_USER || "").trim();
+  const smtpPass = String(process.env.SMTP_PASS || "").trim();
+
+  if (!smtpUser || !smtpPass) {
+    throw new Error("SMTP_USER ve SMTP_PASS tanimli degil.");
+  }
+
+  const smtpFrom = process.env.SMTP_FROM || `"oBilet Fiyat Takip" <${smtpUser}>`;
+
+  const transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpPort === 465,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass
+    }
+  });
+
+  const mailOptions = {
+    from: smtpFrom,
+    to: emailAddress,
+    subject: `🧪 oBilet Takip - E-posta Baglanti Testi`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #ddd; border-radius: 8px; padding: 25px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
+        <h2 style="color: #2a5298; margin-top: 0;">E-posta Baglanti Testi Basarili!</h2>
+        <p>Merhaba,</p>
+        <p>Bu e-posta, otobüs fiyat yönetim panelinizdeki oBilet SMTP bağlantısının çalıştığını doğrulamak amacıyla gönderilmiştir.</p>
+        <p><strong>Gönderici Adresi (SMTP User):</strong> ${smtpUser}</p>
+        <p><strong>Alıcı Adresi:</strong> ${emailAddress}</p>
+        <p><strong>Zaman:</strong> ${nowStamp()}</p>
+        <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;"/>
+        <p style="color: #777; font-size: 12px; line-height: 1.4;">Sisteminiz sorunsuz bir şekilde fiyat değişim e-postalarını göndermeye hazırdır.</p>
+      </div>
+    `
+  };
+
+  return await transporter.sendMail(mailOptions);
+}
+
+// oBilet Fiyat Senkronizasyonu Arka Plan Görevi
+async function refreshObiletPricesTask() {
+  console.log(`[Takip Görevi] oBilet fiyat kontrolü başlatılıyor: ${nowStamp()}`);
+  
+  const targets = db.prepare("SELECT * FROM obilet_targets WHERE is_active = 1").all();
+  if (targets.length === 0) {
+    console.log("[Takip Görevi] Aktif takip edilecek hat bulunamadi.");
+    return;
+  }
+  
+  for (const target of targets) {
+    try {
+      console.log(`[Takip Görevi] Sorgulanıyor: ${target.origin} -> ${target.destination} (${target.date})`);
+      const journeys = await scrapeObilet(target.origin, target.destination, target.date);
+      
+      const targetOperators = target.operators.split(",")
+        .map(o => o.trim().toLocaleLowerCase("tr-TR"))
+        .filter(Boolean);
+
+      const trackedJourneys = journeys.filter((journey) =>
+        targetOperators.some((op) =>
+          journey.operator.toLocaleLowerCase("tr-TR").includes(op)
+        )
+      );
+        
+      const changes = [];
+      const now = nowStamp();
+      
+      for (const journey of trackedJourneys) {
+        
+        // Önceki kaydedilmiş fiyatı sorgula
+        const previous = db.prepare(
+          "SELECT * FROM obilet_prices WHERE target_id = ? AND operator = ? AND departure_time = ?"
+        ).get(target.id, journey.operator, journey.time);
+        
+        if (previous) {
+          if (previous.price !== journey.price) {
+            changes.push({
+              operator: journey.operator,
+              departure_time: journey.time,
+              oldPrice: previous.price,
+              newPrice: journey.price
+            });
+            
+            // Fiyatı güncelle
+            db.prepare(
+              "UPDATE obilet_prices SET price = ?, last_updated = ? WHERE id = ?"
+            ).run(journey.price, now, previous.id);
+            
+            // Paneldeki genel bildirimlere ekle
+            addPricingNotification(
+              "oBilet Fiyat Takip",
+              `${journey.operator} (${journey.time}) fiyatı değişti: ${previous.price} TL -> ${journey.price} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
+            );
+          }
+        } else {
+          // İlk kez kaydediliyor, veritabanına ekle
+          db.prepare(
+            "INSERT INTO obilet_prices (target_id, operator, departure_time, price, last_updated) VALUES (?, ?, ?, ?, ?)"
+          ).run(target.id, journey.operator, journey.time, journey.price, now);
+        }
+      }
+      
+      const emails = parseCsvList(target.email_notifications);
+      if (changes.length > 0) {
+        console.log(`[Takip Görevi] ${changes.length} adet fiyat degisimi tespit edildi.`);
+      } else {
+        console.log(`[Takip Görevi] Fiyat değişikliği yok: ${target.origin} - ${target.destination}`);
+      }
+
+      if (emails.length > 0) {
+        const sendAlways = OBILET_EMAIL_MODE !== "changes";
+        if (sendAlways || changes.length > 0) {
+          console.log("[Takip Görevi] Periyodik e-posta raporu gonderiliyor...");
+          await sendObiletCycleStatusEmail(emails, target, trackedJourneys, changes);
+        }
+      }
+    } catch (err) {
+      console.error(`[Takip Görevi] Hata oluştu (${target.origin} -> ${target.destination}): ${err.message}`);
+    }
+  }
+  
+  console.log(`[Takip Görevi] Kontroller tamamlandı: ${nowStamp()}`);
+}
+
+// API: Takip Listesini Getir
+app.get("/api/obilet/targets", requireAuth, (req, res) => {
+  try {
+    const targets = db.prepare("SELECT * FROM obilet_targets ORDER BY id DESC").all();
+    res.json({ ok: true, targets });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Liste alinamadi." });
+  }
+});
+
+// API: Yeni Takip Ekle
+app.post("/api/obilet/targets", requireAuth, (req, res) => {
+  const origin = String(req.body.origin || "").trim();
+  const destination = String(req.body.destination || "").trim();
+  const date = String(req.body.date || "").trim(); // YYYY-MM-DD
+  const operators = String(req.body.operators || "").trim();
+  let emailNotifications = String(req.body.emailNotifications || "").trim();
+  
+  if (!origin || !destination || !date || !operators) {
+    return res.status(400).json({ message: "Kalkis, Varis, Tarih ve Firmalar alanlari zorunludur." });
+  }
+  
+  // E-posta boşsa varsayılanı kullan
+  if (!emailNotifications) {
+    emailNotifications = String(process.env.DEFAULT_NOTIF_EMAIL || "").trim();
+  }
+  
+  try {
+    const result = db.prepare(
+      "INSERT INTO obilet_targets (origin, destination, date, operators, email_notifications, telegram_chat_ids, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).run(origin, destination, date, operators, emailNotifications, "", nowStamp());
+    
+    // Ekleme işleminden sonra fiyatları hemen çekmek için arka planda tetikle
+    setTimeout(() => {
+      refreshObiletPricesTask().catch(() => null);
+    }, 1000);
+    
+    res.json({ ok: true, id: result.lastInsertRowid });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Kayit basarisiz." });
+  }
+});
+
+// API: Takip Hattını Sil
+app.delete("/api/obilet/targets/:id", requireAuth, (req, res) => {
+  const id = Number(req.params.id);
+  try {
+    db.prepare("DELETE FROM obilet_targets WHERE id = ?").run(id);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Silme basarisiz." });
+  }
+});
+
+// API: Fiyat Detaylarını Getir
+app.get("/api/obilet/prices/:targetId", requireAuth, (req, res) => {
+  const targetId = Number(req.params.targetId);
+  try {
+    const prices = db.prepare("SELECT * FROM obilet_prices WHERE target_id = ? ORDER BY departure_time ASC").all(targetId);
+    res.json({ ok: true, prices });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Fiyat detaylari alinamadi." });
+  }
+});
+
+// API: Manuel Yenileme Tetikle
+app.post("/api/obilet/refresh", requireAuth, async (req, res) => {
+  try {
+    // Senkronizasyonu arka planda başlat ama hemen yanıt dön (zaman aşımı olmaması için)
+    refreshObiletPricesTask().catch(e => console.error("[Manuel Yenileme] Hata:", e.message));
+    res.json({ ok: true, message: "Yenileme islemi arka planda baslatildi. Tamamlanmasi 1-2 dakika surebilir." });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Manuel yenileme tetiklenemedi." });
+  }
+});
+
+// API: E-posta Bağlantı Testi
+app.post("/api/obilet/test-email", requireAuth, async (req, res) => {
+  const email = String(req.body.email || "").trim();
+  if (!email) {
+    return res.status(400).json({ message: "E-posta adresi zorunludur." });
+  }
+  
+  try {
+    await sendTestEmail(email);
+    res.json({ ok: true, message: "Test e-postasi basariyla gonderildi." });
+  } catch (error) {
+    res.status(500).json({ message: `SMTP Hatası: ${error.message}. Lütfen .env dosyasındaki şifreyi kontrol edin.` });
+  }
+});
+
+// Sunucu Başladığında ve Her X Dakikada Bir Otomatik Kontrol Zamanlayıcı
+setTimeout(() => {
+  refreshObiletPricesTask().catch(err => console.error("[Otomatik Kontrol] Ilk baslangic hatasi:", err.message));
+}, 5 * 1000); // Server başladıktan 5 saniye sonra ilk kontrol
+
+setInterval(() => {
+  refreshObiletPricesTask().catch(err => console.error("[Otomatik Kontrol] Zamanlayici hatasi:", err.message));
+}, OBILET_CHECK_INTERVAL_MS);
 
 app.listen(PORT, () => {
   console.log(`Sunucu calisiyor: http://localhost:${PORT}`);

@@ -13,3 +13,25 @@ services:
         value: admin
       - key: ADMIN_PASSWORD
         generateValue: true
+      - key: DATA_DIR
+        value: /data
+      - key: OBILET_CHECK_INTERVAL_MINUTES
+        value: 10
+      - key: OBILET_EMAIL_MODE
+        value: always
+      - key: DEFAULT_NOTIF_EMAIL
+        sync: false
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: 465
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+    disk:
+      name: app-data
+      mountPath: /data
+      sizeGB: 1
