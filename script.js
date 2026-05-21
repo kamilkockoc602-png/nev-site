@@ -3591,7 +3591,7 @@ function setupObiletActionButtons() {
     newBtn2.addEventListener("click", async () => {
       const statusEl = document.getElementById("obiletActionStatus");
       const emailInput = document.getElementById("obiletTestEmailAddr");
-      const email = emailInput ? emailInput.value.trim() : "hasan.hazer@kamilkoc.com";
+      const email = emailInput ? emailInput.value.trim() : "hasan.hazer@kamilkoc.com.tr";
       if (!email) {
         if (statusEl) { statusEl.style.color = "#d64545"; statusEl.textContent = "Lütfen test e-posta adresi girin."; }
         return;
