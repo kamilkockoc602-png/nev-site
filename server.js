@@ -3715,6 +3715,75 @@ async function scrapeObilet(origin, destination, dateIso) {
         }
       }
     });
+    const maxDetailLookups = 8;
+
+    const fetchDetailPrice = async (detailUrl) => {
+      if (!detailUrl) return null;
+      const normalizedUrl = detailUrl.startsWith("http")
+        ? detailUrl
+        : `https://www.obilet.com${detailUrl.startsWith("/") ? "" : "/"}${detailUrl}`;
+
+      const detailPage = await browser.newPage();
+      await detailPage.setCacheEnabled(false);
+      await detailPage.setExtraHTTPHeaders({
+        "Cache-Control": "no-cache",
+        Pragma: "no-cache",
+        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+      });
+      await detailPage.setUserAgent(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+      );
+      await detailPage.setViewport({ width: 1280, height: 800 });
+
+      try {
+        await detailPage.goto(normalizedUrl, { waitUntil: "networkidle2", timeout: 60000 });
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await detailPage.waitForFunction(
+          () => /\b\d+\s*(TL|₺)\b/i.test(document.body?.innerText || ""),
+          { timeout: 8000 }
+        ).catch(() => {});
+
+        const price = await detailPage.evaluate(() => {
+          const parsePrice = (value) => {
+            const raw = String(value || "");
+            if (!raw) return 0;
+            const normalized = raw.replace(/\./g, "").replace(",", ".");
+            const number = parseFloat(normalized.replace(/[^0-9.]/g, ""));
+            return Number.isFinite(number) ? Math.round(number) : 0;
+          };
+
+          const candidates = [];
+          document
+            .querySelectorAll(
+              "[itemprop='price'], [itemprop='lowPrice'], .price, .amount, .ticket-price, .fare, .sale-price, .discounted, .discount-price"
+            )
+            .forEach((node) => {
+              const value = node.getAttribute("content") || node.textContent || "";
+              const parsed = parsePrice(value);
+              if (parsed > 0) candidates.push(parsed);
+            });
+
+          const text = document.body?.innerText || "";
+          const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
+          for (const match of text.matchAll(regex)) {
+            const parsed = parsePrice(match[1]);
+            if (parsed > 0) candidates.push(parsed);
+          }
+
+          return candidates.length ? Math.min(...candidates) : 0;
+        });
+
+        return price > 0 ? price : null;
+      } catch (error) {
+        if (DEBUG_OBILET_PRICE) {
+          console.log(`[oBilet][DEBUG] Detay sayfasi hatasi: ${error.message}`);
+        }
+        return null;
+      } finally {
+        await detailPage.close();
+      }
+    };
+
     for (const url of candidateUrls) {
       try {
         console.log(`[oBilet] URL deneniyor: ${url}`);
@@ -3854,7 +3923,15 @@ async function scrapeObilet(origin, destination, dateIso) {
             return prices;
           };
 
-          const addJourney = (operator, time, price, departureStop = "", arrivalStop = "", debugPrices = []) => {
+          const addJourney = (
+            operator,
+            time,
+            price,
+            departureStop = "",
+            arrivalStop = "",
+            debugPrices = [],
+            detailUrl = ""
+          ) => {
             const safeOperator = normalizeOperator(operator);
             const safeTime = String(time || "").trim();
             const safePrice = Number(price) || 0;
@@ -3871,6 +3948,7 @@ async function scrapeObilet(origin, destination, dateIso) {
               departureStop: safeDepartureStop,
               arrivalStop: safeArrivalStop,
               debugPrices: debugMode ? debugPrices : undefined,
+              detailUrl: detailUrl || "",
             });
           };
 
@@ -3900,7 +3978,32 @@ async function scrapeObilet(origin, destination, dateIso) {
               card.querySelector("[itemprop='arrivalBusStop']")?.textContent ||
               "";
 
-            addJourney(operator, departure, bestPrice, departureStop, arrivalStop, priceCandidates);
+            const linkCandidates = Array.from(card.querySelectorAll("a[href]"))
+              .map((node) => node.getAttribute("href") || "")
+              .filter(Boolean);
+            const detailHref = linkCandidates.find((href) =>
+              href.includes("/otobus-bileti/")
+            );
+
+            const buttonCandidates = Array.from(card.querySelectorAll("button, [role='button']"))
+              .map((node) =>
+                node.getAttribute("data-href") ||
+                node.getAttribute("data-url") ||
+                node.getAttribute("data-link") ||
+                ""
+              )
+              .filter(Boolean);
+            const detailUrl = detailHref || buttonCandidates[0] || "";
+
+            addJourney(
+              operator,
+              departure,
+              bestPrice,
+              departureStop,
+              arrivalStop,
+              priceCandidates,
+              detailUrl
+            );
           });
 
           if (!items.length) {
@@ -3954,6 +4057,22 @@ async function scrapeObilet(origin, destination, dateIso) {
         }
 
         if (journeys.length > 0) {
+          const detailTargets = journeys
+            .filter((journey) => journey.detailUrl)
+            .slice(0, maxDetailLookups);
+
+          for (const journey of detailTargets) {
+            const detailPrice = await fetchDetailPrice(journey.detailUrl);
+            if (detailPrice && detailPrice < journey.price) {
+              if (DEBUG_OBILET_PRICE) {
+                console.log(
+                  `[oBilet][DEBUG] Detay fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${detailPrice}`
+                );
+              }
+              journey.price = detailPrice;
+            }
+          }
+
           console.log(`[oBilet] Basariyla ${journeys.length} adet sefer yuklendi.`);
           if (DEBUG_OBILET_PRICE) {
             journeys.forEach((journey) => {
