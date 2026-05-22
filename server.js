@@ -4021,11 +4021,21 @@ async function refreshObiletPricesTask() {
         console.log(`[Takip Görevi] Fiyat değişikliği yok: ${target.origin} - ${target.destination}`);
       }
 
+      let mailWarning = "";
       if (emails.length > 0) {
         const sendAlways = OBILET_EMAIL_MODE !== "changes";
         if (sendAlways || changes.length > 0) {
           console.log("[Takip Görevi] Periyodik e-posta raporu gonderiliyor...");
-          await sendObiletCycleStatusEmail(emails, target, trackedJourneys, changes);
+          try {
+            await sendObiletCycleStatusEmail(emails, target, trackedJourneys, changes);
+          } catch (mailError) {
+            mailWarning = ` E-posta gonderilemedi: ${mailError.message}`;
+            console.error(`[Takip Görevi] E-posta gonderim hatasi (${target.origin} -> ${target.destination}): ${mailError.message}`);
+            addPricingNotification(
+              "oBilet Fiyat Takip",
+              `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} icin rapor e-postasi gonderilemedi: ${mailError.message}`
+            );
+          }
         }
       }
 
@@ -4035,7 +4045,7 @@ async function refreshObiletPricesTask() {
           : "Degisiklik yok";
         setObiletTargetSyncStatus(
           target.id,
-          `Basarili. ${dateList.length} gun tarandi, ${trackedJourneys.length} sefer izlendi, ${changeText}.`
+          `Basarili. ${dateList.length} gun tarandi, ${trackedJourneys.length} sefer izlendi, ${changeText}.${mailWarning}`
         );
       }
     } catch (err) {
