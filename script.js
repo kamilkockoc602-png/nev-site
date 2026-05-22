@@ -3419,6 +3419,9 @@ function renderObiletTargetCards(listEl) {
   listEl.innerHTML = obiletState.targets.map(t => {
     const dateFormatted = (t.date || "").split("-").reverse().join(".");
     const emails = (t.email_notifications || "").split(",").map(e => e.trim()).filter(Boolean);
+    const syncStatus = String(t.last_sync_status || "").trim();
+    const syncAt = String(t.last_sync_at || "").trim();
+    const statusClass = /hata|bulunamadi|alinmadi/i.test(syncStatus) ? "obilet-passive" : "obilet-active";
     return `
       <div class="obilet-target-card" data-id="${t.id}">
         <div class="obilet-card-header">
@@ -3440,6 +3443,8 @@ function renderObiletTargetCards(listEl) {
           <span class="obilet-tag ${t.is_active ? 'obilet-active' : 'obilet-passive'}">
             ${t.is_active ? '✅ Aktif' : '⏸ Pasif'}
           </span>
+          <span class="obilet-tag ${statusClass}">🧭 ${syncStatus || "Henüz kontrol edilmedi"}</span>
+          ${syncAt ? `<span class="obilet-tag">🕒 ${syncAt}</span>` : ""}
         </div>
         <div class="obilet-prices-area hidden" id="pricesArea-${t.id}">
           <div class="obilet-loading">⏳ Fiyatlar yükleniyor...</div>
@@ -3481,7 +3486,9 @@ function renderObiletTargetCards(listEl) {
         const result = await apiFetch(`/api/obilet/prices/${id}`);
         const prices = result.prices || [];
         if (!prices.length) {
-          pricesArea.innerHTML = `<p class="obilet-empty-sm">Henüz fiyat verisi yok. "Şimdi Güncelle" butonunu kullanın.</p>`;
+          const syncText = result.targetStatus?.text ? ` Son durum: ${result.targetStatus.text}` : "";
+          const syncAt = result.targetStatus?.at ? ` (${result.targetStatus.at})` : "";
+          pricesArea.innerHTML = `<p class="obilet-empty-sm">Henüz fiyat verisi yok. "Şimdi Güncelle" butonunu kullanın.${syncText}${syncAt}</p>`;
           return;
         }
 
