@@ -3657,6 +3657,15 @@ async function scrapeObilet(origin, destination, dateIso) {
   
   try {
     const page = await browser.newPage();
+    const blockedRequestPattern = /(doubleclick|googleads|googletagmanager|google-analytics|analytics\.google|facebook\.com|fbcdn|criteo|useinsider|insider|clarity|hotjar|tiktok|yandex|adsystem|adservice|adnxs|taboola|outbrain)/i;
+    await page.setRequestInterception(true);
+    page.on("request", (request) => {
+      const url = request.url();
+      if (blockedRequestPattern.test(url)) {
+        return request.abort();
+      }
+      return request.continue();
+    });
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, "webdriver", { get: () => undefined });
       Object.defineProperty(navigator, "languages", { get: () => ["tr-TR", "tr", "en-US", "en"] });
@@ -3717,6 +3726,38 @@ async function scrapeObilet(origin, destination, dateIso) {
     });
     const maxDetailLookups = 8;
 
+    const readMinPriceFromPage = async (targetPage) => {
+      return targetPage.evaluate(() => {
+        const parsePrice = (value) => {
+          const raw = String(value || "");
+          if (!raw) return 0;
+          const normalized = raw.replace(/\./g, "").replace(",", ".");
+          const number = parseFloat(normalized.replace(/[^0-9.]/g, ""));
+          return Number.isFinite(number) ? Math.round(number) : 0;
+        };
+
+        const candidates = [];
+        document
+          .querySelectorAll(
+            "[itemprop='price'], [itemprop='lowPrice'], .price, .amount, .ticket-price, .fare, .sale-price, .discounted, .discount-price"
+          )
+          .forEach((node) => {
+            const value = node.getAttribute("content") || node.textContent || "";
+            const parsed = parsePrice(value);
+            if (parsed > 0) candidates.push(parsed);
+          });
+
+        const text = document.body?.innerText || "";
+        const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
+        for (const match of text.matchAll(regex)) {
+          const parsed = parsePrice(match[1]);
+          if (parsed > 0) candidates.push(parsed);
+        }
+
+        return candidates.length ? Math.min(...candidates) : 0;
+      });
+    };
+
     const fetchDetailPrice = async (detailUrl) => {
       if (!detailUrl) return null;
       const normalizedUrl = detailUrl.startsWith("http")
@@ -3724,6 +3765,14 @@ async function scrapeObilet(origin, destination, dateIso) {
         : `https://www.obilet.com${detailUrl.startsWith("/") ? "" : "/"}${detailUrl}`;
 
       const detailPage = await browser.newPage();
+      await detailPage.setRequestInterception(true);
+      detailPage.on("request", (request) => {
+        const url = request.url();
+        if (blockedRequestPattern.test(url)) {
+          return request.abort();
+        }
+        return request.continue();
+      });
       await detailPage.setCacheEnabled(false);
       await detailPage.setExtraHTTPHeaders({
         "Cache-Control": "no-cache",
@@ -3743,35 +3792,7 @@ async function scrapeObilet(origin, destination, dateIso) {
           { timeout: 8000 }
         ).catch(() => {});
 
-        const price = await detailPage.evaluate(() => {
-          const parsePrice = (value) => {
-            const raw = String(value || "");
-            if (!raw) return 0;
-            const normalized = raw.replace(/\./g, "").replace(",", ".");
-            const number = parseFloat(normalized.replace(/[^0-9.]/g, ""));
-            return Number.isFinite(number) ? Math.round(number) : 0;
-          };
-
-          const candidates = [];
-          document
-            .querySelectorAll(
-              "[itemprop='price'], [itemprop='lowPrice'], .price, .amount, .ticket-price, .fare, .sale-price, .discounted, .discount-price"
-            )
-            .forEach((node) => {
-              const value = node.getAttribute("content") || node.textContent || "";
-              const parsed = parsePrice(value);
-              if (parsed > 0) candidates.push(parsed);
-            });
-
-          const text = document.body?.innerText || "";
-          const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
-          for (const match of text.matchAll(regex)) {
-            const parsed = parsePrice(match[1]);
-            if (parsed > 0) candidates.push(parsed);
-          }
-
-          return candidates.length ? Math.min(...candidates) : 0;
-        });
+        const price = await readMinPriceFromPage(detailPage);
 
         return price > 0 ? price : null;
       } catch (error) {
@@ -3930,7 +3951,8 @@ async function scrapeObilet(origin, destination, dateIso) {
             departureStop = "",
             arrivalStop = "",
             debugPrices = [],
-            detailUrl = ""
+            detailUrl = "",
+            detailSelector = ""
           ) => {
             const safeOperator = normalizeOperator(operator);
             const safeTime = String(time || "").trim();
@@ -3949,6 +3971,7 @@ async function scrapeObilet(origin, destination, dateIso) {
               arrivalStop: safeArrivalStop,
               debugPrices: debugMode ? debugPrices : undefined,
               detailUrl: detailUrl || "",
+              detailSelector: detailSelector || "",
             });
           };
 
@@ -3995,6 +4018,24 @@ async function scrapeObilet(origin, destination, dateIso) {
               .filter(Boolean);
             const detailUrl = detailHref || buttonCandidates[0] || "";
 
+            let detailSelector = "";
+            if (!detailUrl) {
+              const buttons = Array.from(card.querySelectorAll("button, [role='button'], a"));
+              const keyword = (text) =>
+                String(text || "")
+                  .toLocaleLowerCase("tr-TR")
+                  .includes("koltuk") ||
+                String(text || "")
+                  .toLocaleLowerCase("tr-TR")
+                  .includes("incele");
+              const target = buttons.find((node) => keyword(node.textContent));
+              if (target) {
+                const id = `obilet-btn-${Math.random().toString(36).slice(2, 10)}`;
+                target.setAttribute("data-obilet-btn", id);
+                detailSelector = `[data-obilet-btn="${id}"]`;
+              }
+            }
+
             addJourney(
               operator,
               departure,
@@ -4002,7 +4043,8 @@ async function scrapeObilet(origin, destination, dateIso) {
               departureStop,
               arrivalStop,
               priceCandidates,
-              detailUrl
+              detailUrl,
+              detailSelector
             );
           });
 
@@ -4070,6 +4112,37 @@ async function scrapeObilet(origin, destination, dateIso) {
                 );
               }
               journey.price = detailPrice;
+            }
+          }
+
+          const clickTargets = journeys
+            .filter((journey) => !journey.detailUrl && journey.detailSelector)
+            .slice(0, maxDetailLookups);
+
+          for (const journey of clickTargets) {
+            const popupPromise = page.waitForEvent("popup", { timeout: 6000 }).catch(() => null);
+            await page.click(journey.detailSelector, { timeout: 3000 }).catch(() => null);
+            const popup = await popupPromise;
+            if (!popup) continue;
+
+            try {
+              await popup.waitForLoadState("networkidle", { timeout: 30000 });
+              await new Promise((resolve) => setTimeout(resolve, 1500));
+              const popupPrice = await readMinPriceFromPage(popup);
+              if (popupPrice && popupPrice < journey.price) {
+                if (DEBUG_OBILET_PRICE) {
+                  console.log(
+                    `[oBilet][DEBUG] Popup fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${popupPrice}`
+                  );
+                }
+                journey.price = popupPrice;
+              }
+            } catch (error) {
+              if (DEBUG_OBILET_PRICE) {
+                console.log(`[oBilet][DEBUG] Popup fiyat hatasi: ${error.message}`);
+              }
+            } finally {
+              await popup.close().catch(() => {});
             }
           }
 
