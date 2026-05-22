@@ -3544,8 +3544,6 @@ function extractObiletJourneysFromApiPayload(payload) {
       "lowestPrice",
       "totalPrice",
       "fare",
-      "internetPrice",
-      "originalPrice"
     ].forEach((key) => {
       if (obj && Object.prototype.hasOwnProperty.call(obj, key)) {
         const parsed = readPrice(obj[key]);
@@ -3733,7 +3731,7 @@ async function scrapeObilet(origin, destination, dateIso) {
         }
       }
     });
-    const maxDetailLookups = 0;
+    const maxDetailLookups = 8;
 
     const readMinPriceFromPage = async (targetPage) => {
       return targetPage.evaluate(() => {
@@ -4189,7 +4187,7 @@ async function scrapeObilet(origin, destination, dateIso) {
 
         if (apiJourneys.length > 0 || embeddedJourneys.length > 0) {
           const apiMap = new Map();
-          const mergeSource = [...apiJourneys, ...embeddedJourneys];
+          const mergeSource = apiJourneys.length > 0 ? apiJourneys : embeddedJourneys;
           mergeSource.forEach((journey) => {
             const key = `${toObiletOperatorMatchKey(journey.operator)}|${String(journey.time || "").trim()}`;
             const existing = apiMap.get(key);
@@ -4202,34 +4200,16 @@ async function scrapeObilet(origin, destination, dateIso) {
             journeys = journeys.map((journey) => {
               const key = `${toObiletOperatorMatchKey(journey.operator)}|${String(journey.time || "").trim()}`;
               const apiMatch = apiMap.get(key);
-              
-              // Eğer API'de bu sefer için bir fiyat varsa, ekrandaki ve API'deki fiyatlardan en düşük olanı al
-              // Obilet bazen ekranda "1000 TL" gösterirken API'de "1400 TL" (indirimsiz baz fiyat) döndürebiliyor.
               if (apiMatch && apiMatch.price && apiMatch.price !== journey.price) {
                 if (DEBUG_OBILET_PRICE) {
                   console.log(
-                    `[oBilet][DEBUG] DOM fiyatı (${journey.price}) API fiyatı (${apiMatch.price}) ile karsilastirildi, min alindi.`
+                    `[oBilet][DEBUG] API fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${apiMatch.price}`
                   );
                 }
                 return { ...journey, price: Math.min(journey.price, apiMatch.price) };
               }
               return journey;
             });
-
-            // Sadece DOM'da bulunup API'de olmayanları da listeye ekle (bazen API listesi eksik gelebiliyor)
-            for (const [key, apiJourney] of apiMap.entries()) {
-              const existsInDom = journeys.some((j) => {
-                const domKey = `${toObiletOperatorMatchKey(j.operator)}|${String(j.time || "").trim()}`;
-                return domKey === key;
-              });
-              if (!existsInDom) {
-                 journeys.push(apiJourney);
-                 if (DEBUG_OBILET_PRICE) {
-                   console.log(`[oBilet][DEBUG] DOM'da bulunmayan API seferi eklendi: ${apiJourney.operator} ${apiJourney.time} ${apiJourney.price}`);
-                 }
-              }
-            }
-
           } else {
             journeys = Array.from(apiMap.values());
           }
@@ -4247,55 +4227,51 @@ async function scrapeObilet(origin, destination, dateIso) {
                 continue;
               }
 
-              let clicked = false;
               try {
                 const buttons = await page.$$("button.journey.btn");
                 const button = buttons[i];
-                if (button) {
-                  await button.click({ delay: 60 });
-                  clicked = true;
+                if (!button) {
+                  continue;
                 }
-              } catch (clickError) {
-                clicked = false;
-              }
 
-              if (!clicked) {
-                continue;
-              }
+                const navigationPromise = page.waitForNavigation({ 
+                  waitUntil: "networkidle2", 
+                  timeout: 15000 
+                }).catch(() => null);
+                
+                await button.click({ delay: 60 });
+                const navigated = await navigationPromise;
 
-              await new Promise((resolve) => setTimeout(resolve, 1200));
-              let navigatedToDetail = /\/seferler\//i.test(page.url());
-              if (!navigatedToDetail) {
-                const waitUntil = Date.now() + 20000;
-                const startUrl = listUrl;
-                while (Date.now() < waitUntil) {
-                  const current = page.url();
-                  if (/\/seferler\//i.test(current) || current !== startUrl) {
-                    navigatedToDetail = true;
-                    break;
+                if (navigated && /\/seferler\//i.test(page.url())) {
+                  await new Promise((resolve) => setTimeout(resolve, 800));
+                  const detailPrice = await readMinPriceFromPage(page).catch(() => 0);
+                  
+                  if (detailPrice && detailPrice >= 300 && detailPrice < journey.price) {
+                    seatFlowPrices.push({
+                      operator: journey.operator,
+                      time: journey.time,
+                      price: detailPrice,
+                    });
+                    if (DEBUG_OBILET_PRICE) {
+                      console.log(
+                        `[oBilet][DEBUG] Koltuk akisi fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${detailPrice}`
+                      );
+                    }
+                    journey.price = detailPrice;
                   }
-                  await new Promise((resolve) => setTimeout(resolve, 250));
-                }
-              }
 
-              if (navigatedToDetail) {
-                const detailPrice = await readMinPriceFromPage(page).catch(() => 0);
-                if (detailPrice && detailPrice >= 300 && detailPrice < journey.price) {
-                  seatFlowPrices.push({
-                    operator: journey.operator,
-                    time: journey.time,
-                    price: detailPrice,
-                  });
+                  await page.goto(listUrl, { waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
+                  await page.waitForSelector("li[itemprop='busTrip'], .journeys li", { timeout: 12000 }).catch(() => {});
+                  await new Promise((resolve) => setTimeout(resolve, 500));
+                } else {
                   if (DEBUG_OBILET_PRICE) {
-                    console.log(
-                      `[oBilet][DEBUG] Koltuk akisi fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${detailPrice}`
-                    );
+                    console.log(`[oBilet][DEBUG] Koltuk akisi navigasyon basarisiz: ${journey.operator} ${journey.time}`);
                   }
-                  journey.price = detailPrice;
                 }
-
-                await page.goto(listUrl, { waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
-                await page.waitForSelector("li[itemprop='busTrip'], .journeys li", { timeout: 12000 }).catch(() => {});
+              } catch (seatFlowItemError) {
+                if (DEBUG_OBILET_PRICE) {
+                  console.log(`[oBilet][DEBUG] Koltuk akisi sefer hatasi: ${journey.operator} ${journey.time} - ${seatFlowItemError.message}`);
+                }
                 await new Promise((resolve) => setTimeout(resolve, 500));
               }
             }
@@ -4697,29 +4673,9 @@ async function refreshObiletPricesTask() {
         trackedJourneys.push(...dayTracked);
 
         for (const journey of dayTracked) {
-          // Normalized key ile eslesme yap - operator adi veya durak adindaki
-          // kucuk farklar (ör. "Enver Geçgel" vs "Enver Geçgel Turizm") nedeniyle
-          // eski kaydin bulunamamasini önler.
-          const journeyNormKey = buildJourneyIdentityKey(
-            journey.operator,
-            journey.time,
-            journey.departureStop || "",
-            journey.arrivalStop || ""
-          );
-
-          const allExisting = db.prepare(
-            "SELECT * FROM obilet_prices WHERE target_id = ? AND journey_date = ?"
-          ).all(target.id, journey.journey_date);
-
-          const previous = allExisting.find((row) => {
-            const rowKey = buildJourneyIdentityKey(
-              row.operator,
-              row.departure_time,
-              row.departure_stop || "",
-              row.arrival_stop || ""
-            );
-            return rowKey === journeyNormKey;
-          });
+          const previous = db.prepare(
+            "SELECT * FROM obilet_prices WHERE target_id = ? AND journey_date = ? AND operator = ? AND departure_time = ? AND departure_stop = ?"
+          ).get(target.id, journey.journey_date, journey.operator, journey.time, journey.departureStop || "");
 
           if (previous) {
             if (previous.price !== journey.price) {
@@ -4732,20 +4688,13 @@ async function refreshObiletPricesTask() {
               });
 
               db.prepare(
-                "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, price = ?, last_updated = ? WHERE id = ?"
-              ).run(journey.operator, journey.departureStop || "", journey.arrivalStop || "", journey.price, now, previous.id);
+                "UPDATE obilet_prices SET price = ?, last_updated = ? WHERE id = ?"
+              ).run(journey.price, now, previous.id);
 
               addPricingNotification(
                 "oBilet Fiyat Takip",
                 `${toDotDate(journey.journey_date)} ${journey.operator} (${journey.time}, ${journey.departureStop || "-"}) fiyatı değişti: ${previous.price} TL -> ${journey.price} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
               );
-
-              console.log(`[oBilet] Fiyat degisimi: ${journey.operator} ${journey.time} ${previous.price} -> ${journey.price} TL`);
-            } else {
-              // Fiyat ayni olsa bile operator/durak adini guncelle (gelecek eslesmeler icin)
-              db.prepare(
-                "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, last_updated = ? WHERE id = ?"
-              ).run(journey.operator, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
             }
           } else {
             db.prepare(
@@ -4760,7 +4709,6 @@ async function refreshObiletPricesTask() {
               journey.price,
               now
             );
-            console.log(`[oBilet] Yeni sefer eklendi: ${journey.operator} ${journey.time} ${journey.price} TL`);
           }
         }
       }
