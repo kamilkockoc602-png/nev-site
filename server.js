@@ -29,6 +29,10 @@ const OBILET_CHECK_INTERVAL_MS =
 const OBILET_EMAIL_MODE = String(process.env.OBILET_EMAIL_MODE || "always")
   .trim()
   .toLocaleLowerCase("tr-TR");
+const OBILET_EMAIL_INTERVAL_HOURS = Number.parseInt(
+  process.env.OBILET_EMAIL_INTERVAL_HOURS || "1",
+  10
+);
 const OBILET_SUBJECT_CHANGE = String(process.env.OBILET_SUBJECT_CHANGE || "O bilet fiyat Raporu").trim();
 const OBILET_SUBJECT_NO_CHANGE = String(process.env.OBILET_SUBJECT_NO_CHANGE || "O bilet fiyat Raporu").trim();
 const OBILET_SUBJECT_PRICE_ALERT = String(process.env.OBILET_SUBJECT_PRICE_ALERT || "oBilet Fiyat Degisikligi").trim();
@@ -514,6 +518,7 @@ try { db.exec("ALTER TABLE obilet_targets ADD COLUMN end_date TEXT NOT NULL DEFA
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN departure_stop_filter TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_sync_status TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_sync_at TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_email_sent_at TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN journey_date TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN departure_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN arrival_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
@@ -4795,11 +4800,49 @@ async function refreshObiletPricesTask() {
 
       let mailWarning = "";
       if (emails.length > 0) {
-        const sendAlways = OBILET_EMAIL_MODE !== "changes";
-        if (sendAlways || changes.length > 0) {
-          console.log("[Takip Görevi] Periyodik e-posta raporu gonderiliyor...");
+        let shouldSendEmail = false;
+        
+        if (OBILET_EMAIL_MODE === "smart") {
+          // Smart mod: Değişiklik varsa veya son mailden X saat geçmişse gönder
+          if (changes.length > 0) {
+            shouldSendEmail = true;
+            console.log("[Takip Görevi] Değişiklik tespit edildi, mail gönderiliyor...");
+          } else {
+            const lastEmailSentAt = target.last_email_sent_at || "";
+            if (!lastEmailSentAt) {
+              shouldSendEmail = true;
+              console.log("[Takip Görevi] İlk mail gönderiliyor...");
+            } else {
+              const lastEmailTime = new Date(lastEmailSentAt).getTime();
+              const nowTime = Date.now();
+              const hoursPassed = (nowTime - lastEmailTime) / (1000 * 60 * 60);
+              const intervalHours = Number.isFinite(OBILET_EMAIL_INTERVAL_HOURS) && OBILET_EMAIL_INTERVAL_HOURS > 0
+                ? OBILET_EMAIL_INTERVAL_HOURS
+                : 1;
+              
+              if (hoursPassed >= intervalHours) {
+                shouldSendEmail = true;
+                console.log(`[Takip Görevi] Son mailden ${hoursPassed.toFixed(1)} saat geçti, özet mail gönderiliyor...`);
+              } else {
+                console.log(`[Takip Görevi] Son mailden ${hoursPassed.toFixed(1)} saat geçti, henüz ${intervalHours} saat dolmadı.`);
+              }
+            }
+          }
+        } else if (OBILET_EMAIL_MODE === "changes") {
+          // Changes mod: Sadece değişiklik varsa gönder
+          shouldSendEmail = changes.length > 0;
+        } else {
+          // Always mod: Her zaman gönder
+          shouldSendEmail = true;
+        }
+        
+        if (shouldSendEmail) {
+          console.log("[Takip Görevi] E-posta raporu gonderiliyor...");
           try {
             await sendObiletCycleStatusEmail(emails, target, trackedJourneys, changes);
+            // Mail gönderim zamanını kaydet
+            db.prepare("UPDATE obilet_targets SET last_email_sent_at = ? WHERE id = ?")
+              .run(now, target.id);
           } catch (mailError) {
             mailWarning = ` E-posta gonderilemedi: ${mailError.message}`;
             console.error(`[Takip Görevi] E-posta gonderim hatasi (${target.origin} -> ${target.destination}): ${mailError.message}`);
