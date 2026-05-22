@@ -3772,7 +3772,7 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;border:1px solid #e6e6e6;border-radius:10px;overflow:hidden;">
       <div style="padding:16px 20px;background:#12354a;color:#fff;">
-        <h2 style="margin:0;font-size:18px;">oBilet 10 Dakikalik Fiyat Raporu</h2>
+        <h2 style="margin:0;font-size:18px;">O bilet fiyat Raporu</h2>
       </div>
       <div style="padding:18px 20px;">
         <p style="margin:0 0 10px 0;"><strong>Hat:</strong> ${target.origin.toUpperCase()} -> ${target.destination.toUpperCase()}</p>
