@@ -37,6 +37,7 @@ const EMAIL_SIGNATURE_HTML = String(process.env.EMAIL_SIGNATURE_HTML || "").trim
 const EMAIL_SIGNATURE_TEXT = String(process.env.EMAIL_SIGNATURE_TEXT || "").trim();
 const DEBUG_OBILET_PRICE = String(process.env.DEBUG_OBILET_PRICE || "").trim() === "1";
 const DEBUG_OBILET_API = String(process.env.DEBUG_OBILET_API || "").trim() === "1";
+const DEBUG_OBILET_XHR = String(process.env.DEBUG_OBILET_XHR || "").trim() === "1";
 const OBILET_OPERATOR_CATALOG = [
   "Ali Osman Ulusoy",
   "Anadolu Ulasim",
@@ -3661,6 +3662,9 @@ async function scrapeObilet(origin, destination, dateIso) {
     await page.setRequestInterception(true);
     page.on("request", (request) => {
       const url = request.url();
+      if (DEBUG_OBILET_XHR && (request.resourceType() === "xhr" || request.resourceType() === "fetch")) {
+        console.log(`[oBilet][DEBUG] XHR istegi: ${request.method()} ${url}`);
+      }
       if (blockedRequestPattern.test(url)) {
         return request.abort();
       }
