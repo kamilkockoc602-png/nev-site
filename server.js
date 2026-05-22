@@ -3647,15 +3647,29 @@ async function scrapeObilet(origin, destination, dateIso) {
   
   const browser = await puppeteer.launch({
     headless: "new",
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-blink-features=AutomationControlled"
+    ]
   });
   
   try {
     const page = await browser.newPage();
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+      Object.defineProperty(navigator, "languages", { get: () => ["tr-TR", "tr", "en-US", "en"] });
+      Object.defineProperty(navigator, "platform", { get: () => "Win32" });
+      Object.defineProperty(navigator, "deviceMemory", { get: () => 8 });
+      Object.defineProperty(navigator, "hardwareConcurrency", { get: () => 8 });
+      window.chrome = window.chrome || { runtime: {} };
+    });
     await page.setCacheEnabled(false);
     await page.setExtraHTTPHeaders({
       "Cache-Control": "no-cache",
       Pragma: "no-cache",
+      "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
     });
     await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
     await page.setViewport({ width: 1280, height: 800 });
@@ -3707,6 +3721,14 @@ async function scrapeObilet(origin, destination, dateIso) {
         const response = await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
         await new Promise((resolve) => setTimeout(resolve, 3500));
 
+        try {
+          await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+          await new Promise((resolve) => setTimeout(resolve, 600));
+          await page.evaluate(() => window.scrollTo(0, 0));
+        } catch (scrollError) {
+          // ignore scroll errors
+        }
+
         const currentUrl = page.url();
         const hasDateInUrl = currentUrl.includes(dateIso) || currentUrl.includes(dateStr);
         if (!hasDateInUrl) {
@@ -3740,6 +3762,46 @@ async function scrapeObilet(origin, destination, dateIso) {
           );
         } catch (priceWaitError) {
           console.log("[oBilet] Fiyat metni bekleme suresi asildi. Mevcut DOM ile devam ediliyor.");
+        }
+
+        const expandedCount = await page.evaluate(() => {
+          const cards = Array.from(document.querySelectorAll("li[itemprop='busTrip'], .journeys li"));
+          const keywords = ["incele", "koltuk sec", "koltuk seç", "detay"];
+          let count = 0;
+
+          const isMatch = (text) => {
+            const normalized = String(text || "").toLocaleLowerCase("tr-TR").trim();
+            return keywords.some((key) => normalized.includes(key));
+          };
+
+          cards.forEach((card) => {
+            const candidates = Array.from(card.querySelectorAll("button, a, [role='button']"));
+            const target = candidates.find((node) => isMatch(node.textContent));
+            if (!target) return;
+
+            const tag = target.tagName.toLowerCase();
+            const href = target.getAttribute("href") || "";
+            if (tag === "a" && href && !href.startsWith("#") && !href.startsWith("javascript")) {
+              return;
+            }
+
+            try {
+              target.click();
+              count += 1;
+            } catch (error) {
+              // ignore click errors
+            }
+          });
+
+          return count;
+        });
+
+        if (expandedCount > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 1200));
+        }
+
+        if (DEBUG_OBILET_PRICE && expandedCount > 0) {
+          console.log(`[oBilet][DEBUG] Kart detayi acildi: ${expandedCount}`);
         }
 
         let journeys = await page.evaluate((debugMode) => {
