@@ -3940,82 +3940,7 @@ async function scrapeObilet(origin, destination, dateIso) {
           console.log(`[oBilet][DEBUG] Kart detayi acildi: ${expandedCount}`);
         }
 
-        const seatFlowPrices = await page.evaluate(async () => {
-          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-          const parsePrice = (value) => {
-            const raw = String(value || "");
-            if (!raw) return 0;
-            const normalized = raw.replace(/\./g, "").replace(",", ".");
-            const number = parseFloat(normalized.replace(/[^0-9.]/g, ""));
-            return Number.isFinite(number) ? Math.round(number) : 0;
-          };
-
-          const readCard = (card) => {
-            const operator =
-              card.querySelector("[itemprop='provider'] meta[itemprop='name']")?.getAttribute("content") ||
-              card.querySelector("[itemprop='provider'] img[alt]")?.getAttribute("alt") ||
-              card.querySelector("img[alt]")?.getAttribute("alt") ||
-              "";
-            const time =
-              card.querySelector("[itemprop='departureTime']")?.textContent ||
-              card.querySelector(".departure-time")?.textContent ||
-              "";
-            const priceText =
-              card.querySelector("[itemprop='lowPrice']")?.getAttribute("data-price") ||
-              card.querySelector("[itemprop='lowPrice']")?.textContent ||
-              card.querySelector(".no-cache-price")?.getAttribute("data-price") ||
-              card.querySelector(".no-cache-price")?.textContent ||
-              card.querySelector(".price")?.textContent ||
-              "";
-            return {
-              operator: String(operator || "").replace(/\s+/g, " ").trim(),
-              time: String(time || "").trim(),
-              price: parsePrice(priceText),
-            };
-          };
-
-          const cards = Array.from(document.querySelectorAll("li[itemprop='busTrip'], .journeys li")).slice(0, 8);
-          const results = [];
-
-          for (const card of cards) {
-            const buttons = Array.from(card.querySelectorAll("button, a, [role='button']"));
-            const seatBtn = buttons.find((node) =>
-              String(node.textContent || "")
-                .toLocaleLowerCase("tr-TR")
-                .includes("koltuk")
-            );
-            if (!seatBtn) continue;
-
-            try {
-              seatBtn.click();
-              await sleep(1200);
-              const updated = readCard(card);
-              if (updated.operator && updated.time && updated.price > 0) {
-                results.push(updated);
-              }
-
-              const closeBtn = buttons.find((node) =>
-                String(node.textContent || "")
-                  .toLocaleLowerCase("tr-TR")
-                  .includes("kapat")
-              );
-              if (closeBtn) {
-                closeBtn.click();
-                await sleep(300);
-              }
-            } catch (error) {
-              // ignore seat-flow errors
-            }
-          }
-
-          return results;
-        });
-
-        if (DEBUG_OBILET_PRICE && seatFlowPrices.length > 0) {
-          seatFlowPrices.forEach((item) => {
-            console.log(`[oBilet][DEBUG] Koltuk akisi fiyat: ${item.operator} ${item.time} -> ${item.price}`);
-          });
-        }
+        const seatFlowPrices = [];
 
         const embeddedPayloads = await page.evaluate(() => {
           const results = [];
@@ -4292,29 +4217,56 @@ async function scrapeObilet(origin, destination, dateIso) {
         }
 
         if (journeys.length > 0) {
-          if (seatFlowPrices.length > 0) {
-            const seatMap = new Map();
-            seatFlowPrices.forEach((item) => {
-              const key = `${toObiletOperatorMatchKey(item.operator)}|${String(item.time || "").trim()}`;
-              const existing = seatMap.get(key);
-              if (!existing || item.price < existing.price) {
-                seatMap.set(key, item);
-              }
-            });
+          const listUrl = page.url();
+          const buttonCount = await page.$$eval("button.journey.btn", (nodes) => nodes.length).catch(() => 0);
+          const seatCheckCount = Math.min(buttonCount, journeys.length, maxDetailLookups);
 
-            journeys = journeys.map((journey) => {
-              const key = `${toObiletOperatorMatchKey(journey.operator)}|${String(journey.time || "").trim()}`;
-              const seatMatch = seatMap.get(key);
-              if (seatMatch && seatMatch.price && seatMatch.price < journey.price) {
+          for (let i = 0; i < seatCheckCount; i += 1) {
+            const journey = journeys[i];
+            if (!journey) {
+              continue;
+            }
+
+            const clicked = await page
+              .evaluate((index) => {
+                const buttons = Array.from(document.querySelectorAll("button.journey.btn"));
+                const target = buttons[index];
+                if (!target) {
+                  return false;
+                }
+                target.click();
+                return true;
+              }, i)
+              .catch(() => false);
+
+            if (!clicked) {
+              continue;
+            }
+
+            await page.waitForTimeout(1200);
+            const navigatedToDetail = /\/seferler\//i.test(page.url()) ||
+              (await page.waitForURL(/\/seferler\//i, { timeout: 7000 }).then(() => true).catch(() => false));
+
+            if (navigatedToDetail) {
+              const detailPrice = await readMinPriceFromPage(page).catch(() => 0);
+              if (detailPrice && detailPrice >= 300 && detailPrice < journey.price) {
+                seatFlowPrices.push({
+                  operator: journey.operator,
+                  time: journey.time,
+                  price: detailPrice,
+                });
                 if (DEBUG_OBILET_PRICE) {
                   console.log(
-                    `[oBilet][DEBUG] Koltuk akisi fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${seatMatch.price}`
+                    `[oBilet][DEBUG] Koltuk akisi fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${detailPrice}`
                   );
                 }
-                return { ...journey, price: seatMatch.price };
+                journey.price = detailPrice;
               }
-              return journey;
-            });
+
+              await page.goto(listUrl, { waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
+              await page.waitForSelector("li[itemprop='busTrip'], .journeys li", { timeout: 12000 }).catch(() => {});
+              await page.waitForTimeout(500);
+            }
           }
 
           const detailTargets = journeys
