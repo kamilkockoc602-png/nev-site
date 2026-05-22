@@ -3496,9 +3496,10 @@ async function scrapeObilet(origin, destination, dateIso) {
   const dateParts = dateIso.split("-");
   const dateStr = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`; // DD-MM-YYYY
   const baseUrl = `https://www.obilet.com/otobus-bileti/${originSlug}-${destSlug}`;
+  const cacheBust = Date.now();
   const candidateUrls = [
-    `${baseUrl}?date=${dateIso}`,
-    `${baseUrl}/${dateStr}`,
+    `${baseUrl}?date=${dateIso}&cb=${cacheBust}`,
+    `${baseUrl}/${dateStr}?cb=${cacheBust}`,
   ];
   console.log(`[oBilet] Kazima baslatiliyor. Aday URL sayisi: ${candidateUrls.length}`);
   
@@ -3509,6 +3510,11 @@ async function scrapeObilet(origin, destination, dateIso) {
   
   try {
     const page = await browser.newPage();
+    await page.setCacheEnabled(false);
+    await page.setExtraHTTPHeaders({
+      "Cache-Control": "no-cache",
+      Pragma: "no-cache",
+    });
     await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
     await page.setViewport({ width: 1280, height: 800 });
 
