@@ -19,13 +19,13 @@ const DATA_DIR = configuredDataDir
 const DB_PATH = path.join(DATA_DIR, "app.db");
 const UPDATE_INTERVAL_MS = 10 * 60 * 1000;
 const OBILET_CHECK_INTERVAL_MINUTES = Number.parseInt(
-  process.env.OBILET_CHECK_INTERVAL_MINUTES || "10",
+  process.env.OBILET_CHECK_INTERVAL_MINUTES || "5",
   10
 );
 const OBILET_CHECK_INTERVAL_MS =
   (Number.isFinite(OBILET_CHECK_INTERVAL_MINUTES) && OBILET_CHECK_INTERVAL_MINUTES > 0
     ? OBILET_CHECK_INTERVAL_MINUTES
-    : 10) * 60 * 1000;
+    : 5) * 60 * 1000;
 const OBILET_EMAIL_MODE = String(process.env.OBILET_EMAIL_MODE || "always")
   .trim()
   .toLocaleLowerCase("tr-TR");
