@@ -3398,47 +3398,6 @@ function normalizeObiletOperatorName(raw) {
   return toTurkishTitleCase(String(raw || "").replace(/\s+/g, " ").trim());
 }
 
-function getIstanbulNowParts() {
-  const formatter = new Intl.DateTimeFormat("tr-TR", {
-    timeZone: "Europe/Istanbul",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-  const parts = formatter.formatToParts(new Date());
-  const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
-  const date = `${map.year}-${map.month}-${map.day}`;
-  const time = `${map.hour}:${map.minute}`;
-  return { date, time };
-}
-
-function normalizeTimeHHMM(raw) {
-  const match = String(raw || "").trim().match(/^(\d{1,2}):(\d{2})/);
-  if (!match) {
-    return "";
-  }
-  const hours = match[1].padStart(2, "0");
-  return `${hours}:${match[2]}`;
-}
-
-function isPastObiletJourney(journeyDate, departureTime, nowParts) {
-  const date = String(journeyDate || "").trim();
-  const time = normalizeTimeHHMM(departureTime);
-  if (!date || !time || !nowParts?.date || !nowParts?.time) {
-    return false;
-  }
-
-  if (date < nowParts.date) {
-    return true;
-  }
-  if (date > nowParts.date) {
-    return false;
-  }
-  return time < nowParts.time;
-}
 
 async function loadObiletOperatorCatalog() {
   if (obiletState.operatorCatalog.length) {
@@ -3689,26 +3648,11 @@ function renderObiletTargetCards(listEl) {
           return;
         }
 
-        const nowParts = getIstanbulNowParts();
-        const visiblePrices = prices.filter(
-          (p) => !isPastObiletJourney(p.journey_date, p.departure_time, nowParts)
-        );
-        const hiddenCount = prices.length - visiblePrices.length;
-        const hiddenNote = hiddenCount
-          ? `<div class="obilet-empty-sm">Gecmis ${hiddenCount} sefer gizlendi.</div>`
-          : "";
-
-        if (!visiblePrices.length) {
-          pricesArea.innerHTML = `${hiddenNote}<p class="obilet-empty-sm">Gosterilecek aktif sefer bulunamadi.</p>`;
-          return;
-        }
-
         pricesArea.innerHTML = `
-          ${hiddenNote}
           <table class="obilet-prices-table">
             <thead><tr><th>Tarih</th><th>Firma</th><th>Kalkış</th><th>Varış</th><th>Saat</th><th>Fiyat</th><th>Son Güncelleme</th></tr></thead>
             <tbody>
-              ${visiblePrices.map(p => `
+              ${prices.map(p => `
                 <tr>
                   <td>${(p.journey_date || "").split("-").reverse().join(".") || "-"}</td>
                   <td><strong>${p.operator}</strong></td>
