@@ -33,6 +33,8 @@ const OBILET_SUBJECT_CHANGE = String(process.env.OBILET_SUBJECT_CHANGE || "O bil
 const OBILET_SUBJECT_NO_CHANGE = String(process.env.OBILET_SUBJECT_NO_CHANGE || "O bilet fiyat Raporu").trim();
 const OBILET_SUBJECT_PRICE_ALERT = String(process.env.OBILET_SUBJECT_PRICE_ALERT || "oBilet Fiyat Degisikligi").trim();
 const OBILET_SUBJECT_TEST = String(process.env.OBILET_SUBJECT_TEST || "oBilet Test E-postasi").trim();
+const EMAIL_SIGNATURE_HTML = String(process.env.EMAIL_SIGNATURE_HTML || "").trim();
+const EMAIL_SIGNATURE_TEXT = String(process.env.EMAIL_SIGNATURE_TEXT || "").trim();
 const OBILET_OPERATOR_CATALOG = [
   "Ali Osman Ulusoy",
   "Anadolu Ulasim",
@@ -172,6 +174,22 @@ function toTurkishTitleCase(text) {
       return `${first}${rest}`;
     })
     .join(" ");
+}
+
+function renderEmailSignature() {
+  if (!EMAIL_SIGNATURE_HTML && !EMAIL_SIGNATURE_TEXT) {
+    return "";
+  }
+
+  const signatureBody = EMAIL_SIGNATURE_HTML
+    ? EMAIL_SIGNATURE_HTML
+    : EMAIL_SIGNATURE_TEXT.replace(/\n/g, "<br/>");
+
+  return `
+    <div style="margin-top: 18px; padding-top: 12px; border-top: 1px dashed #e0e0e0; color: #555; font-size: 12px; line-height: 1.5; font-family: sans-serif;">
+      ${signatureBody}
+    </div>
+  `;
 }
 
 function parseTurkishNumber(raw) {
@@ -3723,6 +3741,7 @@ async function sendPriceChangeEmail(emailList, target, changes) {
             Yönetim Paneline Git
           </a>
         </div>
+        ${renderEmailSignature()}
       </div>
       
       <!-- Footer -->
@@ -3824,6 +3843,7 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
           </thead>
           <tbody>${currentPriceRows || '<tr><td colspan="4" style="padding:8px;">Takip edilen firmalar icin sefer verisi bulunamadi.</td></tr>'}</tbody>
         </table>
+        ${renderEmailSignature()}
       </div>
     </div>
   `;
@@ -3859,6 +3879,7 @@ async function sendTestEmail(emailAddress) {
         <p><strong>Zaman:</strong> ${nowStamp()}</p>
         <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;"/>
         <p style="color: #777; font-size: 12px; line-height: 1.4;">Sisteminiz sorunsuz bir şekilde fiyat değişim e-postalarını göndermeye hazırdır.</p>
+        ${renderEmailSignature()}
       </div>
     `
   };
