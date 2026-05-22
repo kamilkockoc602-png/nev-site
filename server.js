@@ -3511,6 +3511,125 @@ function buildJourneyIdentityKey(operator, departureTime, departureStop, arrival
   ].join("|");
 }
 
+function extractObiletJourneysFromApiPayload(payload) {
+  const results = [];
+  const seen = new Set();
+
+  const readPrice = (value) => {
+    const parsed = parsePriceNumber(value);
+    if (!Number.isFinite(parsed)) {
+      return null;
+    }
+    return Math.round(parsed);
+  };
+
+  const normalizeTime = (value) => {
+    if (value == null) return "";
+    const text = String(value).trim();
+    const match = text.match(/([01]\d|2[0-3]):[0-5]\d/);
+    return match ? match[0] : text;
+  };
+
+  const pickPrice = (obj) => {
+    const candidates = [];
+    [
+      "price",
+      "amount",
+      "salePrice",
+      "discountedPrice",
+      "campaignPrice",
+      "lowestPrice",
+      "totalPrice",
+      "fare",
+    ].forEach((key) => {
+      if (obj && Object.prototype.hasOwnProperty.call(obj, key)) {
+        const parsed = readPrice(obj[key]);
+        if (parsed != null) candidates.push(parsed);
+      }
+    });
+
+    if (Array.isArray(obj?.prices)) {
+      obj.prices.forEach((item) => {
+        const parsed = readPrice(item?.amount ?? item?.price ?? item);
+        if (parsed != null) candidates.push(parsed);
+      });
+    }
+
+    const cleaned = candidates.filter((value) => Number.isFinite(value) && value > 0);
+    return cleaned.length ? Math.min(...cleaned) : null;
+  };
+
+  const pushJourney = (operator, time, price, departureStop = "", arrivalStop = "") => {
+    if (!operator || !time || !price) return;
+    const key = `${toObiletOperatorMatchKey(operator)}|${String(time || "").trim()}|${price}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    results.push({
+      operator: toTurkishTitleCase(operator),
+      time: String(time || "").trim(),
+      price,
+      departureStop: String(departureStop || "").trim(),
+      arrivalStop: String(arrivalStop || "").trim(),
+    });
+  };
+
+  const walk = (value) => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      value.forEach(walk);
+      return;
+    }
+    if (typeof value !== "object") return;
+
+    const operator =
+      value.operatorName ||
+      value.operator ||
+      value.companyName ||
+      value.providerName ||
+      value.provider?.name ||
+      value.company?.name ||
+      value.partner?.name ||
+      value.carrier?.name ||
+      value.serviceProvider?.name ||
+      "";
+
+    const time = normalizeTime(
+      value.departureTime ||
+        value.departure_time ||
+        value.time ||
+        value.hour ||
+        value.departure?.time ||
+        value.departure?.timeText ||
+        value.journey?.departureTime ||
+        ""
+    );
+
+    const departureStop =
+      value.departureStop ||
+      value.departure?.name ||
+      value.origin?.name ||
+      value.from?.name ||
+      "";
+
+    const arrivalStop =
+      value.arrivalStop ||
+      value.arrival?.name ||
+      value.destination?.name ||
+      value.to?.name ||
+      "";
+
+    const price = pickPrice(value);
+    if (operator && time && price) {
+      pushJourney(operator, time, price, departureStop, arrivalStop);
+    }
+
+    Object.values(value).forEach(walk);
+  };
+
+  walk(payload);
+  return results;
+}
+
 // oBilet Scraper (Puppeteer Tabanlı)
 async function scrapeObilet(origin, destination, dateIso) {
   const originSlug = slugTr(origin).replace(/\s+/g, "-");
@@ -3541,6 +3660,27 @@ async function scrapeObilet(origin, destination, dateIso) {
     await page.setViewport({ width: 1280, height: 800 });
 
     let lastError = "Bilinmeyen hata";
+    const apiJourneys = [];
+    const apiUrlPattern = /(obilet|otobus|bus|journey|trip|search|ticket|sefer)/i;
+
+    page.on("response", async (response) => {
+      try {
+        const url = response.url();
+        if (!apiUrlPattern.test(url)) return;
+        const contentType = response.headers()["content-type"] || "";
+        if (!contentType.includes("json")) return;
+        const data = await response.json().catch(() => null);
+        if (!data) return;
+        const extracted = extractObiletJourneysFromApiPayload(data);
+        if (extracted.length > 0) {
+          apiJourneys.push(...extracted);
+        }
+      } catch (error) {
+        if (DEBUG_OBILET_PRICE) {
+          console.log(`[oBilet][DEBUG] API yanit okuma hatasi: ${error.message}`);
+        }
+      }
+    });
     for (const url of candidateUrls) {
       try {
         console.log(`[oBilet] URL deneniyor: ${url}`);
@@ -3582,7 +3722,7 @@ async function scrapeObilet(origin, destination, dateIso) {
           console.log("[oBilet] Fiyat metni bekleme suresi asildi. Mevcut DOM ile devam ediliyor.");
         }
 
-        const journeys = await page.evaluate((debugMode) => {
+        let journeys = await page.evaluate((debugMode) => {
           const items = [];
           const seen = new Set();
 
@@ -3701,6 +3841,35 @@ async function scrapeObilet(origin, destination, dateIso) {
 
           return items;
         }, DEBUG_OBILET_PRICE);
+
+        if (apiJourneys.length > 0) {
+          const apiMap = new Map();
+          apiJourneys.forEach((journey) => {
+            const key = `${toObiletOperatorMatchKey(journey.operator)}|${String(journey.time || "").trim()}`;
+            const existing = apiMap.get(key);
+            if (!existing || journey.price < existing.price) {
+              apiMap.set(key, journey);
+            }
+          });
+
+          if (journeys.length > 0) {
+            journeys = journeys.map((journey) => {
+              const key = `${toObiletOperatorMatchKey(journey.operator)}|${String(journey.time || "").trim()}`;
+              const apiMatch = apiMap.get(key);
+              if (apiMatch && apiMatch.price && apiMatch.price !== journey.price) {
+                if (DEBUG_OBILET_PRICE) {
+                  console.log(
+                    `[oBilet][DEBUG] API fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${apiMatch.price}`
+                  );
+                }
+                return { ...journey, price: Math.min(journey.price, apiMatch.price) };
+              }
+              return journey;
+            });
+          } else {
+            journeys = Array.from(apiMap.values());
+          }
+        }
 
         if (journeys.length > 0) {
           console.log(`[oBilet] Basariyla ${journeys.length} adet sefer yuklendi.`);
