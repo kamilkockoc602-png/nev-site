@@ -4220,6 +4220,12 @@ async function scrapeObilet(origin, destination, dateIso) {
           
           // Origin ve Destination ID'lerini SATIN AL butonundan al
           try {
+            await page.waitForSelector("button.journey.btn", { timeout: 10000 }).catch(() => {
+              if (DEBUG_OBILET_PRICE) {
+                console.log(`[oBilet][DEBUG] Button selector bulunamadi, detay sayfa atlandi`);
+              }
+            });
+
             const buttonData = await page.$$eval("button.journey.btn", (buttons) => {
               const firstBtn = buttons[0];
               if (!firstBtn) return null;
@@ -4227,7 +4233,16 @@ async function scrapeObilet(origin, destination, dateIso) {
                 originId: firstBtn.getAttribute("data-origin-id"),
                 destId: firstBtn.getAttribute("data-destination-id"),
               };
-            }).catch(() => null);
+            }).catch((err) => {
+              if (DEBUG_OBILET_PRICE) {
+                console.log(`[oBilet][DEBUG] Button veri okuma hatasi: ${err.message}`);
+              }
+              return null;
+            });
+
+            if (DEBUG_OBILET_PRICE) {
+              console.log(`[oBilet][DEBUG] Button verileri: ${JSON.stringify(buttonData)}`);
+            }
 
             if (buttonData && buttonData.originId && buttonData.destId) {
               // /seferler/ sayfasina direkt git (sefer ID'si olmadan)
