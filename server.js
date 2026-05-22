@@ -4217,67 +4217,109 @@ async function scrapeObilet(origin, destination, dateIso) {
 
         if (journeys.length > 0) {
           const listUrl = page.url();
+          
+          // Origin ve Destination ID'lerini SATIN AL butonundan al
           try {
-            const buttonCount = await page.$$eval("button.journey.btn", (nodes) => nodes.length).catch(() => 0);
-            const seatCheckCount = Math.min(buttonCount, journeys.length, maxDetailLookups);
+            const buttonData = await page.$$eval("button.journey.btn", (buttons) => {
+              const firstBtn = buttons[0];
+              if (!firstBtn) return null;
+              return {
+                originId: firstBtn.getAttribute("data-origin-id"),
+                destId: firstBtn.getAttribute("data-destination-id"),
+              };
+            }).catch(() => null);
 
-            for (let i = 0; i < seatCheckCount; i += 1) {
-              const journey = journeys[i];
-              if (!journey) {
-                continue;
+            if (buttonData && buttonData.originId && buttonData.destId) {
+              // /seferler/ sayfasina direkt git (sefer ID'si olmadan)
+              const seferlerUrl = `https://www.obilet.com/seferler/${buttonData.originId}-${buttonData.destId}/${dateIso}`;
+              if (DEBUG_OBILET_PRICE) {
+                console.log(`[oBilet][DEBUG] Detay sayfasina gidiliyor: ${seferlerUrl}`);
               }
 
-              try {
-                const buttons = await page.$$("button.journey.btn");
-                const button = buttons[i];
-                if (!button) {
-                  continue;
-                }
+              await page.goto(seferlerUrl, { waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
+              await new Promise((resolve) => setTimeout(resolve, 1200));
 
-                const navigationPromise = page.waitForNavigation({ 
-                  waitUntil: "networkidle2", 
-                  timeout: 15000 
-                }).catch(() => null);
-                
-                await button.click({ delay: 60 });
-                const navigated = await navigationPromise;
+              // Detay sayfasindaki tum firma+saat+fiyat kombinasyonlarini al
+              const detailJourneys = await page.evaluate(() => {
+                const results = [];
+                const parsePrice = (text) => {
+                  const normalized = String(text || "").replace(/\./g, "").replace(",", ".");
+                  const number = parseFloat(normalized.replace(/[^0-9.]/g, ""));
+                  return Number.isFinite(number) ? Math.round(number) : 0;
+                };
 
-                if (navigated && /\/seferler\//i.test(page.url())) {
-                  await new Promise((resolve) => setTimeout(resolve, 800));
-                  const detailPrice = await readMinPriceFromPage(page).catch(() => 0);
-                  
-                  if (detailPrice && detailPrice >= 300 && detailPrice < journey.price) {
-                    seatFlowPrices.push({
-                      operator: journey.operator,
-                      time: journey.time,
-                      price: detailPrice,
-                    });
-                    if (DEBUG_OBILET_PRICE) {
-                      console.log(
-                        `[oBilet][DEBUG] Koltuk akisi fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${detailPrice}`
-                      );
+                // Fiyat elementlerini bul
+                const priceElements = document.querySelectorAll('[itemprop="price"], .price, .amount');
+                priceElements.forEach((priceEl) => {
+                  const priceText = priceEl.textContent?.trim();
+                  const price = parsePrice(priceText);
+                  if (price < 300) return;
+
+                  // Bu fiyatin firma ve saatini bul (parent elementlerde ara)
+                  let current = priceEl;
+                  let operator = "";
+                  let time = "";
+
+                  for (let i = 0; i < 10; i++) {
+                    if (!current) break;
+                    const text = current.textContent || "";
+                    
+                    // Saat formati: HH:MM
+                    if (!time) {
+                      const timeMatch = text.match(/\b([01]\d|2[0-3]):[0-5]\d\b/);
+                      if (timeMatch) time = timeMatch[0];
                     }
-                    journey.price = detailPrice;
+
+                    // Firma ismi (buyuk harf iceren kelimeler)
+                    if (!operator) {
+                      const firmMatch = text.match(/\b([A-ZÇĞİÖŞÜ][a-zçğıöşü]+(?:\s+[A-ZÇĞİÖŞÜ][a-zçğıöşü]+){1,3})\b/);
+                      if (firmMatch) operator = firmMatch[0];
+                    }
+
+                    if (operator && time) break;
+                    current = current.parentElement;
                   }
 
-                  await page.goto(listUrl, { waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
-                  await page.waitForSelector("li[itemprop='busTrip'], .journeys li", { timeout: 12000 }).catch(() => {});
-                  await new Promise((resolve) => setTimeout(resolve, 500));
-                } else {
-                  if (DEBUG_OBILET_PRICE) {
-                    console.log(`[oBilet][DEBUG] Koltuk akisi navigasyon basarisiz: ${journey.operator} ${journey.time}`);
+                  if (operator && time && price) {
+                    results.push({ operator, time, price });
                   }
+                });
+
+                return results;
+              });
+
+              if (DEBUG_OBILET_PRICE) {
+                console.log(`[oBilet][DEBUG] Detay sayfasinda ${detailJourneys.length} sefer bulundu`);
+              }
+
+              // Detay sayfasindaki fiyatlarla eslestir
+              for (const journey of journeys) {
+                const detailMatch = detailJourneys.find((dj) => {
+                  const operatorMatch = toObiletOperatorMatchKey(dj.operator) === toObiletOperatorMatchKey(journey.operator);
+                  const timeMatch = String(dj.time || "").trim() === String(journey.time || "").trim();
+                  return operatorMatch && timeMatch;
+                });
+
+                if (detailMatch && detailMatch.price && detailMatch.price < journey.price) {
+                  if (DEBUG_OBILET_PRICE) {
+                    console.log(
+                      `[oBilet][DEBUG] Kampanya fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${detailMatch.price}`
+                    );
+                  }
+                  journey.price = detailMatch.price;
                 }
-              } catch (seatFlowItemError) {
-                if (DEBUG_OBILET_PRICE) {
-                  console.log(`[oBilet][DEBUG] Koltuk akisi sefer hatasi: ${journey.operator} ${journey.time} - ${seatFlowItemError.message}`);
-                }
-                await new Promise((resolve) => setTimeout(resolve, 500));
+              }
+
+              // Liste sayfasina geri don
+              await page.goto(listUrl, { waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
+            } else {
+              if (DEBUG_OBILET_PRICE) {
+                console.log(`[oBilet][DEBUG] Origin/Dest ID bulunamadi, detay sayfa atlandi`);
               }
             }
-          } catch (seatFlowError) {
+          } catch (detailPageError) {
             if (DEBUG_OBILET_PRICE) {
-              console.log(`[oBilet][DEBUG] Koltuk akisi atlandi: ${seatFlowError.message}`);
+              console.log(`[oBilet][DEBUG] Detay sayfa hatasi: ${detailPageError.message}`);
             }
           }
 
