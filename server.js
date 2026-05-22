@@ -4305,13 +4305,25 @@ async function scrapeObilet(origin, destination, dateIso) {
 
               if (DEBUG_OBILET_PRICE) {
                 console.log(`[oBilet][DEBUG] Detay sayfasinda ${detailJourneys.length} sefer bulundu`);
+                detailJourneys.forEach((dj) => {
+                  console.log(`[oBilet][DEBUG]   Detay sefer: ${dj.operator} ${dj.time} ${dj.price} TL`);
+                });
               }
 
               // Detay sayfasindaki fiyatlarla eslestir
               for (const journey of journeys) {
+                if (DEBUG_OBILET_PRICE) {
+                  console.log(`[oBilet][DEBUG] Eslestirme araniyor: ${journey.operator} ${journey.time} (${journey.price} TL)`);
+                }
+
                 const detailMatch = detailJourneys.find((dj) => {
                   const operatorMatch = toObiletOperatorMatchKey(dj.operator) === toObiletOperatorMatchKey(journey.operator);
                   const timeMatch = String(dj.time || "").trim() === String(journey.time || "").trim();
+                  
+                  if (DEBUG_OBILET_PRICE && (operatorMatch || timeMatch)) {
+                    console.log(`[oBilet][DEBUG]     Test: ${dj.operator} ${dj.time} - operator:${operatorMatch} time:${timeMatch}`);
+                  }
+                  
                   return operatorMatch && timeMatch;
                 });
 
@@ -4322,6 +4334,8 @@ async function scrapeObilet(origin, destination, dateIso) {
                     );
                   }
                   journey.price = detailMatch.price;
+                } else if (DEBUG_OBILET_PRICE) {
+                  console.log(`[oBilet][DEBUG]     Eslesme bulunamadi veya fiyat daha yuksek`);
                 }
               }
 
