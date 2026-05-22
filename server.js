@@ -4242,7 +4242,7 @@ async function scrapeObilet(origin, destination, dateIso) {
               continue;
             }
 
-            await page.waitForTimeout(1200);
+            await new Promise((resolve) => setTimeout(resolve, 1200));
             const navigatedToDetail = /\/seferler\//i.test(page.url()) ||
               (await page.waitForURL(/\/seferler\//i, { timeout: 7000 }).then(() => true).catch(() => false));
 
@@ -4264,7 +4264,7 @@ async function scrapeObilet(origin, destination, dateIso) {
 
               await page.goto(listUrl, { waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
               await page.waitForSelector("li[itemprop='busTrip'], .journeys li", { timeout: 12000 }).catch(() => {});
-              await page.waitForTimeout(500);
+              await new Promise((resolve) => setTimeout(resolve, 500));
             }
           }
 
