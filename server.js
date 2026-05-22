@@ -4227,17 +4227,17 @@ async function scrapeObilet(origin, destination, dateIso) {
                 continue;
               }
 
-              const clicked = await page
-                .evaluate((index) => {
-                  const buttons = Array.from(document.querySelectorAll("button.journey.btn"));
-                  const target = buttons[index];
-                  if (!target) {
-                    return false;
-                  }
-                  target.click();
-                  return true;
-                }, i)
-                .catch(() => false);
+              let clicked = false;
+              try {
+                const buttons = await page.$$("button.journey.btn");
+                const button = buttons[i];
+                if (button) {
+                  await button.click({ delay: 60 });
+                  clicked = true;
+                }
+              } catch (clickError) {
+                clicked = false;
+              }
 
               if (!clicked) {
                 continue;
@@ -4246,9 +4246,11 @@ async function scrapeObilet(origin, destination, dateIso) {
               await new Promise((resolve) => setTimeout(resolve, 1200));
               let navigatedToDetail = /\/seferler\//i.test(page.url());
               if (!navigatedToDetail) {
-                const waitUntil = Date.now() + 7000;
+                const waitUntil = Date.now() + 20000;
+                const startUrl = listUrl;
                 while (Date.now() < waitUntil) {
-                  if (/\/seferler\//i.test(page.url())) {
+                  const current = page.url();
+                  if (/\/seferler\//i.test(current) || current !== startUrl) {
                     navigatedToDetail = true;
                     break;
                   }
