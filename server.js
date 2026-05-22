@@ -82,6 +82,7 @@ const OBILET_OPERATOR_CATALOG = [
   "Luks Artvin",
   "Malatya Medine",
   "Mardin Seyahat",
+  "Martur",
   "Mersin Nur",
   "Metro Turizm",
   "Midyat Seyyidoglu",
