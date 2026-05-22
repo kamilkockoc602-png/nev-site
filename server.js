@@ -3902,6 +3902,55 @@ async function scrapeObilet(origin, destination, dateIso) {
           console.log(`[oBilet][DEBUG] Kart detayi acildi: ${expandedCount}`);
         }
 
+        const embeddedPayloads = await page.evaluate(() => {
+          const results = [];
+          const maxPayloads = 6;
+          const maxLength = 250000;
+
+          const pushPayload = (text) => {
+            if (!text) return;
+            const trimmed = text.trim();
+            if (!trimmed || trimmed.length > maxLength) return;
+            if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+              results.push(trimmed);
+            }
+          };
+
+          const scripts = Array.from(document.querySelectorAll("script"));
+          for (const script of scripts) {
+            if (results.length >= maxPayloads) break;
+            const type = (script.getAttribute("type") || "").toLowerCase();
+            if (type.includes("json")) {
+              pushPayload(script.textContent || "");
+            }
+          }
+
+          const textScripts = scripts
+            .map((script) => script.textContent || "")
+            .filter(Boolean);
+
+          const patterns = [
+            /__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*;?/,
+            /__NEXT_DATA__\s*=\s*(\{[\s\S]*?\})\s*;?/,
+            /__NUXT__\s*=\s*(\{[\s\S]*?\})\s*;?/,
+            /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*;?/,
+            /window\.__NUXT__\s*=\s*(\{[\s\S]*?\})\s*;?/,
+          ];
+
+          for (const scriptText of textScripts) {
+            if (results.length >= maxPayloads) break;
+            for (const pattern of patterns) {
+              const match = scriptText.match(pattern);
+              if (match && match[1]) {
+                pushPayload(match[1]);
+                break;
+              }
+            }
+          }
+
+          return results.slice(0, maxPayloads);
+        });
+
         let journeys = await page.evaluate((debugMode) => {
           const items = [];
           const seen = new Set();
@@ -4077,9 +4126,29 @@ async function scrapeObilet(origin, destination, dateIso) {
           return items;
         }, DEBUG_OBILET_PRICE);
 
-        if (apiJourneys.length > 0) {
+        const embeddedJourneys = [];
+        if (embeddedPayloads.length > 0) {
+          embeddedPayloads.forEach((payload) => {
+            try {
+              const parsed = JSON.parse(payload);
+              const extracted = extractObiletJourneysFromApiPayload(parsed);
+              if (extracted.length > 0) {
+                embeddedJourneys.push(...extracted);
+              }
+            } catch (error) {
+              // ignore JSON parse errors
+            }
+          });
+        }
+
+        if (DEBUG_OBILET_PRICE && embeddedJourneys.length > 0) {
+          console.log(`[oBilet][DEBUG] Gömülü JSON sefer bulundu: ${embeddedJourneys.length}`);
+        }
+
+        if (apiJourneys.length > 0 || embeddedJourneys.length > 0) {
           const apiMap = new Map();
-          apiJourneys.forEach((journey) => {
+          const mergeSource = apiJourneys.length > 0 ? apiJourneys : embeddedJourneys;
+          mergeSource.forEach((journey) => {
             const key = `${toObiletOperatorMatchKey(journey.operator)}|${String(journey.time || "").trim()}`;
             const existing = apiMap.get(key);
             if (!existing || journey.price < existing.price) {
