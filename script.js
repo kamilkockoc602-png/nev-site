@@ -3384,7 +3384,156 @@ if (dom.errorReportForm) {
 const obiletState = {
   targets: [],
   expandedTargetId: null,
+  operatorCatalog: [],
 };
+
+function parseObiletOperatorsCsv(raw) {
+  return String(raw || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeObiletOperatorName(raw) {
+  return toTurkishTitleCase(String(raw || "").replace(/\s+/g, " ").trim());
+}
+
+async function loadObiletOperatorCatalog() {
+  if (obiletState.operatorCatalog.length) {
+    return obiletState.operatorCatalog;
+  }
+
+  const result = await apiFetch("/api/obilet/operators");
+  obiletState.operatorCatalog = (result.operators || [])
+    .map(normalizeObiletOperatorName)
+    .filter(Boolean);
+  return obiletState.operatorCatalog;
+}
+
+function setupObiletOperatorPicker(form) {
+  const hiddenInput = form.querySelector("#obiletOperators");
+  const searchInput = form.querySelector("#obiletOperatorSearch");
+  const optionsEl = form.querySelector("#obiletOperatorOptions");
+  const selectedEl = form.querySelector("#obiletOperatorSelected");
+  const selectAllBtn = form.querySelector("#obiletOperatorSelectAll");
+  const clearBtn = form.querySelector("#obiletOperatorClear");
+
+  if (!hiddenInput || !searchInput || !optionsEl || !selectedEl || !selectAllBtn || !clearBtn) {
+    return { clear: () => null };
+  }
+
+  const selected = new Set(
+    parseObiletOperatorsCsv(hiddenInput.value).map(normalizeObiletOperatorName).filter(Boolean)
+  );
+  let allOperators = [];
+
+  const syncHiddenInput = () => {
+    hiddenInput.value = Array.from(selected).join(", ");
+  };
+
+  const renderSelected = () => {
+    selectedEl.innerHTML = "";
+    if (!selected.size) {
+      selectedEl.textContent = "Firma seciniz...";
+      return;
+    }
+
+    Array.from(selected)
+      .sort((a, b) => a.localeCompare(b, "tr-TR"))
+      .forEach((name) => {
+        const chip = document.createElement("span");
+        chip.className = "obilet-operator-chip";
+        chip.textContent = name;
+        selectedEl.appendChild(chip);
+      });
+  };
+
+  const renderOptions = (query = "") => {
+    const normalizedQuery = normalizeSearchText(query || "");
+    const filtered = allOperators.filter((name) =>
+      normalizeSearchText(name).includes(normalizedQuery)
+    );
+
+    optionsEl.innerHTML = "";
+    if (!filtered.length) {
+      const empty = document.createElement("div");
+      empty.className = "obilet-empty-sm";
+      empty.textContent = "Aramaya uygun firma bulunamadi.";
+      optionsEl.appendChild(empty);
+      return;
+    }
+
+    filtered.forEach((name) => {
+      const label = document.createElement("label");
+      label.className = "obilet-operator-option";
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = selected.has(name);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          selected.add(name);
+        } else {
+          selected.delete(name);
+        }
+        syncHiddenInput();
+        renderSelected();
+      });
+
+      const text = document.createElement("span");
+      text.textContent = name;
+
+      label.appendChild(checkbox);
+      label.appendChild(text);
+      optionsEl.appendChild(label);
+    });
+  };
+
+  searchInput.addEventListener("input", () => {
+    renderOptions(searchInput.value);
+  });
+
+  selectAllBtn.addEventListener("click", () => {
+    const normalizedQuery = normalizeSearchText(searchInput.value || "");
+    allOperators.forEach((name) => {
+      if (normalizeSearchText(name).includes(normalizedQuery)) {
+        selected.add(name);
+      }
+    });
+    syncHiddenInput();
+    renderSelected();
+    renderOptions(searchInput.value);
+  });
+
+  clearBtn.addEventListener("click", () => {
+    selected.clear();
+    syncHiddenInput();
+    renderSelected();
+    renderOptions(searchInput.value);
+  });
+
+  const boot = async () => {
+    try {
+      allOperators = await loadObiletOperatorCatalog();
+      renderSelected();
+      renderOptions("");
+      syncHiddenInput();
+    } catch (error) {
+      optionsEl.innerHTML = `<div class="obilet-empty-sm">Firma listesi alinamadi: ${error.message}</div>`;
+    }
+  };
+
+  boot().catch(() => null);
+
+  return {
+    clear: () => {
+      selected.clear();
+      syncHiddenInput();
+      renderSelected();
+      renderOptions(searchInput.value);
+    },
+  };
+}
 
 async function initObiletPanel() {
   await renderObiletTargets();
@@ -3527,6 +3676,7 @@ function setupObiletForm() {
 
   const startDateInput = newForm.querySelector("#obiletDate");
   const endDateInput = newForm.querySelector("#obiletEndDate");
+  const operatorPicker = setupObiletOperatorPicker(newForm);
   if (startDateInput && endDateInput) {
     startDateInput.addEventListener("change", () => {
       if (!endDateInput.value || endDateInput.value < startDateInput.value) {
@@ -3582,6 +3732,7 @@ function setupObiletForm() {
       msgEl.style.color = "#1f7a1f";
       msgEl.textContent = "✅ Hat başarıyla eklendi! Fiyatlar arka planda çekiliyor...";
       newForm.reset();
+      operatorPicker.clear();
       await renderObiletTargets();
 
       setTimeout(() => { if (msgEl) msgEl.textContent = ""; }, 5000);

@@ -29,6 +29,79 @@ const OBILET_CHECK_INTERVAL_MS =
 const OBILET_EMAIL_MODE = String(process.env.OBILET_EMAIL_MODE || "always")
   .trim()
   .toLocaleLowerCase("tr-TR");
+const OBILET_OPERATOR_CATALOG = [
+  "Ali Osman Ulusoy",
+  "Anadolu Ulasim",
+  "Astor Seyahat",
+  "Aybasti Itimat",
+  "Balikesir Uludag",
+  "Batikent Turizm",
+  "Best Van Turizm",
+  "Beydagi Turizm",
+  "Bizim Igdir Turizm",
+  "Can Diyarbakir Turizm",
+  "Cesur Bingol",
+  "Dadaş Turizm",
+  "Diyarbakir Baris",
+  "Dogu Kars",
+  "Ede Turizm",
+  "Elazig Hazar Turizm",
+  "Esadas Turizm",
+  "Esenler Seyahat",
+  "Efe Tur",
+  "Golu Turizm",
+  "Guney Akdeniz",
+  "Has Karayolu",
+  "Hatay Gokbey",
+  "Igdir Turizm",
+  "Isparta Petrol",
+  "Istanbul Kalesi",
+  "Izmir Turizm",
+  "Kale Seyahat",
+  "Kamil Koc",
+  "Kapadokya VIP",
+  "Kent Turizm",
+  "Kontur Turizm",
+  "Lider Batman",
+  "Lider Anadolu",
+  "Luks Afsinlilar",
+  "Luks Adana",
+  "Luks Artvin",
+  "Malatya Medine",
+  "Mardin Seyahat",
+  "Mersin Nur",
+  "Metro Turizm",
+  "Midyat Seyyidoglu",
+  "Mus Yolu",
+  "Nevsehir Seyahat",
+  "Nigde Aydoganlar",
+  "Niksarkale",
+  "Nilufer Turizm",
+  "Oz Diyarbakir",
+  "Oz Erciş",
+  "Oz Has Bingol",
+  "Ozlem Adana",
+  "Pamukkale Turizm",
+  "Patnos Itimat",
+  "Sec Turizm",
+  "Sakarya Vib",
+  "Siirt Petrol",
+  "Star Batman",
+  "Sudenur Seyahat",
+  "Tokat Yildizi",
+  "Topcam Turizm",
+  "Tuncelililer",
+  "Ulusoy",
+  "Varan Turizm",
+  "Van Kalesi",
+  "Van Golu",
+  "Vanyolu",
+  "Yesil Mus Ovasi",
+  "Yeni Diyarbakir",
+  "Yeni Midyat",
+  "Yeni Sivas",
+  "Yuksekova Seyahat",
+].sort((a, b) => a.localeCompare(b, "tr-TR"));
 const PRICE_SOURCE_URL = process.env.PRICE_SOURCE_URL || "";
 const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || "admin").trim();
 const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || "1234").trim();
@@ -3370,6 +3443,10 @@ function setObiletTargetSyncStatus(targetId, statusText) {
   }
 }
 
+function normalizeObiletOperatorName(value) {
+  return toTurkishTitleCase(String(value || "").replace(/\s+/g, " ").trim());
+}
+
 // oBilet Scraper (Puppeteer Tabanlı)
 async function scrapeObilet(origin, destination, dateIso) {
   const originSlug = slugTr(origin).replace(/\s+/g, "-");
@@ -3844,6 +3921,37 @@ app.get("/api/obilet/targets", requireAuth, (req, res) => {
     res.json({ ok: true, targets });
   } catch (error) {
     res.status(500).json({ message: error.message || "Liste alinamadi." });
+  }
+});
+
+// API: Türkiye geneli firma listesi (secmeli alan icin)
+app.get("/api/obilet/operators", requireAuth, (req, res) => {
+  try {
+    const set = new Set();
+
+    for (const name of OBILET_OPERATOR_CATALOG) {
+      const normalized = normalizeObiletOperatorName(name);
+      if (normalized) set.add(normalized);
+    }
+
+    const priceRows = db.prepare("SELECT DISTINCT operator FROM obilet_prices WHERE TRIM(operator) <> ''").all();
+    for (const row of priceRows) {
+      const normalized = normalizeObiletOperatorName(row.operator);
+      if (normalized) set.add(normalized);
+    }
+
+    const targetRows = db.prepare("SELECT operators FROM obilet_targets WHERE TRIM(operators) <> ''").all();
+    for (const row of targetRows) {
+      const items = parseCsvList(row.operators).map(normalizeObiletOperatorName).filter(Boolean);
+      for (const item of items) {
+        set.add(item);
+      }
+    }
+
+    const operators = Array.from(set).sort((a, b) => a.localeCompare(b, "tr-TR"));
+    res.json({ ok: true, operators });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Firma listesi alinamadi." });
   }
 });
 

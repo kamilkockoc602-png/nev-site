@@ -343,8 +343,19 @@
                 <input id="obiletEndDate" type="date" required />
               </label>
               <label class="obilet-grid-span-2">
-                <span>Firmalar (virgul ile)</span>
-                <input id="obiletOperators" type="text" placeholder="Ornek: Kamil Koc, Sec Turizm" required />
+                <span>Firmalar (secmeli)</span>
+                <input id="obiletOperators" type="hidden" required />
+                <div class="obilet-operator-picker">
+                  <div class="obilet-operator-toolbar">
+                    <input id="obiletOperatorSearch" type="text" placeholder="Firma ara..." />
+                    <button id="obiletOperatorSelectAll" type="button" class="btn btn-sm btn-ghost">Tumunu Sec</button>
+                    <button id="obiletOperatorClear" type="button" class="btn btn-sm btn-ghost">Temizle</button>
+                  </div>
+                  <div id="obiletOperatorSelected" class="obilet-operator-selected">Firma seciniz...</div>
+                  <div id="obiletOperatorOptions" class="obilet-operator-options">
+                    <div class="obilet-loading">⏳ Firmalar yukleniyor...</div>
+                  </div>
+                </div>
               </label>
               <label class="obilet-grid-span-2">
                 <span>E-posta Bildirimleri (virgul ile)</span>
