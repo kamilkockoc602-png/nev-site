@@ -38,6 +38,7 @@ const EMAIL_SIGNATURE_TEXT = String(process.env.EMAIL_SIGNATURE_TEXT || "").trim
 const DEBUG_OBILET_PRICE = String(process.env.DEBUG_OBILET_PRICE || "").trim() === "1";
 const DEBUG_OBILET_API = String(process.env.DEBUG_OBILET_API || "").trim() === "1";
 const DEBUG_OBILET_XHR = String(process.env.DEBUG_OBILET_XHR || "").trim() === "1";
+const DEBUG_OBILET_XHR_BODY = String(process.env.DEBUG_OBILET_XHR_BODY || "").trim() === "1";
 const OBILET_OPERATOR_CATALOG = [
   "Ali Osman Ulusoy",
   "Anadolu Ulasim",
@@ -3702,16 +3703,19 @@ async function scrapeObilet(origin, destination, dateIso) {
         }
 
         let data = null;
-        if (contentType.includes("json") || apiJsonHint.test(url)) {
-          data = await response.json().catch(() => null);
-        }
-
-        if (!data && DEBUG_OBILET_API) {
-          const rawText = await response.text().catch(() => "");
+        let rawText = "";
+        const shouldReadBody = (contentType.includes("json") || apiJsonHint.test(url));
+        if (shouldReadBody) {
+          rawText = await response.text().catch(() => "");
           const trimmed = rawText.trim();
           if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
             data = JSON.parse(trimmed);
           }
+        }
+
+        if (DEBUG_OBILET_XHR_BODY && rawText && url.includes("/json/")) {
+          const preview = rawText.length > 1200 ? `${rawText.slice(0, 1200)}...` : rawText;
+          console.log(`[oBilet][DEBUG] XHR yaniti: ${url} :: ${preview}`);
         }
 
         if (!data) return;
