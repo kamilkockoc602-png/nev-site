@@ -3873,6 +3873,7 @@ async function refreshObiletPricesTask() {
         .filter(Boolean);
       const departureStopFilter = String(target.departure_stop_filter || "").trim();
       const departureStopFilterKey = normalizeSearchText(departureStopFilter);
+      const queryOriginPrimary = departureStopFilter || target.origin;
 
       const trackedJourneys = [];
       const changes = [];
@@ -3880,7 +3881,11 @@ async function refreshObiletPricesTask() {
       const scrapedOperators = new Set();
 
       for (const journeyDate of dateList) {
-        const journeys = await scrapeObilet(target.origin, target.destination, journeyDate);
+        let journeys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate);
+        if (departureStopFilter && !journeys.length) {
+          // Bazi gunlerde durak bazli URL bos donebilir; sehir bazli rotaya geri dus.
+          journeys = await scrapeObilet(target.origin, target.destination, journeyDate);
+        }
         journeys.forEach((journey) => {
           const normalized = normalizeObiletOperatorName(journey.operator);
           if (normalized) {
