@@ -35,6 +35,7 @@ const OBILET_SUBJECT_PRICE_ALERT = String(process.env.OBILET_SUBJECT_PRICE_ALERT
 const OBILET_SUBJECT_TEST = String(process.env.OBILET_SUBJECT_TEST || "oBilet Test E-postasi").trim();
 const EMAIL_SIGNATURE_HTML = String(process.env.EMAIL_SIGNATURE_HTML || "").trim();
 const EMAIL_SIGNATURE_TEXT = String(process.env.EMAIL_SIGNATURE_TEXT || "").trim();
+const DEBUG_OBILET_PRICE = String(process.env.DEBUG_OBILET_PRICE || "").trim() === "1";
 const OBILET_OPERATOR_CATALOG = [
   "Ali Osman Ulusoy",
   "Anadolu Ulasim",
@@ -3581,7 +3582,7 @@ async function scrapeObilet(origin, destination, dateIso) {
           console.log("[oBilet] Fiyat metni bekleme suresi asildi. Mevcut DOM ile devam ediliyor.");
         }
 
-        const journeys = await page.evaluate(() => {
+        const journeys = await page.evaluate((debugMode) => {
           const items = [];
           const seen = new Set();
 
@@ -3631,7 +3632,7 @@ async function scrapeObilet(origin, destination, dateIso) {
             return prices;
           };
 
-          const addJourney = (operator, time, price, departureStop = "", arrivalStop = "") => {
+          const addJourney = (operator, time, price, departureStop = "", arrivalStop = "", debugPrices = []) => {
             const safeOperator = normalizeOperator(operator);
             const safeTime = String(time || "").trim();
             const safePrice = Number(price) || 0;
@@ -3647,6 +3648,7 @@ async function scrapeObilet(origin, destination, dateIso) {
               price: safePrice,
               departureStop: safeDepartureStop,
               arrivalStop: safeArrivalStop,
+              debugPrices: debugMode ? debugPrices : undefined,
             });
           };
 
@@ -3676,7 +3678,7 @@ async function scrapeObilet(origin, destination, dateIso) {
               card.querySelector("[itemprop='arrivalBusStop']")?.textContent ||
               "";
 
-            addJourney(operator, departure, bestPrice, departureStop, arrivalStop);
+            addJourney(operator, departure, bestPrice, departureStop, arrivalStop, priceCandidates);
           });
 
           if (!items.length) {
@@ -3698,10 +3700,19 @@ async function scrapeObilet(origin, destination, dateIso) {
           }
 
           return items;
-        });
+        }, DEBUG_OBILET_PRICE);
 
         if (journeys.length > 0) {
           console.log(`[oBilet] Basariyla ${journeys.length} adet sefer yuklendi.`);
+          if (DEBUG_OBILET_PRICE) {
+            journeys.forEach((journey) => {
+              if (Array.isArray(journey.debugPrices) && journey.debugPrices.length > 0) {
+                console.log(
+                  `[oBilet][DEBUG] ${journey.operator} ${journey.time} fiyat adaylari: ${journey.debugPrices.join(", ")}`
+                );
+              }
+            });
+          }
           return journeys;
         }
 
