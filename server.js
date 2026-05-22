@@ -3793,12 +3793,12 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
   const changesRows = changes
     .map(
       (c) => `
-      <tr>
+      <tr style="background:#fff3f3;">
         <td style="padding:8px;border-bottom:1px solid #ececec;">${toDotDate(c.journey_date) || "-"}</td>
         <td style="padding:8px;border-bottom:1px solid #ececec;">${c.operator}</td>
         <td style="padding:8px;border-bottom:1px solid #ececec;text-align:center;">${c.departure_time}</td>
-        <td style="padding:8px;border-bottom:1px solid #ececec;text-align:right;">${c.oldPrice} TL</td>
-        <td style="padding:8px;border-bottom:1px solid #ececec;text-align:right;"><strong>${c.newPrice} TL</strong></td>
+        <td style="padding:8px;border-bottom:1px solid #ececec;text-align:right;color:#7f8c8d;">${c.oldPrice} TL</td>
+        <td style="padding:8px;border-bottom:1px solid #ececec;text-align:right;color:#c0392b;font-weight:bold;">${c.newPrice} TL</td>
       </tr>`
     )
     .join("");
