@@ -3418,6 +3418,10 @@ function renderObiletTargetCards(listEl) {
 
   listEl.innerHTML = obiletState.targets.map(t => {
     const dateFormatted = (t.date || "").split("-").reverse().join(".");
+    const endDateFormatted = ((t.end_date || t.date) || "").split("-").reverse().join(".");
+    const periodLabel = endDateFormatted && endDateFormatted !== dateFormatted
+      ? `${dateFormatted} - ${endDateFormatted}`
+      : dateFormatted;
     const emails = (t.email_notifications || "").split(",").map(e => e.trim()).filter(Boolean);
     const syncStatus = String(t.last_sync_status || "").trim();
     const syncAt = String(t.last_sync_at || "").trim();
@@ -3429,7 +3433,7 @@ function renderObiletTargetCards(listEl) {
             <span class="obilet-route-icon">🚌</span>
             <div>
               <strong>${t.origin.toUpperCase()} ➔ ${t.destination.toUpperCase()}</strong>
-              <span class="obilet-date-badge">${dateFormatted}</span>
+              <span class="obilet-date-badge">${periodLabel}</span>
             </div>
           </div>
           <div class="obilet-card-actions">
@@ -3494,10 +3498,11 @@ function renderObiletTargetCards(listEl) {
 
         pricesArea.innerHTML = `
           <table class="obilet-prices-table">
-            <thead><tr><th>Firma</th><th>Saat</th><th>Fiyat</th><th>Son Güncelleme</th></tr></thead>
+            <thead><tr><th>Tarih</th><th>Firma</th><th>Saat</th><th>Fiyat</th><th>Son Güncelleme</th></tr></thead>
             <tbody>
               ${prices.map(p => `
                 <tr>
+                  <td>${(p.journey_date || "").split("-").reverse().join(".") || "-"}</td>
                   <td><strong>${p.operator}</strong></td>
                   <td>${p.departure_time}</td>
                   <td class="obilet-price-cell">₺${p.price.toLocaleString("tr-TR")}</td>
@@ -3520,6 +3525,19 @@ function setupObiletForm() {
   const newForm = form.cloneNode(true);
   form.parentNode.replaceChild(newForm, form);
 
+  const startDateInput = newForm.querySelector("#obiletDate");
+  const endDateInput = newForm.querySelector("#obiletEndDate");
+  if (startDateInput && endDateInput) {
+    startDateInput.addEventListener("change", () => {
+      if (!endDateInput.value || endDateInput.value < startDateInput.value) {
+        endDateInput.value = startDateInput.value;
+      }
+    });
+    if (startDateInput.value && !endDateInput.value) {
+      endDateInput.value = startDateInput.value;
+    }
+  }
+
   newForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const msgEl = document.getElementById("obiletFormMsg");
@@ -3528,12 +3546,19 @@ function setupObiletForm() {
     const origin = document.getElementById("obiletOrigin").value.trim();
     const destination = document.getElementById("obiletDestination").value.trim();
     const date = document.getElementById("obiletDate").value.trim();
+    const endDate = document.getElementById("obiletEndDate").value.trim() || date;
     const operators = document.getElementById("obiletOperators").value.trim();
     const emails = document.getElementById("obiletEmails").value.trim();
 
-    if (!origin || !destination || !date || !operators) {
+    if (!origin || !destination || !date || !endDate || !operators) {
       msgEl.style.color = "#d64545";
       msgEl.textContent = "Lütfen tüm zorunlu alanları doldurun.";
+      return;
+    }
+
+    if (endDate < date) {
+      msgEl.style.color = "#d64545";
+      msgEl.textContent = "Bitiş tarihi başlangıç tarihinden önce olamaz.";
       return;
     }
 
@@ -3548,6 +3573,7 @@ function setupObiletForm() {
           origin,
           destination,
           date,
+          endDate,
           operators,
           emailNotifications: emails,
         }),

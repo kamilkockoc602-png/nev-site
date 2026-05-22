@@ -381,6 +381,7 @@ CREATE TABLE IF NOT EXISTS obilet_targets (
   origin TEXT NOT NULL,
   destination TEXT NOT NULL,
   date TEXT NOT NULL,
+  end_date TEXT NOT NULL DEFAULT '',
   operators TEXT NOT NULL,
   email_notifications TEXT NOT NULL,
   telegram_chat_ids TEXT NOT NULL DEFAULT '',
@@ -391,6 +392,7 @@ CREATE TABLE IF NOT EXISTS obilet_targets (
 CREATE TABLE IF NOT EXISTS obilet_prices (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   target_id INTEGER NOT NULL,
+  journey_date TEXT NOT NULL DEFAULT '',
   operator TEXT NOT NULL,
   departure_time TEXT NOT NULL,
   price INTEGER NOT NULL,
@@ -402,8 +404,10 @@ CREATE TABLE IF NOT EXISTS obilet_prices (
 try { db.exec("ALTER TABLE user_error_reports ADD COLUMN priority TEXT NOT NULL DEFAULT 'Orta'"); } catch(e) {}
 try { db.exec("ALTER TABLE user_error_reports ADD COLUMN status TEXT NOT NULL DEFAULT 'Yeni'"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN telegram_chat_ids TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+try { db.exec("ALTER TABLE obilet_targets ADD COLUMN end_date TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_sync_status TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_sync_at TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+try { db.exec("ALTER TABLE obilet_prices ADD COLUMN journey_date TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 
 const pricingItemColumns = db.prepare("PRAGMA table_info(pricing_upload_items)").all();
 const hasRowDirectionColumn = pricingItemColumns.some((col) => col.name === "row_direction");
@@ -511,6 +515,32 @@ function shiftIsoDate(dateIso, dayOffset) {
   const mm = String(base.getUTCMonth() + 1).padStart(2, "0");
   const dd = String(base.getUTCDate()).padStart(2, "0");
   return `${yy}-${mm}-${dd}`;
+}
+
+function isIsoDate(value) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || "").trim());
+}
+
+function buildIsoDateRange(startIso, endIso) {
+  const start = String(startIso || "").trim();
+  const end = String(endIso || "").trim() || start;
+  if (!isIsoDate(start) || !isIsoDate(end)) {
+    return [];
+  }
+
+  if (start > end) {
+    return [];
+  }
+
+  const items = [];
+  let cursor = start;
+  let safety = 0;
+  while (cursor <= end && safety < 370) {
+    items.push(cursor);
+    cursor = shiftIsoDate(cursor, 1);
+    safety += 1;
+  }
+  return items;
 }
 
 function parseIsoToStamp(value) {
@@ -3570,6 +3600,10 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
   const smtpFrom = process.env.SMTP_FROM || `"oBilet Fiyat Takip" <${smtpUser}>`;
 
   const formattedDate = String(target.date || "").split("-").reverse().join(".");
+  const formattedEndDate = String(target.end_date || "").split("-").reverse().join(".");
+  const dateLabel = formattedEndDate && formattedEndDate !== formattedDate
+    ? `${formattedDate} - ${formattedEndDate}`
+    : formattedDate;
   const checkedAt = nowStamp();
   const hasChanges = changes.length > 0;
 
@@ -3577,6 +3611,7 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
     .map(
       (item) => `
       <tr>
+        <td style="padding:8px;border-bottom:1px solid #ececec;">${toDotDate(item.journey_date) || "-"}</td>
         <td style="padding:8px;border-bottom:1px solid #ececec;">${item.operator}</td>
         <td style="padding:8px;border-bottom:1px solid #ececec;text-align:center;">${item.time}</td>
         <td style="padding:8px;border-bottom:1px solid #ececec;text-align:right;"><strong>${item.price} TL</strong></td>
@@ -3588,6 +3623,7 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
     .map(
       (c) => `
       <tr>
+        <td style="padding:8px;border-bottom:1px solid #ececec;">${toDotDate(c.journey_date) || "-"}</td>
         <td style="padding:8px;border-bottom:1px solid #ececec;">${c.operator}</td>
         <td style="padding:8px;border-bottom:1px solid #ececec;text-align:center;">${c.departure_time}</td>
         <td style="padding:8px;border-bottom:1px solid #ececec;text-align:right;">${c.oldPrice} TL</td>
@@ -3603,7 +3639,7 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
       </div>
       <div style="padding:18px 20px;">
         <p style="margin:0 0 10px 0;"><strong>Hat:</strong> ${target.origin.toUpperCase()} -> ${target.destination.toUpperCase()}</p>
-        <p style="margin:0 0 10px 0;"><strong>Tarih:</strong> ${formattedDate}</p>
+        <p style="margin:0 0 10px 0;"><strong>Tarih:</strong> ${dateLabel}</p>
         <p style="margin:0 0 16px 0;"><strong>Kontrol Zamani:</strong> ${checkedAt}</p>
 
         <p style="margin:0 0 8px 0;"><strong>Durum:</strong> ${hasChanges ? "Degisiklik var" : "Degisiklik yok"}</p>
@@ -3613,6 +3649,7 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
           <table style="width:100%;border-collapse:collapse;font-size:13px;">
             <thead>
               <tr style="background:#f5f5f5;">
+                <th style="padding:8px;text-align:left;">Tarih</th>
                 <th style="padding:8px;text-align:left;">Firma</th>
                 <th style="padding:8px;text-align:center;">Saat</th>
                 <th style="padding:8px;text-align:right;">Eski</th>
@@ -3627,6 +3664,7 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
         <table style="width:100%;border-collapse:collapse;font-size:13px;">
           <thead>
             <tr style="background:#f5f5f5;">
+              <th style="padding:8px;text-align:left;">Tarih</th>
               <th style="padding:8px;text-align:left;">Firma</th>
               <th style="padding:8px;text-align:center;">Saat</th>
               <th style="padding:8px;text-align:right;">Fiyat</th>
@@ -3642,7 +3680,7 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
   const { info, smtpPort } = await sendMailWithSmtpFallback({
     from: smtpFrom,
     to: emailList,
-    subject: `oBilet ${subjectPrefix}: ${target.origin} - ${target.destination} (${formattedDate})`,
+    subject: `oBilet ${subjectPrefix}: ${target.origin} - ${target.destination} (${dateLabel})`,
     html,
   });
   console.log(`[E-posta] SMTP portu kullanildi: ${smtpPort}`);
@@ -3691,18 +3729,69 @@ async function refreshObiletPricesTask() {
   for (const target of targets) {
     try {
       setObiletTargetSyncStatus(target.id, "Kontrol ediliyor...");
-      console.log(`[Takip Görevi] Sorgulanıyor: ${target.origin} -> ${target.destination} (${target.date})`);
-      const journeys = await scrapeObilet(target.origin, target.destination, target.date);
-      
+      const dateList = buildIsoDateRange(target.date, target.end_date || target.date);
+      if (!dateList.length) {
+        setObiletTargetSyncStatus(target.id, "Hata: Tarih araligi gecersiz. Baslangic ve bitis tarihini kontrol edin.");
+        continue;
+      }
+
+      const periodLabel = dateList.length > 1
+        ? `${toDotDate(dateList[0])} - ${toDotDate(dateList[dateList.length - 1])}`
+        : toDotDate(dateList[0]);
+
+      console.log(`[Takip Görevi] Sorgulanıyor: ${target.origin} -> ${target.destination} (${periodLabel})`);
+
       const targetOperators = target.operators.split(",")
         .map(o => o.trim().toLocaleLowerCase("tr-TR"))
         .filter(Boolean);
 
-      const trackedJourneys = journeys.filter((journey) =>
-        targetOperators.some((op) =>
-          journey.operator.toLocaleLowerCase("tr-TR").includes(op)
-        )
-      );
+      const trackedJourneys = [];
+      const changes = [];
+      const now = nowStamp();
+
+      for (const journeyDate of dateList) {
+        const journeys = await scrapeObilet(target.origin, target.destination, journeyDate);
+        const dayTracked = journeys
+          .filter((journey) =>
+            targetOperators.some((op) =>
+              journey.operator.toLocaleLowerCase("tr-TR").includes(op)
+            )
+          )
+          .map((journey) => ({ ...journey, journey_date: journeyDate }));
+
+        trackedJourneys.push(...dayTracked);
+
+        for (const journey of dayTracked) {
+          const previous = db.prepare(
+            "SELECT * FROM obilet_prices WHERE target_id = ? AND journey_date = ? AND operator = ? AND departure_time = ?"
+          ).get(target.id, journey.journey_date, journey.operator, journey.time);
+
+          if (previous) {
+            if (previous.price !== journey.price) {
+              changes.push({
+                journey_date: journey.journey_date,
+                operator: journey.operator,
+                departure_time: journey.time,
+                oldPrice: previous.price,
+                newPrice: journey.price
+              });
+
+              db.prepare(
+                "UPDATE obilet_prices SET price = ?, last_updated = ? WHERE id = ?"
+              ).run(journey.price, now, previous.id);
+
+              addPricingNotification(
+                "oBilet Fiyat Takip",
+                `${toDotDate(journey.journey_date)} ${journey.operator} (${journey.time}) fiyatı değişti: ${previous.price} TL -> ${journey.price} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
+              );
+            }
+          } else {
+            db.prepare(
+              "INSERT INTO obilet_prices (target_id, journey_date, operator, departure_time, price, last_updated) VALUES (?, ?, ?, ?, ?, ?)"
+            ).run(target.id, journey.journey_date, journey.operator, journey.time, journey.price, now);
+          }
+        }
+      }
 
       if (trackedJourneys.length === 0) {
         setObiletTargetSyncStatus(
@@ -3713,44 +3802,6 @@ async function refreshObiletPricesTask() {
           "oBilet Fiyat Takip",
           `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} icin hedef firmalarda sefer verisi bulunamadi. oBilet bot korumasi nedeniyle veri donmuyor olabilir.`
         );
-      }
-        
-      const changes = [];
-      const now = nowStamp();
-      
-      for (const journey of trackedJourneys) {
-        
-        // Önceki kaydedilmiş fiyatı sorgula
-        const previous = db.prepare(
-          "SELECT * FROM obilet_prices WHERE target_id = ? AND operator = ? AND departure_time = ?"
-        ).get(target.id, journey.operator, journey.time);
-        
-        if (previous) {
-          if (previous.price !== journey.price) {
-            changes.push({
-              operator: journey.operator,
-              departure_time: journey.time,
-              oldPrice: previous.price,
-              newPrice: journey.price
-            });
-            
-            // Fiyatı güncelle
-            db.prepare(
-              "UPDATE obilet_prices SET price = ?, last_updated = ? WHERE id = ?"
-            ).run(journey.price, now, previous.id);
-            
-            // Paneldeki genel bildirimlere ekle
-            addPricingNotification(
-              "oBilet Fiyat Takip",
-              `${journey.operator} (${journey.time}) fiyatı değişti: ${previous.price} TL -> ${journey.price} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
-            );
-          }
-        } else {
-          // İlk kez kaydediliyor, veritabanına ekle
-          db.prepare(
-            "INSERT INTO obilet_prices (target_id, operator, departure_time, price, last_updated) VALUES (?, ?, ?, ?, ?)"
-          ).run(target.id, journey.operator, journey.time, journey.price, now);
-        }
       }
       
       const emails = parseCsvList(target.email_notifications);
@@ -3774,7 +3825,7 @@ async function refreshObiletPricesTask() {
           : "Degisiklik yok";
         setObiletTargetSyncStatus(
           target.id,
-          `Basarili. ${trackedJourneys.length} sefer izlendi, ${changeText}.`
+          `Basarili. ${dateList.length} gun tarandi, ${trackedJourneys.length} sefer izlendi, ${changeText}.`
         );
       }
     } catch (err) {
@@ -3801,11 +3852,24 @@ app.post("/api/obilet/targets", requireAuth, (req, res) => {
   const origin = String(req.body.origin || "").trim();
   const destination = String(req.body.destination || "").trim();
   const date = String(req.body.date || "").trim(); // YYYY-MM-DD
+  const endDate = String(req.body.endDate || "").trim(); // YYYY-MM-DD
   const operators = String(req.body.operators || "").trim();
   let emailNotifications = String(req.body.emailNotifications || "").trim();
   
   if (!origin || !destination || !date || !operators) {
     return res.status(400).json({ message: "Kalkis, Varis, Tarih ve Firmalar alanlari zorunludur." });
+  }
+
+  const normalizedEndDate = endDate || date;
+  if (!isIsoDate(date) || !isIsoDate(normalizedEndDate)) {
+    return res.status(400).json({ message: "Tarih formati gecersiz. YYYY-MM-DD kullanin." });
+  }
+  if (normalizedEndDate < date) {
+    return res.status(400).json({ message: "Bitis tarihi baslangic tarihinden once olamaz." });
+  }
+  const rangeDays = buildIsoDateRange(date, normalizedEndDate).length;
+  if (rangeDays > 45) {
+    return res.status(400).json({ message: "Tarih araligi en fazla 45 gun olabilir." });
   }
   
   // E-posta boşsa varsayılanı kullan
@@ -3815,8 +3879,8 @@ app.post("/api/obilet/targets", requireAuth, (req, res) => {
   
   try {
     const result = db.prepare(
-      "INSERT INTO obilet_targets (origin, destination, date, operators, email_notifications, telegram_chat_ids, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    ).run(origin, destination, date, operators, emailNotifications, "", nowStamp());
+      "INSERT INTO obilet_targets (origin, destination, date, end_date, operators, email_notifications, telegram_chat_ids, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(origin, destination, date, normalizedEndDate, operators, emailNotifications, "", nowStamp());
     
     // Ekleme işleminden sonra fiyatları hemen çekmek için arka planda tetikle
     setTimeout(() => {
@@ -3844,15 +3908,17 @@ app.delete("/api/obilet/targets/:id", requireAuth, (req, res) => {
 app.get("/api/obilet/prices/:targetId", requireAuth, (req, res) => {
   const targetId = Number(req.params.targetId);
   try {
-    const prices = db.prepare("SELECT * FROM obilet_prices WHERE target_id = ? ORDER BY departure_time ASC").all(targetId);
+    const prices = db.prepare("SELECT * FROM obilet_prices WHERE target_id = ? ORDER BY journey_date ASC, departure_time ASC").all(targetId);
     const target = db
-      .prepare("SELECT id, last_sync_status, last_sync_at FROM obilet_targets WHERE id = ?")
+      .prepare("SELECT id, date, end_date, last_sync_status, last_sync_at FROM obilet_targets WHERE id = ?")
       .get(targetId);
     res.json({
       ok: true,
       prices,
       targetStatus: target
         ? {
+            date: target.date || "",
+            endDate: target.end_date || target.date || "",
             text: target.last_sync_status || "",
             at: target.last_sync_at || "",
           }
