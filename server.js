@@ -4263,41 +4263,28 @@ async function scrapeObilet(origin, destination, dateIso) {
                   return Number.isFinite(number) ? Math.round(number) : 0;
                 };
 
-                // Fiyat elementlerini bul
-                const priceElements = document.querySelectorAll('[itemprop="price"], .price, .amount');
-                priceElements.forEach((priceEl) => {
-                  const priceText = priceEl.textContent?.trim();
-                  const price = parsePrice(priceText);
+                // Sefer kartlarini bul (card, journey, trip classli divler veya li'ler)
+                const cards = document.querySelectorAll('div[class*="card"], div[class*="journey"], li[class*="journey"], div[class*="trip"]');
+                
+                cards.forEach((card) => {
+                  // Fiyat
+                  const priceEl = card.querySelector('[itemprop="price"], .price, .amount');
+                  if (!priceEl) return;
+                  const price = parsePrice(priceEl.textContent);
                   if (price < 300) return;
 
-                  // Bu fiyatin firma ve saatini bul (parent elementlerde ara)
-                  let current = priceEl;
-                  let operator = "";
-                  let time = "";
+                  // Firma ismi (img alt attribute'u)
+                  const firmImg = card.querySelector('img[alt]');
+                  const operator = firmImg?.getAttribute('alt') || '';
+                  if (!operator || operator.length < 3) return;
 
-                  for (let i = 0; i < 10; i++) {
-                    if (!current) break;
-                    const text = current.textContent || "";
-                    
-                    // Saat formati: HH:MM
-                    if (!time) {
-                      const timeMatch = text.match(/\b([01]\d|2[0-3]):[0-5]\d\b/);
-                      if (timeMatch) time = timeMatch[0];
-                    }
+                  // Saat (card text'inden)
+                  const cardText = card.textContent || '';
+                  const timeMatch = cardText.match(/\b([01]\d|2[0-3]):[0-5]\d\b/);
+                  const time = timeMatch ? timeMatch[0] : '';
+                  if (!time) return;
 
-                    // Firma ismi (buyuk harf iceren kelimeler)
-                    if (!operator) {
-                      const firmMatch = text.match(/\b([A-ZÇĞİÖŞÜ][a-zçğıöşü]+(?:\s+[A-ZÇĞİÖŞÜ][a-zçğıöşü]+){1,3})\b/);
-                      if (firmMatch) operator = firmMatch[0];
-                    }
-
-                    if (operator && time) break;
-                    current = current.parentElement;
-                  }
-
-                  if (operator && time && price) {
-                    results.push({ operator, time, price });
-                  }
+                  results.push({ operator, time, price });
                 });
 
                 return results;
