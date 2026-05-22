@@ -3459,6 +3459,21 @@ function normalizeObiletOperatorName(value) {
   return toTurkishTitleCase(String(value || "").replace(/\s+/g, " ").trim());
 }
 
+function toObiletOperatorMatchKey(value) {
+  return normalizeSearchText(value).replace(/\s+/g, "");
+}
+
+function isObiletOperatorMatch(selectedOperator, scrapedOperator) {
+  const selectedKey = toObiletOperatorMatchKey(selectedOperator);
+  const scrapedKey = toObiletOperatorMatchKey(scrapedOperator);
+  if (!selectedKey || !scrapedKey) {
+    return false;
+  }
+
+  // Bosluk, Turkce karakter ve kucuk yazim farklarini tolere ederek eslestir.
+  return scrapedKey.includes(selectedKey) || selectedKey.includes(scrapedKey);
+}
+
 // oBilet Scraper (Puppeteer Tabanlı)
 async function scrapeObilet(origin, destination, dateIso) {
   const originSlug = slugTr(origin).replace(/\s+/g, "-");
@@ -3829,20 +3844,28 @@ async function refreshObiletPricesTask() {
 
       console.log(`[Takip Görevi] Sorgulanıyor: ${target.origin} -> ${target.destination} (${periodLabel})`);
 
-      const targetOperators = target.operators.split(",")
-        .map(o => o.trim().toLocaleLowerCase("tr-TR"))
+      const targetOperators = parseCsvList(target.operators)
+        .map(normalizeObiletOperatorName)
         .filter(Boolean);
 
       const trackedJourneys = [];
       const changes = [];
       const now = nowStamp();
+      const scrapedOperators = new Set();
 
       for (const journeyDate of dateList) {
         const journeys = await scrapeObilet(target.origin, target.destination, journeyDate);
+        journeys.forEach((journey) => {
+          const normalized = normalizeObiletOperatorName(journey.operator);
+          if (normalized) {
+            scrapedOperators.add(normalized);
+          }
+        });
+
         const dayTracked = journeys
           .filter((journey) =>
             targetOperators.some((op) =>
-              journey.operator.toLocaleLowerCase("tr-TR").includes(op)
+              isObiletOperatorMatch(op, journey.operator)
             )
           )
           .map((journey) => ({ ...journey, journey_date: journeyDate }));
@@ -3882,13 +3905,15 @@ async function refreshObiletPricesTask() {
       }
 
       if (trackedJourneys.length === 0) {
+        const scrapedSample = Array.from(scrapedOperators).slice(0, 8).join(", ");
+        const detail = scrapedSample ? ` Bulunan firmalar: ${scrapedSample}.` : "";
         setObiletTargetSyncStatus(
           target.id,
-          "Sefer verisi alinmadi. Muhtemelen bot korumasi veya sayfa yapisi degisti."
+          `Secilen firmalarda sefer bulunamadi.${detail}`
         );
         addPricingNotification(
           "oBilet Fiyat Takip",
-          `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} icin hedef firmalarda sefer verisi bulunamadi. oBilet bot korumasi nedeniyle veri donmuyor olabilir.`
+          `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} icin secilen firmalarda sefer verisi bulunamadi.${detail}`
         );
       }
       
