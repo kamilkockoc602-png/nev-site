@@ -3544,6 +3544,8 @@ function extractObiletJourneysFromApiPayload(payload) {
       "lowestPrice",
       "totalPrice",
       "fare",
+      "internetPrice",
+      "originalPrice"
     ].forEach((key) => {
       if (obj && Object.prototype.hasOwnProperty.call(obj, key)) {
         const parsed = readPrice(obj[key]);
@@ -4201,15 +4203,15 @@ async function scrapeObilet(origin, destination, dateIso) {
               const key = `${toObiletOperatorMatchKey(journey.operator)}|${String(journey.time || "").trim()}`;
               const apiMatch = apiMap.get(key);
               
-              // Eğer API'de bu sefer için bir fiyat varsa, her zaman DOM fiyatı yerine onu kullan (API > DOM)
+              // Eğer API'de bu sefer için bir fiyat varsa, ekrandaki ve API'deki fiyatlardan en düşük olanı al
+              // Obilet bazen ekranda "1000 TL" gösterirken API'de "1400 TL" (indirimsiz baz fiyat) döndürebiliyor.
               if (apiMatch && apiMatch.price && apiMatch.price !== journey.price) {
                 if (DEBUG_OBILET_PRICE) {
                   console.log(
-                    `[oBilet][DEBUG] DOM fiyatı API fiyatı ile düzeltiliyor: ${journey.operator} ${journey.time} ${journey.price} -> API: ${apiMatch.price}`
+                    `[oBilet][DEBUG] DOM fiyatı (${journey.price}) API fiyatı (${apiMatch.price}) ile karsilastirildi, min alindi.`
                   );
                 }
-                // Hatalı/Yüksek DOM okumalarını geçersiz kılmak için API'yi zorunlu kılıyoruz
-                return { ...journey, price: apiMatch.price };
+                return { ...journey, price: Math.min(journey.price, apiMatch.price) };
               }
               return journey;
             });
