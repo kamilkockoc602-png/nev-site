@@ -1915,6 +1915,39 @@ body[data-theme="dark"] .delay-badge-late {
   align-items: end;
 }
 
+.obilet-rows {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.obilet-row {
+  border: 1px dashed rgba(16, 42, 67, 0.24);
+  border-radius: 12px;
+  padding: 0.85rem;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.obilet-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+
+.obilet-row-title {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.obilet-form-actions {
+  margin-top: 0.7rem;
+  display: flex;
+  gap: 0.6rem;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
 .obilet-grid-span-2 {
   grid-column: span 2;
 }
@@ -2106,6 +2139,11 @@ body[data-theme="dark"] .obilet-tag {
 body[data-theme="dark"] .obilet-operator-picker,
 body[data-theme="dark"] .obilet-operator-options {
   background: rgba(12, 31, 42, 0.82);
+}
+
+body[data-theme="dark"] .obilet-row {
+  background: rgba(12, 31, 42, 0.82);
+  border-color: rgba(156, 184, 204, 0.34);
 }
 
 body[data-theme="dark"] .obilet-operator-chip,

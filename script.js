@@ -3452,13 +3452,13 @@ async function loadObiletOperatorCatalog() {
   return obiletState.operatorCatalog;
 }
 
-function setupObiletOperatorPicker(form) {
-  const hiddenInput = form.querySelector("#obiletOperators");
-  const searchInput = form.querySelector("#obiletOperatorSearch");
-  const optionsEl = form.querySelector("#obiletOperatorOptions");
-  const selectedEl = form.querySelector("#obiletOperatorSelected");
-  const selectAllBtn = form.querySelector("#obiletOperatorSelectAll");
-  const clearBtn = form.querySelector("#obiletOperatorClear");
+function setupObiletOperatorPicker(root) {
+  const hiddenInput = root.querySelector(".obilet-operators-hidden");
+  const searchInput = root.querySelector(".obilet-operator-search");
+  const optionsEl = root.querySelector(".obilet-operator-options");
+  const selectedEl = root.querySelector(".obilet-operator-selected");
+  const selectAllBtn = root.querySelector(".obilet-operator-select-all");
+  const clearBtn = root.querySelector(".obilet-operator-clear");
 
   if (!hiddenInput || !searchInput || !optionsEl || !selectedEl || !selectAllBtn || !clearBtn) {
     return { clear: () => null };
@@ -3735,10 +3735,52 @@ function setupObiletForm() {
   const newForm = form.cloneNode(true);
   form.parentNode.replaceChild(newForm, form);
 
-  const startDateInput = newForm.querySelector("#obiletDate");
-  const endDateInput = newForm.querySelector("#obiletEndDate");
-  const operatorPicker = setupObiletOperatorPicker(newForm);
-  if (startDateInput && endDateInput) {
+  const rowsWrap = newForm.querySelector("#obiletRows");
+  const addRowBtn = newForm.querySelector("#obiletAddRowBtn");
+  const msgEl = document.getElementById("obiletFormMsg");
+
+  const getRows = () => Array.from(newForm.querySelectorAll(".obilet-row"));
+
+  const updateRowTitles = () => {
+    const rows = getRows();
+    rows.forEach((row, idx) => {
+      const title = row.querySelector(".obilet-row-title");
+      if (title) {
+        title.textContent = `Hat ${idx + 1}`;
+      }
+      const removeBtn = row.querySelector(".obilet-remove-row");
+      if (removeBtn) {
+        removeBtn.disabled = rows.length === 1;
+      }
+    });
+  };
+
+  const resetRowValues = (row) => {
+    row.querySelectorAll("input").forEach((input) => {
+      if (input.type === "hidden") {
+        input.value = "";
+        return;
+      }
+      if (input.type === "checkbox") {
+        input.checked = false;
+        return;
+      }
+      input.value = "";
+    });
+    const selectedEl = row.querySelector(".obilet-operator-selected");
+    if (selectedEl) {
+      selectedEl.textContent = "Firma seciniz...";
+    }
+    const optionsEl = row.querySelector(".obilet-operator-options");
+    if (optionsEl) {
+      optionsEl.innerHTML = '<div class="obilet-loading">⏳ Firmalar yukleniyor...</div>';
+    }
+  };
+
+  const bindRowDateSync = (row) => {
+    const startDateInput = row.querySelector(".obilet-date");
+    const endDateInput = row.querySelector(".obilet-end-date");
+    if (!startDateInput || !endDateInput) return;
     startDateInput.addEventListener("change", () => {
       if (!endDateInput.value || endDateInput.value < startDateInput.value) {
         endDateInput.value = startDateInput.value;
@@ -3747,64 +3789,126 @@ function setupObiletForm() {
     if (startDateInput.value && !endDateInput.value) {
       endDateInput.value = startDateInput.value;
     }
+  };
+
+  const initRow = (row) => {
+    bindRowDateSync(row);
+    setupObiletOperatorPicker(row);
+    const removeBtn = row.querySelector(".obilet-remove-row");
+    if (removeBtn) {
+      removeBtn.addEventListener("click", () => {
+        row.remove();
+        updateRowTitles();
+      });
+    }
+  };
+
+  getRows().forEach((row) => initRow(row));
+  updateRowTitles();
+
+  if (addRowBtn && rowsWrap) {
+    addRowBtn.addEventListener("click", () => {
+      const rows = getRows();
+      const template = rows[0];
+      if (!template) return;
+      const clone = template.cloneNode(true);
+      resetRowValues(clone);
+      rowsWrap.appendChild(clone);
+      initRow(clone);
+      updateRowTitles();
+    });
   }
 
   newForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const msgEl = document.getElementById("obiletFormMsg");
     const submitBtn = newForm.querySelector('[type="submit"]');
 
-    const origin = document.getElementById("obiletOrigin").value.trim();
-    const destination = document.getElementById("obiletDestination").value.trim();
-    const date = document.getElementById("obiletDate").value.trim();
-    const endDate = document.getElementById("obiletEndDate").value.trim() || date;
-    const departureStopFilter = document.getElementById("obiletDepartureStopFilter")?.value.trim() || "";
-    const operators = document.getElementById("obiletOperators").value.trim();
-    const emails = document.getElementById("obiletEmails").value.trim();
-
-    if (!origin || !destination || !date || !endDate || !operators) {
+    const rows = getRows();
+    if (!rows.length) {
       msgEl.style.color = "#d64545";
-      msgEl.textContent = "Lütfen tüm zorunlu alanları doldurun.";
+      msgEl.textContent = "En az bir hat eklemelisiniz.";
       return;
     }
 
-    if (endDate < date) {
-      msgEl.style.color = "#d64545";
-      msgEl.textContent = "Bitiş tarihi başlangıç tarihinden önce olamaz.";
-      return;
+    const payloads = [];
+    for (const [index, row] of rows.entries()) {
+      const origin = row.querySelector(".obilet-origin")?.value.trim() || "";
+      const destination = row.querySelector(".obilet-destination")?.value.trim() || "";
+      const date = row.querySelector(".obilet-date")?.value.trim() || "";
+      const rawEndDate = row.querySelector(".obilet-end-date")?.value.trim() || "";
+      const endDate = rawEndDate || date;
+      const departureStopFilter = row.querySelector(".obilet-departure-filter")?.value.trim() || "";
+      const operators = row.querySelector(".obilet-operators-hidden")?.value.trim() || "";
+      const emails = row.querySelector(".obilet-emails")?.value.trim() || "";
+
+      if (!origin || !destination || !date || !endDate || !operators) {
+        msgEl.style.color = "#d64545";
+        msgEl.textContent = `Hat ${index + 1}: Zorunlu alanlari doldurun.`;
+        return;
+      }
+      if (endDate < date) {
+        msgEl.style.color = "#d64545";
+        msgEl.textContent = `Hat ${index + 1}: Bitis tarihi baslangic tarihinden once olamaz.`;
+        return;
+      }
+
+      payloads.push({
+        origin,
+        destination,
+        date,
+        endDate,
+        departureStopFilter,
+        operators,
+        emailNotifications: emails,
+      });
     }
 
     try {
       submitBtn.disabled = true;
+      if (addRowBtn) addRowBtn.disabled = true;
       submitBtn.textContent = "⏳ Ekleniyor...";
       msgEl.textContent = "";
 
-      await apiFetch("/api/obilet/targets", {
-        method: "POST",
-        body: JSON.stringify({
-          origin,
-          destination,
-          date,
-          endDate,
-          departureStopFilter,
-          operators,
-          emailNotifications: emails,
-        }),
-      });
+      let successCount = 0;
+      const errors = [];
+      for (const [index, payload] of payloads.entries()) {
+        try {
+          await apiFetch("/api/obilet/targets", {
+            method: "POST",
+            body: JSON.stringify(payload),
+          });
+          successCount += 1;
+        } catch (err) {
+          errors.push(`Hat ${index + 1}: ${err.message}`);
+        }
+      }
 
-      msgEl.style.color = "#1f7a1f";
-      msgEl.textContent = "✅ Hat başarıyla eklendi! Fiyatlar arka planda çekiliyor...";
-      newForm.reset();
-      operatorPicker.clear();
-      await renderObiletTargets();
-
-      setTimeout(() => { if (msgEl) msgEl.textContent = ""; }, 5000);
+      if (errors.length) {
+        msgEl.style.color = "#d64545";
+        msgEl.textContent = `Bazilari eklenemedi (${errors.length}). ${errors[0]}`;
+      } else {
+        msgEl.style.color = "#1f7a1f";
+        msgEl.textContent = `✅ ${successCount} hat basariyla eklendi! Fiyatlar arka planda cekiliyor...`;
+        const rows = getRows();
+        const firstRow = rows[0] || null;
+        rows.slice(1).forEach((row) => row.remove());
+        if (firstRow) {
+          const fresh = firstRow.cloneNode(true);
+          resetRowValues(fresh);
+          firstRow.replaceWith(fresh);
+          initRow(fresh);
+        }
+        updateRowTitles();
+        await renderObiletTargets();
+        setTimeout(() => { if (msgEl) msgEl.textContent = ""; }, 5000);
+      }
     } catch (err) {
       msgEl.style.color = "#d64545";
       msgEl.textContent = "Hata: " + err.message;
     } finally {
       submitBtn.disabled = false;
-      submitBtn.textContent = "➕ Hat Ekle";
+      if (addRowBtn) addRowBtn.disabled = false;
+      submitBtn.textContent = "Hatlari Ekle";
     }
   });
 }

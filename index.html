@@ -325,47 +325,60 @@
           <p class="subtle">Belirledigimiz hatlari otomatik tarar ve her 10 dakikada bir fiyat degisimi var/yok raporunu e-posta ile yollar.</p>
 
           <section class="obilet-form-wrap">
-            <form id="obiletAddForm" class="obilet-grid" autocomplete="off">
-              <label>
-                <span>Kalkis</span>
-                <input id="obiletOrigin" type="text" placeholder="Ornek: Adana" required />
-              </label>
-              <label>
-                <span>Varis</span>
-                <input id="obiletDestination" type="text" placeholder="Ornek: Ankara" required />
-              </label>
-              <label>
-                <span>Tarih</span>
-                <input id="obiletDate" type="date" required />
-              </label>
-              <label>
-                <span>Bitis Tarihi</span>
-                <input id="obiletEndDate" type="date" required />
-              </label>
-              <label>
-                <span>Kalkis Duragi Filtresi (opsiyonel)</span>
-                <input id="obiletDepartureStopFilter" type="text" placeholder="Ornek: Kadirli" />
-              </label>
-              <label class="obilet-grid-span-2">
-                <span>Firmalar (secmeli)</span>
-                <input id="obiletOperators" type="hidden" required />
-                <div class="obilet-operator-picker">
-                  <div class="obilet-operator-toolbar">
-                    <input id="obiletOperatorSearch" type="text" placeholder="Firma ara..." />
-                    <button id="obiletOperatorSelectAll" type="button" class="btn btn-sm btn-ghost">Tumunu Sec</button>
-                    <button id="obiletOperatorClear" type="button" class="btn btn-sm btn-ghost">Temizle</button>
+            <form id="obiletAddForm" autocomplete="off">
+              <div id="obiletRows" class="obilet-rows">
+                <div class="obilet-row" data-row="1">
+                  <div class="obilet-row-head">
+                    <span class="obilet-row-title">Hat 1</span>
+                    <button type="button" class="btn btn-sm btn-ghost obilet-remove-row">Hatti Sil</button>
                   </div>
-                  <div id="obiletOperatorSelected" class="obilet-operator-selected">Firma seciniz...</div>
-                  <div id="obiletOperatorOptions" class="obilet-operator-options">
-                    <div class="obilet-loading">⏳ Firmalar yukleniyor...</div>
+                  <div class="obilet-grid">
+                    <label>
+                      <span>Kalkis</span>
+                      <input class="obilet-origin" type="text" placeholder="Ornek: Adana" required />
+                    </label>
+                    <label>
+                      <span>Varis</span>
+                      <input class="obilet-destination" type="text" placeholder="Ornek: Ankara" required />
+                    </label>
+                    <label>
+                      <span>Tarih</span>
+                      <input class="obilet-date" type="date" required />
+                    </label>
+                    <label>
+                      <span>Bitis Tarihi</span>
+                      <input class="obilet-end-date" type="date" required />
+                    </label>
+                    <label>
+                      <span>Kalkis Duragi Filtresi (opsiyonel)</span>
+                      <input class="obilet-departure-filter" type="text" placeholder="Ornek: Kadirli" />
+                    </label>
+                    <label class="obilet-grid-span-2">
+                      <span>Firmalar (secmeli)</span>
+                      <input class="obilet-operators-hidden" type="hidden" required />
+                      <div class="obilet-operator-picker">
+                        <div class="obilet-operator-toolbar">
+                          <input class="obilet-operator-search" type="text" placeholder="Firma ara..." />
+                          <button type="button" class="btn btn-sm btn-ghost obilet-operator-select-all">Tumunu Sec</button>
+                          <button type="button" class="btn btn-sm btn-ghost obilet-operator-clear">Temizle</button>
+                        </div>
+                        <div class="obilet-operator-selected">Firma seciniz...</div>
+                        <div class="obilet-operator-options">
+                          <div class="obilet-loading">⏳ Firmalar yukleniyor...</div>
+                        </div>
+                      </div>
+                    </label>
+                    <label class="obilet-grid-span-2">
+                      <span>E-posta Bildirimleri (virgul ile)</span>
+                      <input class="obilet-emails" type="text" placeholder="Ornek: ornek@firma.com,diger@firma.com" />
+                    </label>
                   </div>
                 </div>
-              </label>
-              <label class="obilet-grid-span-2">
-                <span>E-posta Bildirimleri (virgul ile)</span>
-                <input id="obiletEmails" type="text" placeholder="Ornek: ornek@firma.com,diger@firma.com" />
-              </label>
-              <button type="submit" class="btn btn-primary">➕ Hat Ekle</button>
+              </div>
+              <div class="obilet-form-actions">
+                <button id="obiletAddRowBtn" type="button" class="btn btn-ghost">+ Hat Ekle</button>
+                <button type="submit" class="btn btn-primary">Hatlari Ekle</button>
+              </div>
             </form>
             <p id="obiletFormMsg" class="message"></p>
           </section>
