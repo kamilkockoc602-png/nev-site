@@ -3499,7 +3499,6 @@ async function scrapeObilet(origin, destination, dateIso) {
   const candidateUrls = [
     `${baseUrl}?date=${dateIso}`,
     `${baseUrl}/${dateStr}`,
-    baseUrl,
   ];
   console.log(`[oBilet] Kazima baslatiliyor. Aday URL sayisi: ${candidateUrls.length}`);
   
@@ -3519,6 +3518,13 @@ async function scrapeObilet(origin, destination, dateIso) {
         console.log(`[oBilet] URL deneniyor: ${url}`);
         const response = await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
         await new Promise((resolve) => setTimeout(resolve, 3500));
+
+        const currentUrl = page.url();
+        const hasDateInUrl = currentUrl.includes(dateIso) || currentUrl.includes(dateStr);
+        if (!hasDateInUrl) {
+          lastError = `Tarih uyusmadi. Istenen: ${dateIso}, URL: ${currentUrl}`;
+          continue;
+        }
 
         const pageState = await page.evaluate(() => {
           const title = document.title || "";
