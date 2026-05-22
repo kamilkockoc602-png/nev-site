@@ -36,6 +36,7 @@ const OBILET_SUBJECT_TEST = String(process.env.OBILET_SUBJECT_TEST || "oBilet Te
 const EMAIL_SIGNATURE_HTML = String(process.env.EMAIL_SIGNATURE_HTML || "").trim();
 const EMAIL_SIGNATURE_TEXT = String(process.env.EMAIL_SIGNATURE_TEXT || "").trim();
 const DEBUG_OBILET_PRICE = String(process.env.DEBUG_OBILET_PRICE || "").trim() === "1";
+const DEBUG_OBILET_API = String(process.env.DEBUG_OBILET_API || "").trim() === "1";
 const OBILET_OPERATOR_CATALOG = [
   "Ali Osman Ulusoy",
   "Anadolu Ulasim",
@@ -3662,18 +3663,37 @@ async function scrapeObilet(origin, destination, dateIso) {
     let lastError = "Bilinmeyen hata";
     const apiJourneys = [];
     const apiUrlPattern = /(obilet|otobus|bus|journey|trip|search|ticket|sefer)/i;
+    const apiJsonHint = /(api|search|journey|trip|ticket|sefer)/i;
 
     page.on("response", async (response) => {
       try {
         const url = response.url();
         if (!apiUrlPattern.test(url)) return;
         const contentType = response.headers()["content-type"] || "";
-        if (!contentType.includes("json")) return;
-        const data = await response.json().catch(() => null);
+        if (DEBUG_OBILET_API) {
+          console.log(`[oBilet][DEBUG] API yaniti: ${response.status()} ${url} (${contentType})`);
+        }
+
+        let data = null;
+        if (contentType.includes("json") || apiJsonHint.test(url)) {
+          data = await response.json().catch(() => null);
+        }
+
+        if (!data && DEBUG_OBILET_API) {
+          const rawText = await response.text().catch(() => "");
+          const trimmed = rawText.trim();
+          if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            data = JSON.parse(trimmed);
+          }
+        }
+
         if (!data) return;
         const extracted = extractObiletJourneysFromApiPayload(data);
         if (extracted.length > 0) {
           apiJourneys.push(...extracted);
+          if (DEBUG_OBILET_API) {
+            console.log(`[oBilet][DEBUG] API fiyatlari bulundu: ${extracted.length}`);
+          }
         }
       } catch (error) {
         if (DEBUG_OBILET_PRICE) {
