@@ -3733,7 +3733,7 @@ async function scrapeObilet(origin, destination, dateIso) {
         }
       }
     });
-    const maxDetailLookups = 8;
+    const maxDetailLookups = 0;
 
     const readMinPriceFromPage = async (targetPage) => {
       return targetPage.evaluate(() => {
