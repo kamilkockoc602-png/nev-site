@@ -29,6 +29,10 @@ const OBILET_CHECK_INTERVAL_MS =
 const OBILET_EMAIL_MODE = String(process.env.OBILET_EMAIL_MODE || "always")
   .trim()
   .toLocaleLowerCase("tr-TR");
+const OBILET_SUBJECT_CHANGE = String(process.env.OBILET_SUBJECT_CHANGE || "oBilet DEGISIKLIK VAR").trim();
+const OBILET_SUBJECT_NO_CHANGE = String(process.env.OBILET_SUBJECT_NO_CHANGE || "oBilet Degisiklik yok").trim();
+const OBILET_SUBJECT_PRICE_ALERT = String(process.env.OBILET_SUBJECT_PRICE_ALERT || "oBilet Fiyat Degisikligi").trim();
+const OBILET_SUBJECT_TEST = String(process.env.OBILET_SUBJECT_TEST || "oBilet Test E-postasi").trim();
 const OBILET_OPERATOR_CATALOG = [
   "Ali Osman Ulusoy",
   "Anadolu Ulasim",
@@ -3443,6 +3447,14 @@ function setObiletTargetSyncStatus(targetId, statusText) {
   }
 }
 
+function buildObiletRouteLabel(target) {
+  return `${String(target?.origin || "").toLocaleUpperCase("tr-TR")} - ${String(target?.destination || "").toLocaleUpperCase("tr-TR")}`;
+}
+
+function buildObiletSubject(prefix, target, dateLabel) {
+  return `${prefix}: ${buildObiletRouteLabel(target)} (${dateLabel})`;
+}
+
 function normalizeObiletOperatorName(value) {
   return toTurkishTitleCase(String(value || "").replace(/\s+/g, " ").trim());
 }
@@ -3661,7 +3673,7 @@ async function sendPriceChangeEmail(emailList, target, changes) {
   const mailOptions = {
     from: smtpFrom,
     to: emailList,
-    subject: `🚨 Fiyat Değişikliği: ${target.origin} - ${target.destination} (${formattedDate})`,
+    subject: buildObiletSubject(OBILET_SUBJECT_PRICE_ALERT, target, formattedDate),
     html: htmlContent
   };
 
@@ -3753,11 +3765,10 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
     </div>
   `;
 
-  const subjectPrefix = hasChanges ? "DEGISIKLIK VAR" : "Degisiklik yok";
   const { info, smtpPort } = await sendMailWithSmtpFallback({
     from: smtpFrom,
     to: emailList,
-    subject: `oBilet ${subjectPrefix}: ${target.origin} - ${target.destination} (${dateLabel})`,
+    subject: buildObiletSubject(hasChanges ? OBILET_SUBJECT_CHANGE : OBILET_SUBJECT_NO_CHANGE, target, dateLabel),
     html,
   });
   console.log(`[E-posta] SMTP portu kullanildi: ${smtpPort}`);
@@ -3774,7 +3785,7 @@ async function sendTestEmail(emailAddress) {
   const mailOptions = {
     from: smtpFrom,
     to: emailAddress,
-    subject: `🧪 oBilet Takip - E-posta Baglanti Testi`,
+    subject: OBILET_SUBJECT_TEST,
     html: `
       <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #ddd; border-radius: 8px; padding: 25px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
         <h2 style="color: #2a5298; margin-top: 0;">E-posta Baglanti Testi Basarili!</h2>
