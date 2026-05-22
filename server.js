@@ -4217,63 +4217,69 @@ async function scrapeObilet(origin, destination, dateIso) {
 
         if (journeys.length > 0) {
           const listUrl = page.url();
-          const buttonCount = await page.$$eval("button.journey.btn", (nodes) => nodes.length).catch(() => 0);
-          const seatCheckCount = Math.min(buttonCount, journeys.length, maxDetailLookups);
+          try {
+            const buttonCount = await page.$$eval("button.journey.btn", (nodes) => nodes.length).catch(() => 0);
+            const seatCheckCount = Math.min(buttonCount, journeys.length, maxDetailLookups);
 
-          for (let i = 0; i < seatCheckCount; i += 1) {
-            const journey = journeys[i];
-            if (!journey) {
-              continue;
-            }
-
-            const clicked = await page
-              .evaluate((index) => {
-                const buttons = Array.from(document.querySelectorAll("button.journey.btn"));
-                const target = buttons[index];
-                if (!target) {
-                  return false;
-                }
-                target.click();
-                return true;
-              }, i)
-              .catch(() => false);
-
-            if (!clicked) {
-              continue;
-            }
-
-            await new Promise((resolve) => setTimeout(resolve, 1200));
-            let navigatedToDetail = /\/seferler\//i.test(page.url());
-            if (!navigatedToDetail) {
-              const waitUntil = Date.now() + 7000;
-              while (Date.now() < waitUntil) {
-                if (/\/seferler\//i.test(page.url())) {
-                  navigatedToDetail = true;
-                  break;
-                }
-                await new Promise((resolve) => setTimeout(resolve, 250));
-              }
-            }
-
-            if (navigatedToDetail) {
-              const detailPrice = await readMinPriceFromPage(page).catch(() => 0);
-              if (detailPrice && detailPrice >= 300 && detailPrice < journey.price) {
-                seatFlowPrices.push({
-                  operator: journey.operator,
-                  time: journey.time,
-                  price: detailPrice,
-                });
-                if (DEBUG_OBILET_PRICE) {
-                  console.log(
-                    `[oBilet][DEBUG] Koltuk akisi fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${detailPrice}`
-                  );
-                }
-                journey.price = detailPrice;
+            for (let i = 0; i < seatCheckCount; i += 1) {
+              const journey = journeys[i];
+              if (!journey) {
+                continue;
               }
 
-              await page.goto(listUrl, { waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
-              await page.waitForSelector("li[itemprop='busTrip'], .journeys li", { timeout: 12000 }).catch(() => {});
-              await new Promise((resolve) => setTimeout(resolve, 500));
+              const clicked = await page
+                .evaluate((index) => {
+                  const buttons = Array.from(document.querySelectorAll("button.journey.btn"));
+                  const target = buttons[index];
+                  if (!target) {
+                    return false;
+                  }
+                  target.click();
+                  return true;
+                }, i)
+                .catch(() => false);
+
+              if (!clicked) {
+                continue;
+              }
+
+              await new Promise((resolve) => setTimeout(resolve, 1200));
+              let navigatedToDetail = /\/seferler\//i.test(page.url());
+              if (!navigatedToDetail) {
+                const waitUntil = Date.now() + 7000;
+                while (Date.now() < waitUntil) {
+                  if (/\/seferler\//i.test(page.url())) {
+                    navigatedToDetail = true;
+                    break;
+                  }
+                  await new Promise((resolve) => setTimeout(resolve, 250));
+                }
+              }
+
+              if (navigatedToDetail) {
+                const detailPrice = await readMinPriceFromPage(page).catch(() => 0);
+                if (detailPrice && detailPrice >= 300 && detailPrice < journey.price) {
+                  seatFlowPrices.push({
+                    operator: journey.operator,
+                    time: journey.time,
+                    price: detailPrice,
+                  });
+                  if (DEBUG_OBILET_PRICE) {
+                    console.log(
+                      `[oBilet][DEBUG] Koltuk akisi fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${detailPrice}`
+                    );
+                  }
+                  journey.price = detailPrice;
+                }
+
+                await page.goto(listUrl, { waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
+                await page.waitForSelector("li[itemprop='busTrip'], .journeys li", { timeout: 12000 }).catch(() => {});
+                await new Promise((resolve) => setTimeout(resolve, 500));
+              }
+            }
+          } catch (seatFlowError) {
+            if (DEBUG_OBILET_PRICE) {
+              console.log(`[oBilet][DEBUG] Koltuk akisi atlandi: ${seatFlowError.message}`);
             }
           }
 
