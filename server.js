@@ -3800,7 +3800,45 @@ async function scrapeObilet(origin, destination, dateIso) {
           { timeout: 8000 }
         ).catch(() => {});
 
-        const price = await readMinPriceFromPage(detailPage);
+        const price = await detailPage.evaluate(() => {
+          const parsePrice = (value) => {
+            const raw = String(value || "");
+            if (!raw) return 0;
+            const normalized = raw.replace(/\./g, "").replace(",", ".");
+            const number = parseFloat(normalized.replace(/[^0-9.]/g, ""));
+            return Number.isFinite(number) ? Math.round(number) : 0;
+          };
+
+          const candidates = [];
+
+          // Prefer explicit journey/seat area prices over generic banner texts.
+          document
+            .querySelectorAll(
+              ".journey .price, .journey [itemprop='price'], .seat-layout .price, .seat-layout [itemprop='price'], .bus-journey .price, .ticket-price"
+            )
+            .forEach((node) => {
+              const value = node.getAttribute("content") || node.textContent || "";
+              const parsed = parsePrice(value);
+              if (parsed > 0) candidates.push(parsed);
+            });
+
+          if (!candidates.length) {
+            const text = document.body?.innerText || "";
+            const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
+            for (const match of text.matchAll(regex)) {
+              const parsed = parsePrice(match[1]);
+              if (parsed > 0) candidates.push(parsed);
+            }
+          }
+
+          // Ignore promo labels like 100 TL app discount; bus fares are much higher on this route.
+          const realistic = candidates.filter((p) => p >= 300);
+          if (!realistic.length) {
+            return 0;
+          }
+
+          return Math.min(...realistic);
+        });
 
         return price > 0 ? price : null;
       } catch (error) {
@@ -4062,17 +4100,18 @@ async function scrapeObilet(origin, destination, dateIso) {
               .map((node) => node.getAttribute("href") || "")
               .filter(Boolean);
             const detailHref = linkCandidates.find((href) =>
-              href.includes("/otobus-bileti/")
+              href.includes("/seferler/") || href.includes("/otobus-bileti/")
             );
 
-            const buttonCandidates = Array.from(card.querySelectorAll("button, [role='button']"))
+            const buttonCandidates = Array.from(card.querySelectorAll("button, [role='button'], a"))
               .map((node) =>
                 node.getAttribute("data-href") ||
                 node.getAttribute("data-url") ||
                 node.getAttribute("data-link") ||
+                node.getAttribute("href") ||
                 ""
               )
-              .filter(Boolean);
+              .filter((value) => value && (value.includes("/seferler/") || value.includes("/otobus-bileti/")));
             const detailUrl = detailHref || buttonCandidates[0] || "";
 
             let detailSelector = "";
