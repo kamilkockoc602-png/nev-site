@@ -3571,6 +3571,7 @@ function renderObiletTargetCards(listEl) {
     const periodLabel = endDateFormatted && endDateFormatted !== dateFormatted
       ? `${dateFormatted} - ${endDateFormatted}`
       : dateFormatted;
+    const departureStopFilter = String(t.departure_stop_filter || "").trim();
     const emails = (t.email_notifications || "").split(",").map(e => e.trim()).filter(Boolean);
     const syncStatus = String(t.last_sync_status || "").trim();
     const syncAt = String(t.last_sync_at || "").trim();
@@ -3592,6 +3593,7 @@ function renderObiletTargetCards(listEl) {
         </div>
         <div class="obilet-card-meta">
           <span class="obilet-tag">🏢 ${t.operators}</span>
+          ${departureStopFilter ? `<span class="obilet-tag">📍 ${departureStopFilter}</span>` : ""}
           <span class="obilet-tag">📧 ${emails.length ? emails.join(", ") : "-"}</span>
           <span class="obilet-tag ${t.is_active ? 'obilet-active' : 'obilet-passive'}">
             ${t.is_active ? '✅ Aktif' : '⏸ Pasif'}
@@ -3647,12 +3649,14 @@ function renderObiletTargetCards(listEl) {
 
         pricesArea.innerHTML = `
           <table class="obilet-prices-table">
-            <thead><tr><th>Tarih</th><th>Firma</th><th>Saat</th><th>Fiyat</th><th>Son Güncelleme</th></tr></thead>
+            <thead><tr><th>Tarih</th><th>Firma</th><th>Kalkış</th><th>Varış</th><th>Saat</th><th>Fiyat</th><th>Son Güncelleme</th></tr></thead>
             <tbody>
               ${prices.map(p => `
                 <tr>
                   <td>${(p.journey_date || "").split("-").reverse().join(".") || "-"}</td>
                   <td><strong>${p.operator}</strong></td>
+                  <td>${p.departure_stop || "-"}</td>
+                  <td>${p.arrival_stop || "-"}</td>
                   <td>${p.departure_time}</td>
                   <td class="obilet-price-cell">₺${p.price.toLocaleString("tr-TR")}</td>
                   <td class="obilet-updated-cell">${p.last_updated}</td>
@@ -3697,6 +3701,7 @@ function setupObiletForm() {
     const destination = document.getElementById("obiletDestination").value.trim();
     const date = document.getElementById("obiletDate").value.trim();
     const endDate = document.getElementById("obiletEndDate").value.trim() || date;
+    const departureStopFilter = document.getElementById("obiletDepartureStopFilter")?.value.trim() || "";
     const operators = document.getElementById("obiletOperators").value.trim();
     const emails = document.getElementById("obiletEmails").value.trim();
 
@@ -3724,6 +3729,7 @@ function setupObiletForm() {
           destination,
           date,
           endDate,
+          departureStopFilter,
           operators,
           emailNotifications: emails,
         }),

@@ -459,6 +459,7 @@ CREATE TABLE IF NOT EXISTS obilet_targets (
   destination TEXT NOT NULL,
   date TEXT NOT NULL,
   end_date TEXT NOT NULL DEFAULT '',
+  departure_stop_filter TEXT NOT NULL DEFAULT '',
   operators TEXT NOT NULL,
   email_notifications TEXT NOT NULL,
   telegram_chat_ids TEXT NOT NULL DEFAULT '',
@@ -472,6 +473,8 @@ CREATE TABLE IF NOT EXISTS obilet_prices (
   journey_date TEXT NOT NULL DEFAULT '',
   operator TEXT NOT NULL,
   departure_time TEXT NOT NULL,
+  departure_stop TEXT NOT NULL DEFAULT '',
+  arrival_stop TEXT NOT NULL DEFAULT '',
   price INTEGER NOT NULL,
   last_updated TEXT NOT NULL,
   FOREIGN KEY (target_id) REFERENCES obilet_targets(id) ON DELETE CASCADE
@@ -482,9 +485,12 @@ try { db.exec("ALTER TABLE user_error_reports ADD COLUMN priority TEXT NOT NULL 
 try { db.exec("ALTER TABLE user_error_reports ADD COLUMN status TEXT NOT NULL DEFAULT 'Yeni'"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN telegram_chat_ids TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN end_date TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+try { db.exec("ALTER TABLE obilet_targets ADD COLUMN departure_stop_filter TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_sync_status TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_sync_at TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN journey_date TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+try { db.exec("ALTER TABLE obilet_prices ADD COLUMN departure_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+try { db.exec("ALTER TABLE obilet_prices ADD COLUMN arrival_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 
 const pricingItemColumns = db.prepare("PRAGMA table_info(pricing_upload_items)").all();
 const hasRowDirectionColumn = pricingItemColumns.some((col) => col.name === "row_direction");
@@ -3538,15 +3544,23 @@ async function scrapeObilet(origin, destination, dateIso) {
             return Number.isFinite(number) ? Math.round(number) : 0;
           };
 
-          const addJourney = (operator, time, price) => {
+          const addJourney = (operator, time, price, departureStop = "", arrivalStop = "") => {
             const safeOperator = normalizeOperator(operator);
             const safeTime = String(time || "").trim();
             const safePrice = Number(price) || 0;
+            const safeDepartureStop = String(departureStop || "").replace(/\s+/g, " ").trim();
+            const safeArrivalStop = String(arrivalStop || "").replace(/\s+/g, " ").trim();
             if (!safeOperator || !safeTime || safePrice <= 0) return;
-            const key = `${safeOperator}|${safeTime}|${safePrice}`;
+            const key = `${safeOperator}|${safeTime}|${safePrice}|${safeDepartureStop}|${safeArrivalStop}`;
             if (seen.has(key)) return;
             seen.add(key);
-            items.push({ operator: safeOperator, time: safeTime, price: safePrice });
+            items.push({
+              operator: safeOperator,
+              time: safeTime,
+              price: safePrice,
+              departureStop: safeDepartureStop,
+              arrivalStop: safeArrivalStop,
+            });
           };
 
           const cardNodes = Array.from(document.querySelectorAll("li[itemprop='busTrip'], .journeys li"));
@@ -3569,7 +3583,17 @@ async function scrapeObilet(origin, destination, dateIso) {
               card.querySelector(".no-cache-price")?.textContent ||
               "";
 
-            addJourney(operator, departure, parsePrice(lowPrice));
+            const departureStop =
+              card.querySelector("[itemprop='departureBusStop'] [itemprop='name']")?.textContent ||
+              card.querySelector("[itemprop='departureBusStop']")?.textContent ||
+              "";
+
+            const arrivalStop =
+              card.querySelector("[itemprop='arrivalBusStop'] [itemprop='name']")?.textContent ||
+              card.querySelector("[itemprop='arrivalBusStop']")?.textContent ||
+              "";
+
+            addJourney(operator, departure, parsePrice(lowPrice), departureStop, arrivalStop);
           });
 
           if (!items.length) {
@@ -3774,7 +3798,7 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
               <th style="padding:8px;text-align:right;">Fiyat</th>
             </tr>
           </thead>
-          <tbody>${currentPriceRows || '<tr><td colspan="3" style="padding:8px;">Takip edilen firmalar icin sefer verisi bulunamadi.</td></tr>'}</tbody>
+          <tbody>${currentPriceRows || '<tr><td colspan="4" style="padding:8px;">Takip edilen firmalar icin sefer verisi bulunamadi.</td></tr>'}</tbody>
         </table>
       </div>
     </div>
@@ -3847,6 +3871,8 @@ async function refreshObiletPricesTask() {
       const targetOperators = parseCsvList(target.operators)
         .map(normalizeObiletOperatorName)
         .filter(Boolean);
+      const departureStopFilter = String(target.departure_stop_filter || "").trim();
+      const departureStopFilterKey = normalizeSearchText(departureStopFilter);
 
       const trackedJourneys = [];
       const changes = [];
@@ -3868,14 +3894,21 @@ async function refreshObiletPricesTask() {
               isObiletOperatorMatch(op, journey.operator)
             )
           )
+          .filter((journey) => {
+            if (!departureStopFilterKey) {
+              return true;
+            }
+            const journeyStopKey = normalizeSearchText(journey.departureStop || "");
+            return journeyStopKey.includes(departureStopFilterKey);
+          })
           .map((journey) => ({ ...journey, journey_date: journeyDate }));
 
         trackedJourneys.push(...dayTracked);
 
         for (const journey of dayTracked) {
           const previous = db.prepare(
-            "SELECT * FROM obilet_prices WHERE target_id = ? AND journey_date = ? AND operator = ? AND departure_time = ?"
-          ).get(target.id, journey.journey_date, journey.operator, journey.time);
+            "SELECT * FROM obilet_prices WHERE target_id = ? AND journey_date = ? AND operator = ? AND departure_time = ? AND departure_stop = ?"
+          ).get(target.id, journey.journey_date, journey.operator, journey.time, journey.departureStop || "");
 
           if (previous) {
             if (previous.price !== journey.price) {
@@ -3893,13 +3926,22 @@ async function refreshObiletPricesTask() {
 
               addPricingNotification(
                 "oBilet Fiyat Takip",
-                `${toDotDate(journey.journey_date)} ${journey.operator} (${journey.time}) fiyatı değişti: ${previous.price} TL -> ${journey.price} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
+                `${toDotDate(journey.journey_date)} ${journey.operator} (${journey.time}, ${journey.departureStop || "-"}) fiyatı değişti: ${previous.price} TL -> ${journey.price} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
               );
             }
           } else {
             db.prepare(
-              "INSERT INTO obilet_prices (target_id, journey_date, operator, departure_time, price, last_updated) VALUES (?, ?, ?, ?, ?, ?)"
-            ).run(target.id, journey.journey_date, journey.operator, journey.time, journey.price, now);
+              "INSERT INTO obilet_prices (target_id, journey_date, operator, departure_time, departure_stop, arrival_stop, price, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            ).run(
+              target.id,
+              journey.journey_date,
+              journey.operator,
+              journey.time,
+              journey.departureStop || "",
+              journey.arrivalStop || "",
+              journey.price,
+              now
+            );
           }
         }
       }
@@ -3907,13 +3949,14 @@ async function refreshObiletPricesTask() {
       if (trackedJourneys.length === 0) {
         const scrapedSample = Array.from(scrapedOperators).slice(0, 8).join(", ");
         const detail = scrapedSample ? ` Bulunan firmalar: ${scrapedSample}.` : "";
+        const stopDetail = departureStopFilter ? ` Kalkis duragi filtresi: ${departureStopFilter}.` : "";
         setObiletTargetSyncStatus(
           target.id,
-          `Secilen firmalarda sefer bulunamadi.${detail}`
+          `Secilen firmalarda sefer bulunamadi.${stopDetail}${detail}`
         );
         addPricingNotification(
           "oBilet Fiyat Takip",
-          `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} icin secilen firmalarda sefer verisi bulunamadi.${detail}`
+          `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} icin secilen firmalarda sefer verisi bulunamadi.${stopDetail}${detail}`
         );
       }
       
@@ -3997,6 +4040,7 @@ app.post("/api/obilet/targets", requireAuth, (req, res) => {
   const destination = String(req.body.destination || "").trim();
   const date = String(req.body.date || "").trim(); // YYYY-MM-DD
   const endDate = String(req.body.endDate || "").trim(); // YYYY-MM-DD
+  const departureStopFilter = String(req.body.departureStopFilter || "").trim();
   const operators = String(req.body.operators || "").trim();
   let emailNotifications = String(req.body.emailNotifications || "").trim();
   
@@ -4023,8 +4067,8 @@ app.post("/api/obilet/targets", requireAuth, (req, res) => {
   
   try {
     const result = db.prepare(
-      "INSERT INTO obilet_targets (origin, destination, date, end_date, operators, email_notifications, telegram_chat_ids, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-    ).run(origin, destination, date, normalizedEndDate, operators, emailNotifications, "", nowStamp());
+      "INSERT INTO obilet_targets (origin, destination, date, end_date, departure_stop_filter, operators, email_notifications, telegram_chat_ids, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(origin, destination, date, normalizedEndDate, departureStopFilter, operators, emailNotifications, "", nowStamp());
     
     // Ekleme işleminden sonra fiyatları hemen çekmek için arka planda tetikle
     setTimeout(() => {
