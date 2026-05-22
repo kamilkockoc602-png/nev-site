@@ -4243,8 +4243,17 @@ async function scrapeObilet(origin, destination, dateIso) {
             }
 
             await new Promise((resolve) => setTimeout(resolve, 1200));
-            const navigatedToDetail = /\/seferler\//i.test(page.url()) ||
-              (await page.waitForURL(/\/seferler\//i, { timeout: 7000 }).then(() => true).catch(() => false));
+            let navigatedToDetail = /\/seferler\//i.test(page.url());
+            if (!navigatedToDetail) {
+              const waitUntil = Date.now() + 7000;
+              while (Date.now() < waitUntil) {
+                if (/\/seferler\//i.test(page.url())) {
+                  navigatedToDetail = true;
+                  break;
+                }
+                await new Promise((resolve) => setTimeout(resolve, 250));
+              }
+            }
 
             if (navigatedToDetail) {
               const detailPrice = await readMinPriceFromPage(page).catch(() => 0);
