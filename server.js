@@ -3480,6 +3480,15 @@ function isObiletOperatorMatch(selectedOperator, scrapedOperator) {
   return scrapedKey.includes(selectedKey) || selectedKey.includes(scrapedKey);
 }
 
+function buildJourneyIdentityKey(operator, departureTime, departureStop, arrivalStop) {
+  return [
+    toObiletOperatorMatchKey(operator),
+    String(departureTime || "").trim(),
+    normalizeSearchText(departureStop || ""),
+    normalizeSearchText(arrivalStop || ""),
+  ].join("|");
+}
+
 // oBilet Scraper (Puppeteer Tabanlı)
 async function scrapeObilet(origin, destination, dateIso) {
   const originSlug = slugTr(origin).replace(/\s+/g, "-");
@@ -3907,6 +3916,46 @@ async function refreshObiletPricesTask() {
             return journeyStopKey.includes(departureStopFilterKey);
           })
           .map((journey) => ({ ...journey, journey_date: journeyDate }));
+
+        const currentKeys = new Set(
+          dayTracked.map((journey) =>
+            buildJourneyIdentityKey(
+              journey.operator,
+              journey.time,
+              journey.departureStop || "",
+              journey.arrivalStop || ""
+            )
+          )
+        );
+
+        const existingRows = db
+          .prepare("SELECT id, operator, departure_time, departure_stop, arrival_stop FROM obilet_prices WHERE target_id = ? AND journey_date = ?")
+          .all(target.id, journeyDate);
+
+        for (const row of existingRows) {
+          const operatorMatched = targetOperators.some((op) => isObiletOperatorMatch(op, row.operator));
+          if (!operatorMatched) {
+            continue;
+          }
+
+          if (departureStopFilterKey) {
+            const rowStopKey = normalizeSearchText(row.departure_stop || "");
+            if (!rowStopKey.includes(departureStopFilterKey)) {
+              continue;
+            }
+          }
+
+          const rowKey = buildJourneyIdentityKey(
+            row.operator,
+            row.departure_time,
+            row.departure_stop || "",
+            row.arrival_stop || ""
+          );
+
+          if (!currentKeys.has(rowKey)) {
+            db.prepare("DELETE FROM obilet_prices WHERE id = ?").run(row.id);
+          }
+        }
 
         trackedJourneys.push(...dayTracked);
 
