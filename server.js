@@ -3572,6 +3572,15 @@ async function scrapeObilet(origin, destination, dateIso) {
           console.log("[oBilet] Sefer secicisi bekleme suresi asildi. Metin tabanli ayrisma denenecek.");
         }
 
+        try {
+          await page.waitForFunction(
+            () => /\b\d+\s*(TL|₺)\b/i.test(document.body?.innerText || ""),
+            { timeout: 8000 }
+          );
+        } catch (priceWaitError) {
+          console.log("[oBilet] Fiyat metni bekleme suresi asildi. Mevcut DOM ile devam ediliyor.");
+        }
+
         const journeys = await page.evaluate(() => {
           const items = [];
           const seen = new Set();
@@ -3597,9 +3606,17 @@ async function scrapeObilet(origin, destination, dateIso) {
               pushPrice(node.getAttribute("data-price"));
             });
 
+            card.querySelectorAll("[data-amount], [data-sale-price], [data-campaign-price], [data-discounted-price]")
+              .forEach((node) => {
+                pushPrice(node.getAttribute("data-amount"));
+                pushPrice(node.getAttribute("data-sale-price"));
+                pushPrice(node.getAttribute("data-campaign-price"));
+                pushPrice(node.getAttribute("data-discounted-price"));
+              });
+
             card
               .querySelectorAll(
-                "[itemprop='lowPrice'], .no-cache-price, .price, .amount, .ticket-price, .fare"
+                "[itemprop='lowPrice'], .no-cache-price, .price, .amount, .ticket-price, .fare, .sale-price, .discounted, .discount-price"
               )
               .forEach((node) => {
                 pushPrice(node.textContent || "");
