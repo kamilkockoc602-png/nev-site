@@ -3641,10 +3641,9 @@ async function scrapeObilet(origin, destination, dateIso) {
   const dateStr = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`; // DD-MM-YYYY
   const baseUrl = `https://www.obilet.com/otobus-bileti/${originSlug}-${destSlug}`;
   const cacheBust = Date.now();
-  const candidateUrls = [
-    `${baseUrl}?date=${dateIso}&cb=${cacheBust}`,
-    `${baseUrl}/${dateStr}?cb=${cacheBust}`,
-  ];
+  // NOTE: The /DD-MM-YYYY path frequently redirects to an oBilet error page
+  // in headless mode. Keep only the stable querystring form.
+  const candidateUrls = [`${baseUrl}?date=${dateIso}&cb=${cacheBust}`];
   console.log(`[oBilet] Kazima baslatiliyor. Aday URL sayisi: ${candidateUrls.length}`);
   
   const browser = await puppeteer.launch({
