@@ -3586,6 +3586,34 @@ async function scrapeObilet(origin, destination, dateIso) {
             return Number.isFinite(number) ? Math.round(number) : 0;
           };
 
+          const collectCardPrices = (card) => {
+            const prices = [];
+            const pushPrice = (value) => {
+              const parsed = parsePrice(value);
+              if (parsed > 0) prices.push(parsed);
+            };
+
+            card.querySelectorAll("[data-price]").forEach((node) => {
+              pushPrice(node.getAttribute("data-price"));
+            });
+
+            card
+              .querySelectorAll(
+                "[itemprop='lowPrice'], .no-cache-price, .price, .amount, .ticket-price, .fare"
+              )
+              .forEach((node) => {
+                pushPrice(node.textContent || "");
+              });
+
+            const text = card.textContent || "";
+            const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
+            for (const match of text.matchAll(regex)) {
+              pushPrice(match[1]);
+            }
+
+            return prices;
+          };
+
           const addJourney = (operator, time, price, departureStop = "", arrivalStop = "") => {
             const safeOperator = normalizeOperator(operator);
             const safeTime = String(time || "").trim();
@@ -3618,12 +3646,8 @@ async function scrapeObilet(origin, destination, dateIso) {
               card.querySelector(".departure-time")?.textContent ||
               "";
 
-            const lowPrice =
-              card.querySelector("[itemprop='lowPrice']")?.getAttribute("data-price") ||
-              card.querySelector("[itemprop='lowPrice']")?.textContent ||
-              card.querySelector(".no-cache-price")?.getAttribute("data-price") ||
-              card.querySelector(".no-cache-price")?.textContent ||
-              "";
+            const priceCandidates = collectCardPrices(card);
+            const bestPrice = priceCandidates.length > 0 ? Math.min(...priceCandidates) : 0;
 
             const departureStop =
               card.querySelector("[itemprop='departureBusStop'] [itemprop='name']")?.textContent ||
@@ -3635,7 +3659,7 @@ async function scrapeObilet(origin, destination, dateIso) {
               card.querySelector("[itemprop='arrivalBusStop']")?.textContent ||
               "";
 
-            addJourney(operator, departure, parsePrice(lowPrice), departureStop, arrivalStop);
+            addJourney(operator, departure, bestPrice, departureStop, arrivalStop);
           });
 
           if (!items.length) {
