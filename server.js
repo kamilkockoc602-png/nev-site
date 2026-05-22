@@ -29,8 +29,8 @@ const OBILET_CHECK_INTERVAL_MS =
 const OBILET_EMAIL_MODE = String(process.env.OBILET_EMAIL_MODE || "always")
   .trim()
   .toLocaleLowerCase("tr-TR");
-const OBILET_SUBJECT_CHANGE = String(process.env.OBILET_SUBJECT_CHANGE || "oBilet DEGISIKLIK VAR").trim();
-const OBILET_SUBJECT_NO_CHANGE = String(process.env.OBILET_SUBJECT_NO_CHANGE || "oBilet Degisiklik yok").trim();
+const OBILET_SUBJECT_CHANGE = String(process.env.OBILET_SUBJECT_CHANGE || "O bilet fiyat Raporu").trim();
+const OBILET_SUBJECT_NO_CHANGE = String(process.env.OBILET_SUBJECT_NO_CHANGE || "O bilet fiyat Raporu").trim();
 const OBILET_SUBJECT_PRICE_ALERT = String(process.env.OBILET_SUBJECT_PRICE_ALERT || "oBilet Fiyat Degisikligi").trim();
 const OBILET_SUBJECT_TEST = String(process.env.OBILET_SUBJECT_TEST || "oBilet Test E-postasi").trim();
 const OBILET_OPERATOR_CATALOG = [
