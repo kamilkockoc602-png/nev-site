@@ -4651,31 +4651,31 @@ async function sendTestEmail(emailAddress) {
 async function processObiletTarget(target) {
   try {
     setObiletTargetSyncStatus(target.id, "Kontrol ediliyor...");
-      const dateList = buildIsoDateRange(target.date, target.end_date || target.date);
-      if (!dateList.length) {
-        setObiletTargetSyncStatus(target.id, "Hata: Tarih araligi gecersiz. Baslangic ve bitis tarihini kontrol edin.");
-        continue;
-      }
+    const dateList = buildIsoDateRange(target.date, target.end_date || target.date);
+    if (!dateList.length) {
+      setObiletTargetSyncStatus(target.id, "Hata: Tarih araligi gecersiz. Baslangic ve bitis tarihini kontrol edin.");
+      return;
+    }
 
-      const periodLabel = dateList.length > 1
-        ? `${toDotDate(dateList[0])} - ${toDotDate(dateList[dateList.length - 1])}`
-        : toDotDate(dateList[0]);
+    const periodLabel = dateList.length > 1
+      ? `${toDotDate(dateList[0])} - ${toDotDate(dateList[dateList.length - 1])}`
+      : toDotDate(dateList[0]);
 
-      console.log(`[Takip Görevi] Sorgulanıyor: ${target.origin} -> ${target.destination} (${periodLabel})`);
+    console.log(`[Takip Görevi] Sorgulanıyor: ${target.origin} -> ${target.destination} (${periodLabel})`);
 
-      const targetOperators = parseCsvList(target.operators)
-        .map(normalizeObiletOperatorName)
-        .filter(Boolean);
-      const departureStopFilter = String(target.departure_stop_filter || "").trim();
-      const departureStopFilterKey = normalizeSearchText(departureStopFilter);
-      const queryOriginPrimary = departureStopFilter || target.origin;
+    const targetOperators = parseCsvList(target.operators)
+      .map(normalizeObiletOperatorName)
+      .filter(Boolean);
+    const departureStopFilter = String(target.departure_stop_filter || "").trim();
+    const departureStopFilterKey = normalizeSearchText(departureStopFilter);
+    const queryOriginPrimary = departureStopFilter || target.origin;
 
-      const trackedJourneys = [];
-      const changes = [];
-      const now = nowStamp();
-      const scrapedOperators = new Set();
+    const trackedJourneys = [];
+    const changes = [];
+    const now = nowStamp();
+    const scrapedOperators = new Set();
 
-      for (const journeyDate of dateList) {
+    for (const journeyDate of dateList) {
         let journeys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate);
         if (departureStopFilter && !journeys.length) {
           // Bazi gunlerde durak bazli URL bos donebilir; sehir bazli rotaya geri dus.
@@ -4784,94 +4784,94 @@ async function processObiletTarget(target) {
             );
           }
         }
-      }
+    }
 
-      if (trackedJourneys.length === 0) {
-        const scrapedSample = Array.from(scrapedOperators).slice(0, 8).join(", ");
-        const detail = scrapedSample ? ` Bulunan firmalar: ${scrapedSample}.` : "";
-        const stopDetail = departureStopFilter ? ` Kalkis duragi filtresi: ${departureStopFilter}.` : "";
-        setObiletTargetSyncStatus(
-          target.id,
-          `Secilen firmalarda sefer bulunamadi.${stopDetail}${detail}`
-        );
-        addPricingNotification(
-          "oBilet Fiyat Takip",
-          `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} icin secilen firmalarda sefer verisi bulunamadi.${stopDetail}${detail}`
-        );
-      }
+    if (trackedJourneys.length === 0) {
+      const scrapedSample = Array.from(scrapedOperators).slice(0, 8).join(", ");
+      const detail = scrapedSample ? ` Bulunan firmalar: ${scrapedSample}.` : "";
+      const stopDetail = departureStopFilter ? ` Kalkis duragi filtresi: ${departureStopFilter}.` : "";
+      setObiletTargetSyncStatus(
+        target.id,
+        `Secilen firmalarda sefer bulunamadi.${stopDetail}${detail}`
+      );
+      addPricingNotification(
+        "oBilet Fiyat Takip",
+        `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} icin secilen firmalarda sefer verisi bulunamadi.${stopDetail}${detail}`
+      );
+    }
+    
+    const emails = parseCsvList(target.email_notifications);
+    if (changes.length > 0) {
+      console.log(`[Takip Görevi] ${changes.length} adet fiyat degisimi tespit edildi.`);
+    } else {
+      console.log(`[Takip Görevi] Fiyat değişikliği yok: ${target.origin} - ${target.destination}`);
+    }
+
+    let mailWarning = "";
+    if (emails.length > 0) {
+      let shouldSendEmail = false;
       
-      const emails = parseCsvList(target.email_notifications);
-      if (changes.length > 0) {
-        console.log(`[Takip Görevi] ${changes.length} adet fiyat degisimi tespit edildi.`);
-      } else {
-        console.log(`[Takip Görevi] Fiyat değişikliği yok: ${target.origin} - ${target.destination}`);
-      }
-
-      let mailWarning = "";
-      if (emails.length > 0) {
-        let shouldSendEmail = false;
-        
-        if (OBILET_EMAIL_MODE === "smart") {
-          // Smart mod: Değişiklik varsa veya son mailden X saat geçmişse gönder
-          if (changes.length > 0) {
+      if (OBILET_EMAIL_MODE === "smart") {
+        // Smart mod: Değişiklik varsa veya son mailden X saat geçmişse gönder
+        if (changes.length > 0) {
+          shouldSendEmail = true;
+          console.log("[Takip Görevi] Değişiklik tespit edildi, mail gönderiliyor...");
+        } else {
+          const lastEmailSentAt = target.last_email_sent_at || "";
+          if (!lastEmailSentAt) {
             shouldSendEmail = true;
-            console.log("[Takip Görevi] Değişiklik tespit edildi, mail gönderiliyor...");
+            console.log("[Takip Görevi] İlk mail gönderiliyor...");
           } else {
-            const lastEmailSentAt = target.last_email_sent_at || "";
-            if (!lastEmailSentAt) {
+            const lastEmailTime = new Date(lastEmailSentAt).getTime();
+            const nowTime = Date.now();
+            const hoursPassed = (nowTime - lastEmailTime) / (1000 * 60 * 60);
+            const intervalHours = Number.isFinite(OBILET_EMAIL_INTERVAL_HOURS) && OBILET_EMAIL_INTERVAL_HOURS > 0
+              ? OBILET_EMAIL_INTERVAL_HOURS
+              : 1;
+            
+            if (hoursPassed >= intervalHours) {
               shouldSendEmail = true;
-              console.log("[Takip Görevi] İlk mail gönderiliyor...");
+              console.log(`[Takip Görevi] Son mailden ${hoursPassed.toFixed(1)} saat geçti, özet mail gönderiliyor...`);
             } else {
-              const lastEmailTime = new Date(lastEmailSentAt).getTime();
-              const nowTime = Date.now();
-              const hoursPassed = (nowTime - lastEmailTime) / (1000 * 60 * 60);
-              const intervalHours = Number.isFinite(OBILET_EMAIL_INTERVAL_HOURS) && OBILET_EMAIL_INTERVAL_HOURS > 0
-                ? OBILET_EMAIL_INTERVAL_HOURS
-                : 1;
-              
-              if (hoursPassed >= intervalHours) {
-                shouldSendEmail = true;
-                console.log(`[Takip Görevi] Son mailden ${hoursPassed.toFixed(1)} saat geçti, özet mail gönderiliyor...`);
-              } else {
-                console.log(`[Takip Görevi] Son mailden ${hoursPassed.toFixed(1)} saat geçti, henüz ${intervalHours} saat dolmadı.`);
-              }
+              console.log(`[Takip Görevi] Son mailden ${hoursPassed.toFixed(1)} saat geçti, henüz ${intervalHours} saat dolmadı.`);
             }
           }
-        } else if (OBILET_EMAIL_MODE === "changes") {
-          // Changes mod: Sadece değişiklik varsa gönder
-          shouldSendEmail = changes.length > 0;
-        } else {
-          // Always mod: Her zaman gönder
-          shouldSendEmail = true;
         }
-        
-        if (shouldSendEmail) {
-          console.log("[Takip Görevi] E-posta raporu gonderiliyor...");
-          try {
-            await sendObiletCycleStatusEmail(emails, target, trackedJourneys, changes);
-            // Mail gönderim zamanını kaydet
-            db.prepare("UPDATE obilet_targets SET last_email_sent_at = ? WHERE id = ?")
-              .run(now, target.id);
-          } catch (mailError) {
-            mailWarning = ` E-posta gonderilemedi: ${mailError.message}`;
-            console.error(`[Takip Görevi] E-posta gonderim hatasi (${target.origin} -> ${target.destination}): ${mailError.message}`);
-            addPricingNotification(
-              "oBilet Fiyat Takip",
-              `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} icin rapor e-postasi gonderilemedi: ${mailError.message}`
-            );
-          }
+      } else if (OBILET_EMAIL_MODE === "changes") {
+        // Changes mod: Sadece değişiklik varsa gönder
+        shouldSendEmail = changes.length > 0;
+      } else {
+        // Always mod: Her zaman gönder
+        shouldSendEmail = true;
+      }
+      
+      if (shouldSendEmail) {
+        console.log("[Takip Görevi] E-posta raporu gonderiliyor...");
+        try {
+          await sendObiletCycleStatusEmail(emails, target, trackedJourneys, changes);
+          // Mail gönderim zamanını kaydet
+          db.prepare("UPDATE obilet_targets SET last_email_sent_at = ? WHERE id = ?")
+            .run(now, target.id);
+        } catch (mailError) {
+          mailWarning = ` E-posta gonderilemedi: ${mailError.message}`;
+          console.error(`[Takip Görevi] E-posta gonderim hatasi (${target.origin} -> ${target.destination}): ${mailError.message}`);
+          addPricingNotification(
+            "oBilet Fiyat Takip",
+            `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} icin rapor e-postasi gonderilemedi: ${mailError.message}`
+          );
         }
       }
+    }
 
-      if (trackedJourneys.length > 0) {
-        const changeText = changes.length > 0
-          ? `${changes.length} degisiklik bulundu`
-          : "Degisiklik yok";
-        setObiletTargetSyncStatus(
-          target.id,
-          `Basarili. ${dateList.length} gun tarandi, ${trackedJourneys.length} sefer izlendi, ${changeText}.${mailWarning}`
-        );
-      }
+    if (trackedJourneys.length > 0) {
+      const changeText = changes.length > 0
+        ? `${changes.length} degisiklik bulundu`
+        : "Degisiklik yok";
+      setObiletTargetSyncStatus(
+        target.id,
+        `Basarili. ${dateList.length} gun tarandi, ${trackedJourneys.length} sefer izlendi, ${changeText}.${mailWarning}`
+      );
+    }
   } catch (err) {
     console.error(`[Takip Görevi] Hata oluştu (${target.origin} -> ${target.destination}): ${err.message}`);
     setObiletTargetSyncStatus(target.id, `Hata: ${err.message}`);
