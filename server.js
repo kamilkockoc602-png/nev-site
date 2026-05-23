@@ -4701,6 +4701,33 @@ async function sendTestEmail(emailAddress) {
 async function processObiletTarget(target) {
   try {
     setObiletTargetSyncStatus(target.id, "Kontrol ediliyor...");
+    
+    // Duplicate kayitlari temizle (ayni target + journey_date + operator + departure_time)
+    // Yeni sistemde departure_stop kullanmiyoruz, eski duplicate kayitlar sorun olabilir
+    const duplicates = db.prepare(`
+      SELECT journey_date, operator, departure_time, COUNT(*) as cnt
+      FROM obilet_prices
+      WHERE target_id = ?
+      GROUP BY journey_date, operator, departure_time
+      HAVING cnt > 1
+    `).all(target.id);
+    
+    for (const dup of duplicates) {
+      // Her duplicate grup icin, en son guncellenen haric digerlerini sil
+      db.prepare(`
+        DELETE FROM obilet_prices
+        WHERE target_id = ? AND journey_date = ? AND operator = ? AND departure_time = ?
+        AND id NOT IN (
+          SELECT id FROM obilet_prices
+          WHERE target_id = ? AND journey_date = ? AND operator = ? AND departure_time = ?
+          ORDER BY last_updated DESC LIMIT 1
+        )
+      `).run(
+        target.id, dup.journey_date, dup.operator, dup.departure_time,
+        target.id, dup.journey_date, dup.operator, dup.departure_time
+      );
+    }
+    
     const dateList = buildIsoDateRange(target.date, target.end_date || target.date);
     if (!dateList.length) {
       setObiletTargetSyncStatus(target.id, "Hata: Tarih araligi gecersiz. Baslangic ve bitis tarihini kontrol edin.");
@@ -4794,8 +4821,9 @@ async function processObiletTarget(target) {
         for (const journey of dayTracked) {
           // Onceki kaydı bul: SADECE operator + departure_time ile eslestiryoruz
           // departure_stop kullanmiyoruz cunku oBilet'te ayni durak farkli yazilabiliyor
+          // Birden fazla kayit varsa en son guncellenen kaydi al
           const previous = db.prepare(
-            "SELECT * FROM obilet_prices WHERE target_id = ? AND journey_date = ? AND operator = ? AND departure_time = ?"
+            "SELECT * FROM obilet_prices WHERE target_id = ? AND journey_date = ? AND operator = ? AND departure_time = ? ORDER BY last_updated DESC LIMIT 1"
           ).get(target.id, journey.journey_date, journey.operator, journey.time);
 
           if (previous) {
