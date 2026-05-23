@@ -2002,15 +2002,23 @@ body[data-theme="dark"] .delay-badge-late {
 }
 
 .obilet-operator-option {
-  display: flex;
+  display: flex !important;
   align-items: center;
   gap: 0.35rem;
   font-size: 0.84rem;
   color: #17384d;
+  cursor: pointer;
+  user-select: none;
+}
+
+.obilet-operator-option span {
+  flex: 1;
+  line-height: 1.4;
 }
 
 .obilet-operator-option input {
   accent-color: #0f9d8f;
+  cursor: pointer;
 }
 
 .obilet-targets-list {
