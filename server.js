@@ -4703,7 +4703,7 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
       </div>
       <div style="padding:20px;background:#ffffff;">
         <p style="margin:0 0 12px 0;color:#333333;">Merhaba,</p>
-        <p style="margin:0 0 20px 0;color:#555555;">oBilet üzerinde takip ettiğiniz hat için fiyat raporu aşağıdaki gibidir.</p>
+        <p style="margin:0 0 20px 0;color:#555555;">Fiyat raporu aşağıdaki gibidir.</p>
         
         <p style="margin:0 0 10px 0;color:#333333;"><strong>Hat:</strong> ${target.origin.toUpperCase()} → ${target.destination.toUpperCase()}</p>
         <p style="margin:0 0 10px 0;color:#333333;"><strong>Tarih:</strong> ${dateLabel}</p>
