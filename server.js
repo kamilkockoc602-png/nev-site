@@ -4565,6 +4565,9 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
         <h2 style="margin:0;font-size:18px;">O bilet fiyat Raporu</h2>
       </div>
       <div style="padding:18px 20px;">
+        <p style="margin:0 0 14px 0;">Merhaba,</p>
+        <p style="margin:0 0 18px 0;">O bilette Fiyat değişiklik raporu Aşağıdaki gibidir.</p>
+        
         <p style="margin:0 0 10px 0;"><strong>Hat:</strong> ${target.origin.toUpperCase()} -> ${target.destination.toUpperCase()}</p>
         <p style="margin:0 0 10px 0;"><strong>Tarih:</strong> ${dateLabel}</p>
         <p style="margin:0 0 16px 0;"><strong>Kontrol Zamani:</strong> ${checkedAt}</p>
