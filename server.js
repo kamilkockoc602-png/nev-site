@@ -3315,6 +3315,74 @@ app.delete("/api/error-reports/:id", requireAuth, (req, res) => {
 const puppeteer = require("puppeteer");
 const nodemailer = require("nodemailer");
 
+// Browser pool (kaynak optimizasyonu için tek instance)
+let sharedBrowser = null;
+let browserLaunchInProgress = false;
+
+// Browser instance'ı al veya yeni oluştur
+async function getBrowserInstance() {
+  // Eğer mevcut browser varsa ve bağlı ise onu kullan
+  if (sharedBrowser && sharedBrowser.isConnected()) {
+    return sharedBrowser;
+  }
+  
+  // Eğer başka bir browser launch işlemi devam ediyorsa bekle
+  while (browserLaunchInProgress) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+  }
+  
+  // Hala browser yoksa yeni oluştur
+  if (!sharedBrowser || !sharedBrowser.isConnected()) {
+    browserLaunchInProgress = true;
+    try {
+      console.log("[Browser Pool] Yeni browser instance oluşturuluyor...");
+      sharedBrowser = await puppeteer.launch({
+        headless: "new",
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-blink-features=AutomationControlled",
+          "--single-process",
+          "--no-zygote",
+          "--disable-gpu",
+          "--disable-software-rasterizer",
+          "--disable-extensions",
+          "--disable-background-networking",
+          "--disable-default-apps",
+          "--disable-sync",
+          "--disable-translate",
+          "--hide-scrollbars",
+          "--metrics-recording-only",
+          "--mute-audio",
+          "--no-first-run",
+          "--disable-crash-reporter",
+          "--disable-breakpad"
+        ]
+      });
+      console.log("[Browser Pool] Browser instance oluşturuldu.");
+    } finally {
+      browserLaunchInProgress = false;
+    }
+  }
+  
+  return sharedBrowser;
+}
+
+// Browser instance'ı temizle
+async function closeBrowserInstance() {
+  if (sharedBrowser) {
+    try {
+      console.log("[Browser Pool] Browser instance kapatılıyor...");
+      await sharedBrowser.close();
+      sharedBrowser = null;
+      console.log("[Browser Pool] Browser instance kapatıldı.");
+    } catch (error) {
+      console.error("[Browser Pool] Browser kapatma hatası:", error.message);
+    }
+  }
+}
+
 function parseCsvList(raw) {
   return String(raw || "")
     .split(",")
@@ -3653,33 +3721,12 @@ async function scrapeObilet(origin, destination, dateIso) {
   const candidateUrls = [`${baseUrl}?date=${dateIso}&cb=${cacheBust}`];
   console.log(`[oBilet] Kazima baslatiliyor. Aday URL sayisi: ${candidateUrls.length}`);
   
-  const browser = await puppeteer.launch({
-    headless: "new",
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-blink-features=AutomationControlled",
-      "--single-process",
-      "--no-zygote",
-      "--disable-gpu",
-      "--disable-software-rasterizer",
-      "--disable-extensions",
-      "--disable-background-networking",
-      "--disable-default-apps",
-      "--disable-sync",
-      "--disable-translate",
-      "--hide-scrollbars",
-      "--metrics-recording-only",
-      "--mute-audio",
-      "--no-first-run",
-      "--disable-crash-reporter",
-      "--disable-breakpad"
-    ]
-  });
+  // Shared browser instance kullan
+  const browser = await getBrowserInstance();
+  let page = null;
   
   try {
-    const page = await browser.newPage();
+    page = await browser.newPage();
     // Analytics, tracking ve gereksiz istekleri blokla (Cloudflare 403 problemi icin /event de eklendi)
     const blockedRequestPattern = /(doubleclick|googleads|googletagmanager|google-analytics|analytics\.google|facebook\.com|fbcdn|criteo|useinsider|insider|clarity|hotjar|tiktok|yandex|adsystem|adservice|adnxs|taboola|outbrain|\/event$)/i;
     await page.setRequestInterception(true);
@@ -4569,7 +4616,14 @@ async function scrapeObilet(origin, destination, dateIso) {
     console.error(`[oBilet] Kazima hatasi: ${error.message}`);
     throw error;
   } finally {
-    await browser.close();
+    // Browser'ı kapatma, sadece page'i kapat (browser reuse için)
+    if (page) {
+      try {
+        await page.close();
+      } catch (closeErr) {
+        console.error(`[oBilet] Page kapatma hatasi: ${closeErr.message}`);
+      }
+    }
   }
 }
 
@@ -5048,28 +5102,42 @@ async function processObiletTarget(target) {
   }
 }
 
+// Job lock değişkeni (aynı anda birden fazla task çalışmasını engeller)
+let obiletTaskRunning = false;
+
 // oBilet Fiyat Senkronizasyonu Arka Plan Görevi (Tüm Hatlar)
 async function refreshObiletPricesTask() {
-  console.log(`[Takip Görevi] oBilet fiyat kontrolü başlatılıyor: ${nowStamp()}`);
-  
-  const targets = db.prepare("SELECT * FROM obilet_targets WHERE is_active = 1").all();
-  if (targets.length === 0) {
-    console.log("[Takip Görevi] Aktif takip edilecek hat bulunamadi.");
+  // Eğer başka bir task çalışıyorsa atla
+  if (obiletTaskRunning) {
+    console.log(`[Takip Görevi] Zaten bir task çalışıyor, bu çalıştırma atlanıyor.`);
     return;
   }
   
-  for (let i = 0; i < targets.length; i++) {
-    const target = targets[i];
-    await processObiletTarget(target);
+  obiletTaskRunning = true;
+  try {
+    console.log(`[Takip Görevi] oBilet fiyat kontrolü başlatılıyor: ${nowStamp()}`);
     
-    // Cloudflare bot korumasını önlemek için hatlar arası 8 saniye bekle (son hat hariç)
-    if (i < targets.length - 1) {
-      console.log(`[Takip Görevi] Cloudflare koruması için 8 saniye bekleniyor...`);
-      await new Promise(resolve => setTimeout(resolve, 8000));
+    const targets = db.prepare("SELECT * FROM obilet_targets WHERE is_active = 1").all();
+    if (targets.length === 0) {
+      console.log("[Takip Görevi] Aktif takip edilecek hat bulunamadi.");
+      return;
     }
+    
+    for (let i = 0; i < targets.length; i++) {
+      const target = targets[i];
+      await processObiletTarget(target);
+      
+      // Cloudflare bot korumasını önlemek için hatlar arası 8 saniye bekle (son hat hariç)
+      if (i < targets.length - 1) {
+        console.log(`[Takip Görevi] Cloudflare koruması için 8 saniye bekleniyor...`);
+        await new Promise(resolve => setTimeout(resolve, 8000));
+      }
+    }
+    
+    console.log(`[Takip Görevi] Kontroller tamamlandı: ${nowStamp()}`);
+  } finally {
+    obiletTaskRunning = false;
   }
-  
-  console.log(`[Takip Görevi] Kontroller tamamlandı: ${nowStamp()}`);
 }
 
 // API: Takip Listesini Getir
@@ -5316,6 +5384,19 @@ setTimeout(() => {
 setInterval(() => {
   refreshObiletPricesTask().catch(err => console.error("[Otomatik Kontrol] Zamanlayici hatasi:", err.message));
 }, OBILET_CHECK_INTERVAL_MS);
+
+// Graceful shutdown: Browser instance'ı temizle
+process.on("SIGTERM", async () => {
+  console.log("[Process] SIGTERM sinyali alındı, temizlik yapılıyor...");
+  await closeBrowserInstance();
+  process.exit(0);
+});
+
+process.on("SIGINT", async () => {
+  console.log("[Process] SIGINT sinyali alındı, temizlik yapılıyor...");
+  await closeBrowserInstance();
+  process.exit(0);
+});
 
 app.listen(PORT, () => {
   console.log(`Sunucu calisiyor: http://localhost:${PORT}`);
