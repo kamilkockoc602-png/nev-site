@@ -4276,8 +4276,9 @@ async function scrapeObilet(origin, destination, dateIso) {
               await new Promise((resolve) => setTimeout(resolve, 1200));
 
               // Detay sayfasindaki tum firma+saat+fiyat kombinasyonlarini al
-              const detailJourneys = await page.evaluate(() => {
+              const detailJourneys = await page.evaluate((debugMode) => {
                 const results = [];
+                const debugInfo = [];
                 const parsePrice = (text) => {
                   const normalized = String(text || "").replace(/\./g, "").replace(",", ".");
                   const number = parseFloat(normalized.replace(/[^0-9.]/g, ""));
@@ -4287,35 +4288,84 @@ async function scrapeObilet(origin, destination, dateIso) {
                 // Sefer kartlarini bul (card, journey, trip classli divler veya li'ler)
                 const cards = document.querySelectorAll('div[class*="card"], div[class*="journey"], li[class*="journey"], div[class*="trip"]');
                 
-                cards.forEach((card) => {
+                if (debugMode) {
+                  debugInfo.push(`Total cards found: ${cards.length}`);
+                }
+                
+                cards.forEach((card, cardIndex) => {
                   // Fiyat
                   const priceEl = card.querySelector('[itemprop="price"], .price, .amount');
-                  if (!priceEl) return;
+                  if (!priceEl) {
+                    if (debugMode) debugInfo.push(`Card ${cardIndex}: No price element`);
+                    return;
+                  }
                   const price = parsePrice(priceEl.textContent);
-                  if (price < 300) return;
+                  if (price < 300) {
+                    if (debugMode) debugInfo.push(`Card ${cardIndex}: Price too low (${price})`);
+                    return;
+                  }
 
                   // Firma ismi (img alt attribute'u)
                   const firmImg = card.querySelector('img[alt]');
                   const operator = firmImg?.getAttribute('alt') || '';
-                  if (!operator || operator.length < 3) return;
+                  if (!operator || operator.length < 3) {
+                    if (debugMode) debugInfo.push(`Card ${cardIndex}: No operator (price: ${price})`);
+                    return;
+                  }
 
-                  // Saat (card text'inden)
-                  const cardText = card.textContent || '';
-                  const timeMatch = cardText.match(/\b([01]\d|2[0-3]):[0-5]\d\b/);
-                  const time = timeMatch ? timeMatch[0] : '';
-                  if (!time) return;
+                  // Saat (kalkış saati için özel selector'lar dene)
+                  let time = '';
+                  let timeSource = '';
+                  const timeSelectors = [
+                    '[itemprop="departureTime"]',
+                    '.departure-time',
+                    '.time',
+                    '[class*="departure"][class*="time"]',
+                    '[class*="time"]:first-of-type'
+                  ];
+                  
+                  for (const selector of timeSelectors) {
+                    const timeEl = card.querySelector(selector);
+                    if (timeEl) {
+                      const timeText = timeEl.textContent || '';
+                      const match = timeText.match(/\b([01]\d|2[0-3]):[0-5]\d\b/);
+                      if (match) {
+                        time = match[0];
+                        timeSource = `selector: ${selector}`;
+                        break;
+                      }
+                    }
+                  }
+                  
+                  // Selector'lardan bulunamadıysa, card içindeki SADECE ilk göze çarpan saati al
+                  // Ama önce firma isminden sonraki kısmı al (firma adında saat olabilir)
+                  if (!time) {
+                    const cardText = card.textContent || '';
+                    const operatorIndex = cardText.indexOf(operator);
+                    const textAfterOperator = operatorIndex >= 0 ? cardText.substring(operatorIndex + operator.length) : cardText;
+                    const timeMatch = textAfterOperator.match(/\b([01]\d|2[0-3]):[0-5]\d\b/);
+                    time = timeMatch ? timeMatch[0] : '';
+                    timeSource = 'text after operator';
+                  }
+                  
+                  if (!time) {
+                    if (debugMode) debugInfo.push(`Card ${cardIndex}: ${operator} - No time found (price: ${price})`);
+                    return;
+                  }
+                  
+                  if (debugMode) {
+                    debugInfo.push(`Card ${cardIndex}: ✓ ${operator} ${time} ${price}TL (time from: ${timeSource})`);
+                  }
 
                   results.push({ operator, time, price });
                 });
 
-                return results;
-              });
+                return { results, debugInfo };
+              }, DEBUG_OBILET_PRICE);
 
               if (DEBUG_OBILET_PRICE) {
-                console.log(`[oBilet][DEBUG] Detay sayfasinda ${detailJourneys.length} sefer bulundu`);
-                detailJourneys.forEach((dj) => {
-                  console.log(`[oBilet][DEBUG]   Detay sefer: ${dj.operator} ${dj.time} ${dj.price} TL`);
-                });
+                console.log(`[oBilet][DEBUG] Detay sayfasinda ${detailJourneys.results.length} sefer bulundu`);
+                detailJourneys.debugInfo.forEach(info => console.log(`[oBilet][DEBUG]   ${info}`));
               }
 
               // Detay sayfasindaki fiyatlarla eslestir
@@ -4324,7 +4374,7 @@ async function scrapeObilet(origin, destination, dateIso) {
                   console.log(`[oBilet][DEBUG] Eslestirme araniyor: ${journey.operator} ${journey.time} (${journey.price} TL)`);
                 }
 
-                const detailMatch = detailJourneys.find((dj) => {
+                const detailMatch = detailJourneys.results.find((dj) => {
                   const operatorMatch = toObiletOperatorMatchKey(dj.operator) === toObiletOperatorMatchKey(journey.operator);
                   const timeMatch = String(dj.time || "").trim() === String(journey.time || "").trim();
                   
