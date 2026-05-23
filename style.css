@@ -2014,6 +2014,7 @@ body[data-theme="dark"] .delay-badge-late {
 .obilet-operator-option span {
   flex: 1;
   line-height: 1.4;
+  color: #17384d;
 }
 
 .obilet-operator-option input {
@@ -2157,7 +2158,7 @@ body[data-theme="dark"] .obilet-row {
 body[data-theme="dark"] .obilet-operator-chip,
 body[data-theme="dark"] .obilet-operator-option,
 body[data-theme="dark"] .obilet-operator-option span {
-  color: #d8e9f8;
+  color: #d8e9f8 !important;
 }
 
 .obilet-test-grid {
