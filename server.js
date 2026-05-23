@@ -3311,10 +3311,7 @@ app.delete("/api/error-reports/:id", requireAuth, (req, res) => {
 // oBiLET FIYAT TAKIP VE E-POSTA ENTEGRASYONU
 // ==========================================
 
-const puppeteer = require("puppeteer-extra");
-const StealthPlugin = require("puppeteer-extra-plugin-stealth");
-puppeteer.use(StealthPlugin());
-
+const puppeteer = require("puppeteer");
 const nodemailer = require("nodemailer");
 
 function parseCsvList(raw) {
@@ -3700,14 +3697,53 @@ async function scrapeObilet(origin, destination, dateIso) {
     await page.setDefaultNavigationTimeout(90000);
     await page.setDefaultTimeout(90000);
     
+    // ADVANCED STEALTH: Bot detection'ı atlatmak için
     await page.evaluateOnNewDocument(() => {
+      // webdriver bayrağını gizle
       Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+      delete navigator.__proto__.webdriver;
+      
+      // Dil ayarları
       Object.defineProperty(navigator, "languages", { get: () => ["tr-TR", "tr", "en-US", "en"] });
+      Object.defineProperty(navigator, "language", { get: () => "tr-TR" });
+      
+      // Platform
       Object.defineProperty(navigator, "platform", { get: () => "Win32" });
+      
+      // Hardware
       Object.defineProperty(navigator, "deviceMemory", { get: () => 8 });
       Object.defineProperty(navigator, "hardwareConcurrency", { get: () => 8 });
-      window.chrome = window.chrome || { runtime: {} };
+      
+      // Chrome object (headless detection)
+      window.chrome = {
+        runtime: {},
+        loadTimes: function() {},
+        csi: function() {},
+        app: {}
+      };
+      
+      // Permissions API override
+      const originalQuery = window.navigator.permissions.query;
+      window.navigator.permissions.query = (parameters) => (
+        parameters.name === 'notifications' ?
+          Promise.resolve({ state: Notification.permission }) :
+          originalQuery(parameters)
+      );
+      
+      // Plugin detection
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [1, 2, 3, 4, 5]
+      });
+      
+      // WebGL vendor override
+      const getParameter = WebGLRenderingContext.prototype.getParameter;
+      WebGLRenderingContext.prototype.getParameter = function(parameter) {
+        if (parameter === 37445) return 'Intel Inc.';
+        if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+        return getParameter(parameter);
+      };
     });
+    
     await page.setCacheEnabled(false);
     await page.setExtraHTTPHeaders({
       "Cache-Control": "no-cache",
