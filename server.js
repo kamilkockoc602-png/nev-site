@@ -354,6 +354,7 @@ const MENUS = [
   "reporting",
   "control",
   "ocr",
+  "obilet",
   "permissions",
   "logs",
 ];
