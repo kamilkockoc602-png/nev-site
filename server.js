@@ -4704,28 +4704,33 @@ async function processObiletTarget(target) {
     
     // Duplicate kayitlari temizle (ayni target + journey_date + operator + departure_time)
     // Yeni sistemde departure_stop kullanmiyoruz, eski duplicate kayitlar sorun olabilir
-    const duplicates = db.prepare(`
-      SELECT journey_date, operator, departure_time, COUNT(*) as cnt
-      FROM obilet_prices
-      WHERE target_id = ?
-      GROUP BY journey_date, operator, departure_time
-      HAVING cnt > 1
-    `).all(target.id);
-    
-    for (const dup of duplicates) {
-      // Her duplicate grup icin, en son guncellenen haric digerlerini sil
-      db.prepare(`
-        DELETE FROM obilet_prices
-        WHERE target_id = ? AND journey_date = ? AND operator = ? AND departure_time = ?
-        AND id NOT IN (
+    try {
+      const duplicates = db.prepare(`
+        SELECT journey_date, operator, departure_time
+        FROM obilet_prices
+        WHERE target_id = ?
+        GROUP BY journey_date, operator, departure_time
+        HAVING COUNT(*) > 1
+      `).all(target.id);
+      
+      for (const dup of duplicates) {
+        // Her duplicate grup icin, en son guncellenen ID'yi bul
+        const keepId = db.prepare(`
           SELECT id FROM obilet_prices
           WHERE target_id = ? AND journey_date = ? AND operator = ? AND departure_time = ?
           ORDER BY last_updated DESC LIMIT 1
-        )
-      `).run(
-        target.id, dup.journey_date, dup.operator, dup.departure_time,
-        target.id, dup.journey_date, dup.operator, dup.departure_time
-      );
+        `).get(target.id, dup.journey_date, dup.operator, dup.departure_time);
+        
+        if (keepId) {
+          // Digerlerini sil
+          db.prepare(`
+            DELETE FROM obilet_prices
+            WHERE target_id = ? AND journey_date = ? AND operator = ? AND departure_time = ? AND id != ?
+          `).run(target.id, dup.journey_date, dup.operator, dup.departure_time, keepId.id);
+        }
+      }
+    } catch (cleanErr) {
+      console.error(`[oBilet] Duplicate temizleme hatasi: ${cleanErr.message}`);
     }
     
     const dateList = buildIsoDateRange(target.date, target.end_date || target.date);
