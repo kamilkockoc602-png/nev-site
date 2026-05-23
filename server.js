@@ -33,8 +33,8 @@ const OBILET_EMAIL_INTERVAL_HOURS = Number.parseInt(
   process.env.OBILET_EMAIL_INTERVAL_HOURS || "1",
   10
 );
-const OBILET_SUBJECT_CHANGE = String(process.env.OBILET_SUBJECT_CHANGE || "O bilet fiyat Raporu").trim();
-const OBILET_SUBJECT_NO_CHANGE = String(process.env.OBILET_SUBJECT_NO_CHANGE || "O bilet fiyat Raporu").trim();
+const OBILET_SUBJECT_CHANGE = String(process.env.OBILET_SUBJECT_CHANGE || "oBilet Fiyat Raporu").trim();
+const OBILET_SUBJECT_NO_CHANGE = String(process.env.OBILET_SUBJECT_NO_CHANGE || "oBilet Fiyat Raporu").trim();
 const OBILET_SUBJECT_PRICE_ALERT = String(process.env.OBILET_SUBJECT_PRICE_ALERT || "oBilet Fiyat Degisikligi").trim();
 const OBILET_SUBJECT_TEST = String(process.env.OBILET_SUBJECT_TEST || "oBilet Test E-postasi").trim();
 const EMAIL_SIGNATURE_HTML = String(process.env.EMAIL_SIGNATURE_HTML || "").trim();
@@ -4537,11 +4537,11 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
   const currentPriceRows = trackedJourneys
     .map(
       (item) => `
-      <tr>
-        <td style="padding:8px;border-bottom:1px solid #ececec;">${toDotDate(item.journey_date) || "-"}</td>
-        <td style="padding:8px;border-bottom:1px solid #ececec;">${item.operator}</td>
-        <td style="padding:8px;border-bottom:1px solid #ececec;text-align:center;">${item.time}</td>
-        <td style="padding:8px;border-bottom:1px solid #ececec;text-align:right;"><strong>${item.price} TL</strong></td>
+      <tr style="background:#ffffff;">
+        <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${toDotDate(item.journey_date) || "-"}</td>
+        <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${item.operator}</td>
+        <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:center;color:#333333;">${item.time}</td>
+        <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#1a73e8;font-weight:600;font-size:14px;">${item.price} TL</td>
       </tr>`
     )
     .join("");
@@ -4549,58 +4549,58 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
   const changesRows = changes
     .map(
       (c) => `
-      <tr style="background:#fff3f3;">
-        <td style="padding:8px;border-bottom:1px solid #ececec;">${toDotDate(c.journey_date) || "-"}</td>
-        <td style="padding:8px;border-bottom:1px solid #ececec;">${c.operator}</td>
-        <td style="padding:8px;border-bottom:1px solid #ececec;text-align:center;">${c.departure_time}</td>
-        <td style="padding:8px;border-bottom:1px solid #ececec;text-align:right;color:#7f8c8d;">${c.oldPrice} TL</td>
-        <td style="padding:8px;border-bottom:1px solid #ececec;text-align:right;color:#c0392b;font-weight:bold;">${c.newPrice} TL</td>
+      <tr style="background:#fff8f8;">
+        <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${toDotDate(c.journey_date) || "-"}</td>
+        <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${c.operator}</td>
+        <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:center;color:#333333;">${c.departure_time}</td>
+        <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#999999;text-decoration:line-through;">${c.oldPrice} TL</td>
+        <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#d32f2f;font-weight:700;font-size:14px;">${c.newPrice} TL</td>
       </tr>`
     )
     .join("");
 
   const html = `
-    <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;border:1px solid #e6e6e6;border-radius:10px;overflow:hidden;">
-      <div style="padding:16px 20px;background:#12354a;color:#fff;">
-        <h2 style="margin:0;font-size:18px;">O bilet fiyat Raporu</h2>
+    <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;background:#ffffff;">
+      <div style="padding:20px;background:#1a73e8;color:#ffffff;text-align:center;">
+        <h2 style="margin:0;font-size:20px;font-weight:600;">oBilet Fiyat Raporu</h2>
       </div>
-      <div style="padding:18px 20px;">
-        <p style="margin:0 0 14px 0;">Merhaba,</p>
-        <p style="margin:0 0 18px 0;">O bilette Fiyat değişiklik raporu Aşağıdaki gibidir.</p>
+      <div style="padding:20px;background:#ffffff;">
+        <p style="margin:0 0 12px 0;color:#333333;">Merhaba,</p>
+        <p style="margin:0 0 20px 0;color:#555555;">oBilet üzerinde takip ettiğiniz hat için fiyat raporu aşağıdaki gibidir.</p>
         
-        <p style="margin:0 0 10px 0;"><strong>Hat:</strong> ${target.origin.toUpperCase()} -> ${target.destination.toUpperCase()}</p>
-        <p style="margin:0 0 10px 0;"><strong>Tarih:</strong> ${dateLabel}</p>
-        <p style="margin:0 0 16px 0;"><strong>Kontrol Zamani:</strong> ${checkedAt}</p>
+        <p style="margin:0 0 10px 0;color:#333333;"><strong>Hat:</strong> ${target.origin.toUpperCase()} → ${target.destination.toUpperCase()}</p>
+        <p style="margin:0 0 10px 0;color:#333333;"><strong>Tarih:</strong> ${dateLabel}</p>
+        <p style="margin:0 0 16px 0;color:#333333;"><strong>Kontrol Zamanı:</strong> ${checkedAt}</p>
 
-        <p style="margin:0 0 8px 0;"><strong>Durum:</strong> ${hasChanges ? "Degisiklik var" : "Degisiklik yok"}</p>
+        <p style="margin:0 0 12px 0;color:#333333;"><strong>Durum:</strong> <span style="color:${hasChanges ? '#c0392b' : '#27ae60'};font-weight:600;">${hasChanges ? "Değişiklik var" : "Değişiklik yok"}</span></p>
 
         ${hasChanges ? `
-          <h3 style="margin:14px 0 8px 0;font-size:15px;">Degisen Fiyatlar</h3>
-          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <h3 style="margin:16px 0 10px 0;font-size:16px;color:#333333;font-weight:600;">Değişen Fiyatlar</h3>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e0e0e0;border-radius:4px;">
             <thead>
-              <tr style="background:#f5f5f5;">
-                <th style="padding:8px;text-align:left;">Tarih</th>
-                <th style="padding:8px;text-align:left;">Firma</th>
-                <th style="padding:8px;text-align:center;">Saat</th>
-                <th style="padding:8px;text-align:right;">Eski</th>
-                <th style="padding:8px;text-align:right;">Yeni</th>
+              <tr style="background:#f8f9fa;">
+                <th style="padding:10px;text-align:left;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Tarih</th>
+                <th style="padding:10px;text-align:left;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Firma</th>
+                <th style="padding:10px;text-align:center;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Saat</th>
+                <th style="padding:10px;text-align:right;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Eski</th>
+                <th style="padding:10px;text-align:right;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Yeni</th>
               </tr>
             </thead>
             <tbody>${changesRows}</tbody>
           </table>
-        ` : `<p style="margin:8px 0 12px 0;color:#2f4f5f;">Takip edilen firmalarda bu turda fiyat degisikligi algilanmadi.</p>`}
+        ` : `<p style="margin:12px 0;padding:12px;background:#f0f7ff;color:#1565c0;border-left:4px solid #1a73e8;border-radius:4px;">Takip edilen firmalarda bu turda fiyat değişikliği algılanmadı.</p>`}
 
-        <h3 style="margin:16px 0 8px 0;font-size:15px;">Anlik Fiyatlar</h3>
-        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+        <h3 style="margin:20px 0 10px 0;font-size:16px;color:#333333;font-weight:600;">Anlık Fiyatlar</h3>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e0e0e0;border-radius:4px;">
           <thead>
-            <tr style="background:#f5f5f5;">
-              <th style="padding:8px;text-align:left;">Tarih</th>
-              <th style="padding:8px;text-align:left;">Firma</th>
-              <th style="padding:8px;text-align:center;">Saat</th>
-              <th style="padding:8px;text-align:right;">Fiyat</th>
+            <tr style="background:#f8f9fa;">
+              <th style="padding:10px;text-align:left;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Tarih</th>
+              <th style="padding:10px;text-align:left;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Firma</th>
+              <th style="padding:10px;text-align:center;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Saat</th>
+              <th style="padding:10px;text-align:right;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Fiyat</th>
             </tr>
           </thead>
-          <tbody>${currentPriceRows || '<tr><td colspan="4" style="padding:8px;">Takip edilen firmalar icin sefer verisi bulunamadi.</td></tr>'}</tbody>
+          <tbody>${currentPriceRows || '<tr><td colspan="4" style="padding:12px;text-align:center;color:#999999;">Takip edilen firmalar için sefer verisi bulunamadı.</td></tr>'}</tbody>
         </table>
         ${renderEmailSignature()}
       </div>
