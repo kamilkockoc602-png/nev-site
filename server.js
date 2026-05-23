@@ -4888,8 +4888,15 @@ async function refreshObiletPricesTask() {
     return;
   }
   
-  for (const target of targets) {
+  for (let i = 0; i < targets.length; i++) {
+    const target = targets[i];
     await processObiletTarget(target);
+    
+    // Cloudflare bot korumasını önlemek için hatlar arası 8 saniye bekle (son hat hariç)
+    if (i < targets.length - 1) {
+      console.log(`[Takip Görevi] Cloudflare koruması için 8 saniye bekleniyor...`);
+      await new Promise(resolve => setTimeout(resolve, 8000));
+    }
   }
   
   console.log(`[Takip Görevi] Kontroller tamamlandı: ${nowStamp()}`);
@@ -5043,13 +5050,13 @@ app.post("/api/obilet/targets/:id/refresh", requireAuth, async (req, res) => {
       return res.status(404).json({ message: "Hat bulunamadi." });
     }
 
-    // 5 saniye delay ekle (Cloudflare bot korumasını önlemek için)
-    const delayMs = 5000;
+    // 8 saniye delay ekle (Cloudflare bot korumasını önlemek için)
+    const delayMs = 8000;
     
     // Arka planda işle ve hemen yanıt dön
     (async () => {
       try {
-        console.log(`[Manuel Güncelleme] ${target.origin} -> ${target.destination} için 5 saniye bekleniyor...`);
+        console.log(`[Manuel Güncelleme] ${target.origin} -> ${target.destination} için 8 saniye bekleniyor...`);
         await new Promise(resolve => setTimeout(resolve, delayMs));
         await processObiletTarget(target);
         console.log(`[Manuel Güncelleme] ${target.origin} -> ${target.destination} tamamlandı.`);
@@ -5060,7 +5067,7 @@ app.post("/api/obilet/targets/:id/refresh", requireAuth, async (req, res) => {
 
     res.json({ 
       ok: true, 
-      message: `${target.origin} - ${target.destination} hattı 5 saniye sonra güncellenecek.` 
+      message: `${target.origin} - ${target.destination} hattı 8 saniye sonra güncellenecek.` 
     });
   } catch (error) {
     res.status(500).json({ message: error.message || "Manuel güncelleme tetiklenemedi." });

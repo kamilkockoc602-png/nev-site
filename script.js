@@ -3647,10 +3647,10 @@ function renderObiletTargetCards(listEl) {
         // Durum mesajını göster
         alert(result.message || `${target.origin} - ${target.destination} güncelleniyor...`);
         
-        // 6 saniye sonra listeyi yenile (5 saniye delay + işlem süresi)
+        // 9 saniye sonra listeyi yenile (8 saniye delay + işlem süresi)
         setTimeout(async () => {
           await renderObiletTargets();
-        }, 6000);
+        }, 9000);
       } catch (err) {
         btn.textContent = "❌";
         setTimeout(() => {
