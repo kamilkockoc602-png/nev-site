@@ -3542,7 +3542,7 @@ async function initObiletPanel() {
   setupObiletActionButtons();
 }
 
-// CSV formatına çevir (Excel'de açılabilir)
+// CSV formatına çevir (Excel'de açılabilir - Türkiye için noktalı virgül delimiter)
 function generateCSV(prices, target) {
   const headers = ["Tarih", "Firma", "Kalkış Saati", "Kalkış Durağı", "Varış Durağı", "Fiyat (TL)", "Son Güncelleme"];
   const rows = prices.map(p => {
@@ -3554,12 +3554,13 @@ function generateCSV(prices, target) {
     const price = p.price || "-";
     const lastUpdated = p.last_updated ? new Date(p.last_updated).toLocaleString("tr-TR") : "-";
     
+    // Türkiye'de Excel noktalı virgül (;) delimiter kullanır
     return [journeyDate, operator, departureTime, departureStop, arrivalStop, price, lastUpdated]
-      .map(field => `"${String(field).replace(/"/g, '""')}"`) // Escape double quotes
-      .join(",");
+      .map(field => String(field).replace(/;/g, ",")) // Noktalı virgülleri virgüle çevir
+      .join(";");
   });
   
-  return [headers.join(","), ...rows].join("\n");
+  return [headers.join(";"), ...rows].join("\n");
 }
 
 async function renderObiletTargets() {
