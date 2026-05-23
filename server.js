@@ -3658,7 +3658,22 @@ async function scrapeObilet(origin, destination, dateIso) {
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
-      "--disable-blink-features=AutomationControlled"
+      "--disable-blink-features=AutomationControlled",
+      "--single-process",
+      "--no-zygote",
+      "--disable-gpu",
+      "--disable-software-rasterizer",
+      "--disable-extensions",
+      "--disable-background-networking",
+      "--disable-default-apps",
+      "--disable-sync",
+      "--disable-translate",
+      "--hide-scrollbars",
+      "--metrics-recording-only",
+      "--mute-audio",
+      "--no-first-run",
+      "--disable-crash-reporter",
+      "--disable-breakpad"
     ]
   });
   
