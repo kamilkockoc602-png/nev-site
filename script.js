@@ -3588,6 +3588,7 @@ function renderObiletTargetCards(listEl) {
             </div>
           </div>
           <div class="obilet-card-actions">
+            <button class="btn btn-sm btn-ghost obilet-refresh-btn" data-id="${t.id}" title="Güncelle">🔄</button>
             <button class="btn btn-sm btn-ghost obilet-expand-btn" data-id="${t.id}" title="Fiyatları Göster">📊 Fiyatlar</button>
             <button class="btn btn-sm btn-danger obilet-delete-btn" data-id="${t.id}" title="Sil">🗑</button>
           </div>
@@ -3619,6 +3620,44 @@ function renderObiletTargetCards(listEl) {
         await renderObiletTargets();
       } catch (err) {
         alert("Silme işlemi başarısız: " + err.message);
+      }
+    });
+  });
+
+  listEl.querySelectorAll(".obilet-refresh-btn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      const target = obiletState.targets.find(t => t.id == id);
+      if (!target) return;
+
+      const originalText = btn.textContent;
+      try {
+        btn.disabled = true;
+        btn.textContent = "⏳";
+        const result = await apiFetch(`/api/obilet/targets/${id}/refresh`, { method: "POST" });
+        btn.textContent = "✅";
+        
+        // 2 saniye sonra simgeyi geri döndür
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.disabled = false;
+        }, 2000);
+        
+        // Durum mesajını göster
+        alert(result.message || `${target.origin} - ${target.destination} güncelleniyor...`);
+        
+        // 6 saniye sonra listeyi yenile (5 saniye delay + işlem süresi)
+        setTimeout(async () => {
+          await renderObiletTargets();
+        }, 6000);
+      } catch (err) {
+        btn.textContent = "❌";
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.disabled = false;
+        }, 2000);
+        alert("Güncelleme hatası: " + err.message);
       }
     });
   });
@@ -3858,27 +3897,6 @@ function setupObiletForm() {
 }
 
 function setupObiletActionButtons() {
-  const refreshBtn = document.getElementById("obiletRefreshBtn");
-  if (refreshBtn) {
-    const newBtn = refreshBtn.cloneNode(true);
-    refreshBtn.parentNode.replaceChild(newBtn, refreshBtn);
-    newBtn.addEventListener("click", async () => {
-      const statusEl = document.getElementById("obiletActionStatus");
-      try {
-        newBtn.disabled = true;
-        newBtn.textContent = "⏳ Güncelleniyor...";
-        if (statusEl) { statusEl.style.color = "var(--muted)"; statusEl.textContent = "Fiyat güncellemesi arka planda başlatıldı. 1-2 dakika sürebilir."; }
-        await apiFetch("/api/obilet/refresh", { method: "POST" });
-        if (statusEl) statusEl.textContent = "✅ Güncelleme başlatıldı. Tamamlanınca panelde görünecek.";
-      } catch (err) {
-        if (statusEl) { statusEl.style.color = "#d64545"; statusEl.textContent = "Hata: " + err.message; }
-      } finally {
-        newBtn.disabled = false;
-        newBtn.textContent = "🔄 Şimdi Güncelle";
-      }
-    });
-  }
-
   const testEmailBtn = document.getElementById("obiletTestEmailBtn");
   if (testEmailBtn) {
     const newBtn2 = testEmailBtn.cloneNode(true);

@@ -4647,19 +4647,10 @@ async function sendTestEmail(emailAddress) {
   return result.info;
 }
 
-// oBilet Fiyat Senkronizasyonu Arka Plan Görevi
-async function refreshObiletPricesTask() {
-  console.log(`[Takip Görevi] oBilet fiyat kontrolü başlatılıyor: ${nowStamp()}`);
-  
-  const targets = db.prepare("SELECT * FROM obilet_targets WHERE is_active = 1").all();
-  if (targets.length === 0) {
-    console.log("[Takip Görevi] Aktif takip edilecek hat bulunamadi.");
-    return;
-  }
-  
-  for (const target of targets) {
-    try {
-      setObiletTargetSyncStatus(target.id, "Kontrol ediliyor...");
+// Tek oBilet Target İşleme Fonksiyonu (Ortak)
+async function processObiletTarget(target) {
+  try {
+    setObiletTargetSyncStatus(target.id, "Kontrol ediliyor...");
       const dateList = buildIsoDateRange(target.date, target.end_date || target.date);
       if (!dateList.length) {
         setObiletTargetSyncStatus(target.id, "Hata: Tarih araligi gecersiz. Baslangic ve bitis tarihini kontrol edin.");
@@ -4881,10 +4872,24 @@ async function refreshObiletPricesTask() {
           `Basarili. ${dateList.length} gun tarandi, ${trackedJourneys.length} sefer izlendi, ${changeText}.${mailWarning}`
         );
       }
-    } catch (err) {
-      console.error(`[Takip Görevi] Hata oluştu (${target.origin} -> ${target.destination}): ${err.message}`);
-      setObiletTargetSyncStatus(target.id, `Hata: ${err.message}`);
-    }
+  } catch (err) {
+    console.error(`[Takip Görevi] Hata oluştu (${target.origin} -> ${target.destination}): ${err.message}`);
+    setObiletTargetSyncStatus(target.id, `Hata: ${err.message}`);
+  }
+}
+
+// oBilet Fiyat Senkronizasyonu Arka Plan Görevi (Tüm Hatlar)
+async function refreshObiletPricesTask() {
+  console.log(`[Takip Görevi] oBilet fiyat kontrolü başlatılıyor: ${nowStamp()}`);
+  
+  const targets = db.prepare("SELECT * FROM obilet_targets WHERE is_active = 1").all();
+  if (targets.length === 0) {
+    console.log("[Takip Görevi] Aktif takip edilecek hat bulunamadi.");
+    return;
+  }
+  
+  for (const target of targets) {
+    await processObiletTarget(target);
   }
   
   console.log(`[Takip Görevi] Kontroller tamamlandı: ${nowStamp()}`);
@@ -5022,6 +5027,43 @@ app.post("/api/obilet/refresh", requireAuth, async (req, res) => {
     res.json({ ok: true, message: "Yenileme islemi arka planda baslatildi. Tamamlanmasi 1-2 dakika surebilir." });
   } catch (error) {
     res.status(500).json({ message: error.message || "Manuel yenileme tetiklenemedi." });
+  }
+});
+
+// API: Tek Hat Manuel Güncelleme
+app.post("/api/obilet/targets/:id/refresh", requireAuth, async (req, res) => {
+  try {
+    const targetId = parseInt(req.params.id, 10);
+    if (!targetId) {
+      return res.status(400).json({ message: "Gecersiz hat ID." });
+    }
+
+    const target = db.prepare("SELECT * FROM obilet_targets WHERE id = ?").get(targetId);
+    if (!target) {
+      return res.status(404).json({ message: "Hat bulunamadi." });
+    }
+
+    // 5 saniye delay ekle (Cloudflare bot korumasını önlemek için)
+    const delayMs = 5000;
+    
+    // Arka planda işle ve hemen yanıt dön
+    (async () => {
+      try {
+        console.log(`[Manuel Güncelleme] ${target.origin} -> ${target.destination} için 5 saniye bekleniyor...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        await processObiletTarget(target);
+        console.log(`[Manuel Güncelleme] ${target.origin} -> ${target.destination} tamamlandı.`);
+      } catch (error) {
+        console.error(`[Manuel Güncelleme] Hata: ${error.message}`);
+      }
+    })();
+
+    res.json({ 
+      ok: true, 
+      message: `${target.origin} - ${target.destination} hattı 5 saniye sonra güncellenecek.` 
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Manuel güncelleme tetiklenemedi." });
   }
 });
 
