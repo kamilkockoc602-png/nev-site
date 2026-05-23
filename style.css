@@ -2155,7 +2155,8 @@ body[data-theme="dark"] .obilet-row {
 }
 
 body[data-theme="dark"] .obilet-operator-chip,
-body[data-theme="dark"] .obilet-operator-option {
+body[data-theme="dark"] .obilet-operator-option,
+body[data-theme="dark"] .obilet-operator-option span {
   color: #d8e9f8;
 }
 
