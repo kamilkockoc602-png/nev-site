@@ -5243,6 +5243,40 @@ app.post("/api/obilet/targets/:id/refresh", requireAuth, async (req, res) => {
   }
 });
 
+// API: Hat için tüm fiyat geçmişini getir (Excel indirme için)
+app.get("/api/obilet/targets/:id/prices", requireAuth, (req, res) => {
+  try {
+    const targetId = parseInt(req.params.id, 10);
+    if (!targetId) {
+      return res.status(400).json({ message: "Geçersiz hat ID." });
+    }
+
+    const target = db.prepare("SELECT * FROM obilet_targets WHERE id = ?").get(targetId);
+    if (!target) {
+      return res.status(404).json({ message: "Hat bulunamadı." });
+    }
+
+    // Bu hat için tüm fiyatları çek (tarih, firma, saat, fiyat)
+    const prices = db.prepare(`
+      SELECT 
+        journey_date,
+        operator,
+        departure_time,
+        departure_stop,
+        arrival_stop,
+        price,
+        last_updated
+      FROM obilet_prices
+      WHERE target_id = ?
+      ORDER BY journey_date ASC, departure_time ASC, operator ASC
+    `).all(targetId);
+
+    res.json(prices);
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Fiyat geçmişi alınamadı." });
+  }
+});
+
 // API: E-posta Bağlantı Testi
 app.post("/api/obilet/test-email", requireAuth, async (req, res) => {
   const email = String(req.body.email || "").trim();

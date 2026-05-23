@@ -3542,6 +3542,26 @@ async function initObiletPanel() {
   setupObiletActionButtons();
 }
 
+// CSV formatına çevir (Excel'de açılabilir)
+function generateCSV(prices, target) {
+  const headers = ["Tarih", "Firma", "Kalkış Saati", "Kalkış Durağı", "Varış Durağı", "Fiyat (TL)", "Son Güncelleme"];
+  const rows = prices.map(p => {
+    const journeyDate = p.journey_date || "-";
+    const operator = p.operator || "-";
+    const departureTime = p.departure_time || "-";
+    const departureStop = p.departure_stop || "-";
+    const arrivalStop = p.arrival_stop || "-";
+    const price = p.price || "-";
+    const lastUpdated = p.last_updated ? new Date(p.last_updated).toLocaleString("tr-TR") : "-";
+    
+    return [journeyDate, operator, departureTime, departureStop, arrivalStop, price, lastUpdated]
+      .map(field => `"${String(field).replace(/"/g, '""')}"`) // Escape double quotes
+      .join(",");
+  });
+  
+  return [headers.join(","), ...rows].join("\n");
+}
+
 async function renderObiletTargets() {
   const listEl = document.getElementById("obiletTargetsList");
   if (!listEl) return;
@@ -3589,6 +3609,7 @@ function renderObiletTargetCards(listEl) {
           </div>
           <div class="obilet-card-actions">
             <button class="btn btn-sm btn-ghost obilet-refresh-btn" data-id="${t.id}" title="Güncelle">🔄</button>
+            <button class="btn btn-sm btn-success obilet-excel-btn" data-id="${t.id}" title="Excel İndir">📥 Excel</button>
             <button class="btn btn-sm btn-ghost obilet-expand-btn" data-id="${t.id}" title="Fiyatları Göster">📊 Fiyatlar</button>
             <button class="btn btn-sm btn-danger obilet-delete-btn" data-id="${t.id}" title="Sil">🗑</button>
           </div>
@@ -3658,6 +3679,56 @@ function renderObiletTargetCards(listEl) {
           btn.disabled = false;
         }, 2000);
         alert("Güncelleme hatası: " + err.message);
+      }
+    });
+  });
+
+  // Excel İndir butonu
+  listEl.querySelectorAll(".obilet-excel-btn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      const target = obiletState.targets.find(t => t.id == id);
+      if (!target) return;
+
+      const originalText = btn.textContent;
+      try {
+        btn.disabled = true;
+        btn.textContent = "⏳";
+        
+        // Fiyat geçmişini al
+        const prices = await apiFetch(`/api/obilet/targets/${id}/prices`);
+        
+        if (!prices || prices.length === 0) {
+          alert("Bu hat için henüz fiyat verisi yok.");
+          btn.textContent = originalText;
+          btn.disabled = false;
+          return;
+        }
+        
+        // CSV formatına çevir
+        const csvContent = generateCSV(prices, target);
+        
+        // İndir
+        const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
+        const link = document.createElement("a");
+        const fileName = `obilet_${target.origin}_${target.destination}_${new Date().toISOString().split('T')[0]}.csv`;
+        link.href = URL.createObjectURL(blob);
+        link.download = fileName;
+        link.click();
+        
+        btn.textContent = "✅";
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.disabled = false;
+        }, 2000);
+      } catch (err) {
+        btn.textContent = "❌";
+        setTimeout(() => {
+          btn.textContent = originalText;
+          btn.disabled = false;
+        }, 2000);
+        alert("Excel indirme hatası: " + err.message);
       }
     });
   });
