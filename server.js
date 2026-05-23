@@ -3311,7 +3311,10 @@ app.delete("/api/error-reports/:id", requireAuth, (req, res) => {
 // oBiLET FIYAT TAKIP VE E-POSTA ENTEGRASYONU
 // ==========================================
 
-const puppeteer = require("puppeteer");
+const puppeteer = require("puppeteer-extra");
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+puppeteer.use(StealthPlugin());
+
 const nodemailer = require("nodemailer");
 
 function parseCsvList(raw) {
@@ -3679,7 +3682,8 @@ async function scrapeObilet(origin, destination, dateIso) {
   
   try {
     const page = await browser.newPage();
-    const blockedRequestPattern = /(doubleclick|googleads|googletagmanager|google-analytics|analytics\.google|facebook\.com|fbcdn|criteo|useinsider|insider|clarity|hotjar|tiktok|yandex|adsystem|adservice|adnxs|taboola|outbrain)/i;
+    // Analytics, tracking ve gereksiz istekleri blokla (Cloudflare 403 problemi icin /event de eklendi)
+    const blockedRequestPattern = /(doubleclick|googleads|googletagmanager|google-analytics|analytics\.google|facebook\.com|fbcdn|criteo|useinsider|insider|clarity|hotjar|tiktok|yandex|adsystem|adservice|adnxs|taboola|outbrain|\/event$)/i;
     await page.setRequestInterception(true);
     page.on("request", (request) => {
       const url = request.url();
@@ -3691,6 +3695,11 @@ async function scrapeObilet(origin, destination, dateIso) {
       }
       return request.continue();
     });
+    
+    // Cloudflare bypass için daha uzun timeout
+    await page.setDefaultNavigationTimeout(90000);
+    await page.setDefaultTimeout(90000);
+    
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, "webdriver", { get: () => undefined });
       Object.defineProperty(navigator, "languages", { get: () => ["tr-TR", "tr", "en-US", "en"] });
@@ -3704,6 +3713,9 @@ async function scrapeObilet(origin, destination, dateIso) {
       "Cache-Control": "no-cache",
       Pragma: "no-cache",
       "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+      "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+      "sec-ch-ua-mobile": "?0",
+      "sec-ch-ua-platform": '"Windows"',
     });
     await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
     await page.setViewport({ width: 1280, height: 800 });
@@ -3874,7 +3886,27 @@ async function scrapeObilet(origin, destination, dateIso) {
     for (const url of candidateUrls) {
       try {
         console.log(`[oBilet] URL deneniyor: ${url}`);
-        const response = await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 });
+        const response = await page.goto(url, { waitUntil: "networkidle2", timeout: 90000 });
+        
+        // Cloudflare challenge kontrolü - challenge sayfasında ise bekle
+        try {
+          const isCloudflareChallenge = await page.evaluate(() => {
+            const title = document.title || "";
+            const bodyText = document.body?.innerText || "";
+            return title.includes("Just a moment") || 
+                   bodyText.includes("Checking your browser") ||
+                   bodyText.includes("challenge-platform") ||
+                   document.querySelector('#challenge-running') !== null;
+          });
+          
+          if (isCloudflareChallenge) {
+            console.log(`[oBilet] Cloudflare challenge algılandi, 10 saniye bekleniyor...`);
+            await new Promise(resolve => setTimeout(resolve, 10000));
+          }
+        } catch (cfErr) {
+          // ignore cloudflare check errors
+        }
+        
         await new Promise((resolve) => setTimeout(resolve, 3500));
 
         try {
@@ -4272,8 +4304,27 @@ async function scrapeObilet(origin, destination, dateIso) {
                 console.log(`[oBilet][DEBUG] Detay sayfasina gidiliyor: ${seferlerUrl}`);
               }
 
-              await page.goto(seferlerUrl, { waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
-              await new Promise((resolve) => setTimeout(resolve, 1200));
+              await page.goto(seferlerUrl, { waitUntil: "networkidle2", timeout: 90000 }).catch(() => {});
+              
+              // Cloudflare challenge kontrolü
+              try {
+                const isChallenge = await page.evaluate(() => {
+                  const title = document.title || "";
+                  const bodyText = document.body?.innerText || "";
+                  return title.includes("Just a moment") || 
+                         bodyText.includes("Checking your browser") ||
+                         bodyText.includes("challenge-platform");
+                });
+                
+                if (isChallenge) {
+                  console.log(`[oBilet] Detay sayfasında Cloudflare challenge, 10 saniye bekleniyor...`);
+                  await new Promise(resolve => setTimeout(resolve, 10000));
+                }
+              } catch (cfErr) {
+                // ignore
+              }
+              
+              await new Promise((resolve) => setTimeout(resolve, 2000));
 
               // Detay sayfasindaki tum firma+saat+fiyat kombinasyonlarini al
               const detailJourneys = await page.evaluate((debugMode) => {
