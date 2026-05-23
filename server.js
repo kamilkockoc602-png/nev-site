@@ -5091,6 +5091,19 @@ app.post("/api/obilet/test-email", requireAuth, async (req, res) => {
   }
 });
 
+// API: Debug - Fiyat Kayıtlarını Görüntüle
+app.get("/api/obilet/debug-prices/:targetId", requireAuth, (req, res) => {
+  try {
+    const targetId = parseInt(req.params.targetId, 10);
+    const prices = db.prepare(
+      "SELECT * FROM obilet_prices WHERE target_id = ? ORDER BY journey_date, departure_time, last_updated DESC"
+    ).all(targetId);
+    res.json({ prices });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+});
+
 // Sunucu Başladığında ve Her X Dakikada Bir Otomatik Kontrol Zamanlayıcı
 setTimeout(() => {
   refreshObiletPricesTask().catch(err => console.error("[Otomatik Kontrol] Ilk baslangic hatasi:", err.message));
