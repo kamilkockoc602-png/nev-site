@@ -3511,12 +3511,12 @@ function isObiletOperatorMatch(selectedOperator, scrapedOperator) {
   return scrapedKey.includes(selectedKey) || selectedKey.includes(scrapedKey);
 }
 
-function buildJourneyIdentityKey(operator, departureTime, departureStop, arrivalStop) {
+function buildJourneyIdentityKey(operator, departureTime) {
+  // Ayni firma + ayni saat = ayni sefer
+  // NOT: departureStop kullanmiyoruz cunku oBilet'te ayni durak farkli yazilabiliyor
   return [
     toObiletOperatorMatchKey(operator),
     String(departureTime || "").trim(),
-    normalizeSearchText(departureStop || ""),
-    normalizeSearchText(arrivalStop || ""),
   ].join("|");
 }
 
@@ -4757,9 +4757,7 @@ async function processObiletTarget(target) {
           dayTracked.map((journey) =>
             buildJourneyIdentityKey(
               journey.operator,
-              journey.time,
-              journey.departureStop || "",
-              journey.arrivalStop || ""
+              journey.time
             )
           )
         );
@@ -4783,9 +4781,7 @@ async function processObiletTarget(target) {
 
           const rowKey = buildJourneyIdentityKey(
             row.operator,
-            row.departure_time,
-            row.departure_stop || "",
-            row.arrival_stop || ""
+            row.departure_time
           );
 
           if (!currentKeys.has(rowKey)) {
@@ -4796,9 +4792,11 @@ async function processObiletTarget(target) {
         trackedJourneys.push(...dayTracked);
 
         for (const journey of dayTracked) {
+          // Onceki kaydı bul: SADECE operator + departure_time ile eslestiryoruz
+          // departure_stop kullanmiyoruz cunku oBilet'te ayni durak farkli yazilabiliyor
           const previous = db.prepare(
-            "SELECT * FROM obilet_prices WHERE target_id = ? AND journey_date = ? AND operator = ? AND departure_time = ? AND departure_stop = ?"
-          ).get(target.id, journey.journey_date, journey.operator, journey.time, journey.departureStop || "");
+            "SELECT * FROM obilet_prices WHERE target_id = ? AND journey_date = ? AND operator = ? AND departure_time = ?"
+          ).get(target.id, journey.journey_date, journey.operator, journey.time);
 
           if (previous) {
             if (previous.price !== journey.price) {
@@ -4810,9 +4808,10 @@ async function processObiletTarget(target) {
                 newPrice: journey.price
               });
 
+              // Fiyat ve durak bilgilerini guncelle (oBilet durak isimleri degisebiliyor)
               db.prepare(
-                "UPDATE obilet_prices SET price = ?, last_updated = ? WHERE id = ?"
-              ).run(journey.price, now, previous.id);
+                "UPDATE obilet_prices SET price = ?, departure_stop = ?, arrival_stop = ?, last_updated = ? WHERE id = ?"
+              ).run(journey.price, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
 
               addPricingNotification(
                 "oBilet Fiyat Takip",
