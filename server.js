@@ -354,7 +354,7 @@ const MENUS = [
   "reporting",
   "control",
   "ocr",
-  "obilet",
+  "obilet_tracker",
   "permissions",
   "logs",
 ];
