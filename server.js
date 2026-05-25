@@ -352,14 +352,14 @@ const MENUS = [
   "pricing",
   "reports",
   "reporting",
-  "control",
+  "oneops",
   "ocr",
   "obilet_tracker",
   "permissions",
   "logs",
 ];
 
-const ADMIN_ONLY_MENUS = new Set(["control", "permissions", "logs"]);
+const ADMIN_ONLY_MENUS = new Set(["permissions", "logs"]);
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -1895,6 +1895,15 @@ for (const row of permissionRows) {
     parsed = JSON.parse(row.permissions || "{}");
   } catch {
     parsed = {};
+  }
+
+  // Legacy anahtar uyumlulugu: control -> oneops
+  if (
+    !Object.prototype.hasOwnProperty.call(parsed, "oneops") &&
+    Object.prototype.hasOwnProperty.call(parsed, "control")
+  ) {
+    parsed.oneops = Boolean(parsed.control);
+    delete parsed.control;
   }
 
   let changed = false;
