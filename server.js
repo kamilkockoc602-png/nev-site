@@ -5102,32 +5102,8 @@ async function processObiletTarget(target) {
               continue;
             }
 
-            // Degisiklik tespit edilirse ayni turda ikinci kez kontrol et.
-            // Ikinci kontrolde ayni yeni fiyat gelmezse degisiklik olarak kabul etme.
-            let confirmedObservedPrice = 0;
-            try {
-              const recheckMap = await getDayRecheckMap();
-              const recheckMatch = recheckMap.get(journeyKey);
-              confirmedObservedPrice = Number(recheckMatch?.price || 0);
-            } catch (recheckErr) {
-              console.error(`[oBilet] Recheck hatasi (${target.origin} -> ${target.destination} ${journeyDate}): ${recheckErr.message}`);
-            }
-
-            if (!confirmedObservedPrice) {
-              // Recheck sonucunda dogrulanmis fiyat alinamazsa degisikligi bu tur atla.
-              db.prepare(
-                "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = NULL, pending_seen_count = 0 WHERE id = ?"
-              ).run(normalizedOperator, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
-              continue;
-            }
-
-            if (confirmedObservedPrice === previous.price) {
-              // Recheck degisiklik olmadigini dogruladi.
-              db.prepare(
-                "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = NULL, pending_seen_count = 0 WHERE id = ?"
-              ).run(normalizedOperator, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
-              continue;
-            }
+            // Recheck suspended: pending_seen_count (ardisik tur dogrulama) yeterli.
+            const confirmedObservedPrice = journey.price;
 
             const previousPendingPrice = Number(previous.pending_price || 0);
             const previousPendingCount = Number(previous.pending_seen_count || 0);
