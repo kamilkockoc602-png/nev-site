@@ -4177,20 +4177,16 @@ async function scrapeObilet(origin, destination, dateIso) {
               if (parsed > 0) primaryPrices.push(parsed);
             });
 
-            card.querySelectorAll("[data-amount], [data-sale-price], [data-campaign-price], [data-discounted-price]")
+            card.querySelectorAll("[data-amount], [data-sale-price]")
               .forEach((node) => {
                 const a = pushPrice(node.getAttribute("data-amount"));
                 const b = pushPrice(node.getAttribute("data-sale-price"));
-                const c = pushPrice(node.getAttribute("data-campaign-price"));
-                const d = pushPrice(node.getAttribute("data-discounted-price"));
                 if (a > 0) primaryPrices.push(a);
                 if (b > 0) primaryPrices.push(b);
-                if (c > 0) primaryPrices.push(c);
-                if (d > 0) primaryPrices.push(d);
               });
 
             card
-              .querySelectorAll("[itemprop='price'], [itemprop='lowPrice'], .no-cache-price, .ticket-price, .fare")
+              .querySelectorAll("[itemprop='price'], .no-cache-price, .ticket-price, .fare")
               .forEach((node) => {
                 const parsed = pushPrice(node.getAttribute("content") || node.textContent || "");
                 if (parsed > 0) primaryPrices.push(parsed);
@@ -4198,7 +4194,7 @@ async function scrapeObilet(origin, destination, dateIso) {
 
             card
               .querySelectorAll(
-                ".price, .amount, .sale-price, .discounted, .discount-price"
+                ".price, .amount, .sale-price"
               )
               .forEach((node) => {
                 const parsed = pushPrice(node.textContent || "");
@@ -4218,7 +4214,10 @@ async function scrapeObilet(origin, destination, dateIso) {
             const fallback = dedupe(fallbackPrices);
 
             // Kararli secim: once kartin birincil fiyat alani, sonra ikincil, en sonda metin fallback.
-            const chosen = primary[0] || secondary[0] || fallback[0] || 0;
+            const chosenPrimary = primary.length ? Math.max(...primary) : 0;
+            const chosenSecondary = secondary.length ? Math.max(...secondary) : 0;
+            const chosenFallback = fallback.length ? Math.max(...fallback) : 0;
+            const chosen = chosenPrimary || chosenSecondary || chosenFallback || 0;
             if (!chosen) return [];
             return [chosen, ...secondary.filter((v) => v !== chosen), ...fallback.filter((v) => v !== chosen)];
           };
@@ -4960,7 +4959,7 @@ async function processObiletTarget(target) {
           }
         });
 
-        const dayTracked = journeys
+        const dayTrackedRaw = journeys
           .filter((journey) =>
             targetOperators.some((op) =>
               isObiletOperatorMatch(op, journey.operator)
@@ -4974,6 +4973,22 @@ async function processObiletTarget(target) {
             return journeyStopKey.includes(departureStopFilterKey);
           })
           .map((journey) => ({ ...journey, journey_date: journeyDate }));
+
+        // Ayni firma+saat seferinde birden fazla fiyat okunursa tek kayda indir.
+        // Bu durumda kampanya/yanlis parse kaynakli dusuk deger yerine daha tutarli degeri koru.
+        const dayTrackedMap = new Map();
+        for (const journey of dayTrackedRaw) {
+          const key = buildJourneyIdentityKey(journey.operator, journey.time);
+          const existing = dayTrackedMap.get(key);
+          if (!existing) {
+            dayTrackedMap.set(key, journey);
+            continue;
+          }
+          if (Number(journey.price || 0) > Number(existing.price || 0)) {
+            dayTrackedMap.set(key, journey);
+          }
+        }
+        const dayTracked = Array.from(dayTrackedMap.values());
 
         const currentKeys = new Set(
           dayTracked.map((journey) =>
