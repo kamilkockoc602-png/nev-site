@@ -4151,39 +4151,64 @@ async function scrapeObilet(origin, destination, dateIso) {
           };
 
           const collectCardPrices = (card) => {
-            const prices = [];
+            const primaryPrices = [];
+            const secondaryPrices = [];
+            const fallbackPrices = [];
             const pushPrice = (value) => {
               const parsed = parsePrice(value);
-              if (parsed > 0) prices.push(parsed);
+              if (parsed >= 300 && parsed <= 5000) return parsed;
+              return 0;
             };
 
             card.querySelectorAll("[data-price]").forEach((node) => {
-              pushPrice(node.getAttribute("data-price"));
+              const parsed = pushPrice(node.getAttribute("data-price"));
+              if (parsed > 0) primaryPrices.push(parsed);
             });
 
             card.querySelectorAll("[data-amount], [data-sale-price], [data-campaign-price], [data-discounted-price]")
               .forEach((node) => {
-                pushPrice(node.getAttribute("data-amount"));
-                pushPrice(node.getAttribute("data-sale-price"));
-                pushPrice(node.getAttribute("data-campaign-price"));
-                pushPrice(node.getAttribute("data-discounted-price"));
+                const a = pushPrice(node.getAttribute("data-amount"));
+                const b = pushPrice(node.getAttribute("data-sale-price"));
+                const c = pushPrice(node.getAttribute("data-campaign-price"));
+                const d = pushPrice(node.getAttribute("data-discounted-price"));
+                if (a > 0) primaryPrices.push(a);
+                if (b > 0) primaryPrices.push(b);
+                if (c > 0) primaryPrices.push(c);
+                if (d > 0) primaryPrices.push(d);
+              });
+
+            card
+              .querySelectorAll("[itemprop='price'], [itemprop='lowPrice'], .no-cache-price, .ticket-price, .fare")
+              .forEach((node) => {
+                const parsed = pushPrice(node.getAttribute("content") || node.textContent || "");
+                if (parsed > 0) primaryPrices.push(parsed);
               });
 
             card
               .querySelectorAll(
-                "[itemprop='lowPrice'], .no-cache-price, .price, .amount, .ticket-price, .fare, .sale-price, .discounted, .discount-price"
+                ".price, .amount, .sale-price, .discounted, .discount-price"
               )
               .forEach((node) => {
-                pushPrice(node.textContent || "");
+                const parsed = pushPrice(node.textContent || "");
+                if (parsed > 0) secondaryPrices.push(parsed);
               });
 
             const text = card.textContent || "";
             const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
             for (const match of text.matchAll(regex)) {
-              pushPrice(match[1]);
+              const parsed = pushPrice(match[1]);
+              if (parsed > 0) fallbackPrices.push(parsed);
             }
 
-            return prices;
+            const dedupe = (arr) => Array.from(new Set(arr));
+            const primary = dedupe(primaryPrices);
+            const secondary = dedupe(secondaryPrices);
+            const fallback = dedupe(fallbackPrices);
+
+            // Kararli secim: once kartin birincil fiyat alani, sonra ikincil, en sonda metin fallback.
+            const chosen = primary[0] || secondary[0] || fallback[0] || 0;
+            if (!chosen) return [];
+            return [chosen, ...secondary.filter((v) => v !== chosen), ...fallback.filter((v) => v !== chosen)];
           };
 
           const addJourney = (
@@ -4233,7 +4258,7 @@ async function scrapeObilet(origin, destination, dateIso) {
             const priceCandidates = collectCardPrices(card);
             // Kampanya/indirim etiketleri kart metninde daha dusuk degerler uretebildigi icin
             // kart icindeki bilet fiyat adayi olarak en yuksek degeri tercih et.
-            const bestPrice = priceCandidates.length > 0 ? Math.max(...priceCandidates) : 0;
+            const bestPrice = priceCandidates.length > 0 ? priceCandidates[0] : 0;
 
             const departureStop =
               card.querySelector("[itemprop='departureBusStop'] [itemprop='name']")?.textContent ||
@@ -4339,7 +4364,7 @@ async function scrapeObilet(origin, destination, dateIso) {
           mergeSource.forEach((journey) => {
             const key = `${toObiletOperatorMatchKey(journey.operator)}|${String(journey.time || "").trim()}`;
             const existing = apiMap.get(key);
-            if (!existing || journey.price > existing.price) {
+            if (!existing || journey.price < existing.price) {
               apiMap.set(key, journey);
             }
           });
@@ -4348,7 +4373,7 @@ async function scrapeObilet(origin, destination, dateIso) {
             journeys = journeys.map((journey) => {
               const key = `${toObiletOperatorMatchKey(journey.operator)}|${String(journey.time || "").trim()}`;
               const apiMatch = apiMap.get(key);
-              if (apiMatch && apiMatch.price && apiMatch.price !== journey.price) {
+              if (apiMatch && apiMatch.price && journey.price <= 0) {
                 if (DEBUG_OBILET_PRICE) {
                   console.log(
                     `[oBilet][DEBUG] API fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${apiMatch.price}`
@@ -4531,7 +4556,7 @@ async function scrapeObilet(origin, destination, dateIso) {
                   return operatorMatch && timeMatch;
                 });
 
-                if (detailMatch && detailMatch.price && detailMatch.price !== journey.price) {
+                if (detailMatch && detailMatch.price && journey.price <= 0) {
                   if (DEBUG_OBILET_PRICE) {
                     console.log(
                       `[oBilet][DEBUG] Detay fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${detailMatch.price}`
@@ -4562,7 +4587,7 @@ async function scrapeObilet(origin, destination, dateIso) {
 
           for (const journey of detailTargets) {
             const detailPrice = await fetchDetailPrice(journey.detailUrl);
-            if (detailPrice && detailPrice !== journey.price) {
+            if (detailPrice && journey.price <= 0) {
               if (DEBUG_OBILET_PRICE) {
                 console.log(
                   `[oBilet][DEBUG] Detay fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${detailPrice}`
@@ -4586,7 +4611,7 @@ async function scrapeObilet(origin, destination, dateIso) {
               await popup.waitForLoadState("networkidle", { timeout: 30000 });
               await new Promise((resolve) => setTimeout(resolve, 1500));
               const popupPrice = await readMinPriceFromPage(popup);
-              if (popupPrice && popupPrice !== journey.price) {
+              if (popupPrice && journey.price <= 0) {
                 if (DEBUG_OBILET_PRICE) {
                   console.log(
                     `[oBilet][DEBUG] Popup fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${popupPrice}`
