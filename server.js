@@ -4994,6 +4994,40 @@ async function processObiletTarget(target) {
           }
         }
         const dayTracked = Array.from(dayTrackedMap.values());
+        let dayRecheckMap = null;
+
+        const getDayRecheckMap = async () => {
+          if (dayRecheckMap) {
+            return dayRecheckMap;
+          }
+
+          let recheckJourneys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate);
+          if (departureStopFilter && !recheckJourneys.length) {
+            recheckJourneys = await scrapeObilet(target.origin, target.destination, journeyDate);
+          }
+
+          const recheckTrackedRaw = recheckJourneys
+            .filter((item) => targetOperators.some((op) => isObiletOperatorMatch(op, item.operator)))
+            .filter((item) => {
+              if (!departureStopFilterKey) {
+                return true;
+              }
+              const stopKey = normalizeSearchText(item.departureStop || "");
+              return stopKey.includes(departureStopFilterKey);
+            })
+            .map((item) => ({ ...item, journey_date: journeyDate }));
+
+          const map = new Map();
+          for (const item of recheckTrackedRaw) {
+            const key = buildJourneyIdentityKey(item.operator, item.time);
+            if (!map.has(key)) {
+              map.set(key, item);
+            }
+          }
+
+          dayRecheckMap = map;
+          return dayRecheckMap;
+        };
 
         const currentKeys = new Set(
           dayTracked.map((journey) =>
@@ -5052,9 +5086,36 @@ async function processObiletTarget(target) {
               continue;
             }
 
+            // Degisiklik tespit edilirse ayni turda ikinci kez kontrol et.
+            // Ikinci kontrolde ayni yeni fiyat gelmezse degisiklik olarak kabul etme.
+            let confirmedObservedPrice = 0;
+            try {
+              const recheckMap = await getDayRecheckMap();
+              const recheckMatch = recheckMap.get(journeyKey);
+              confirmedObservedPrice = Number(recheckMatch?.price || 0);
+            } catch (recheckErr) {
+              console.error(`[oBilet] Recheck hatasi (${target.origin} -> ${target.destination} ${journeyDate}): ${recheckErr.message}`);
+            }
+
+            if (!confirmedObservedPrice) {
+              // Recheck sonucunda dogrulanmis fiyat alinamazsa degisikligi bu tur atla.
+              db.prepare(
+                "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = NULL, pending_seen_count = 0 WHERE id = ?"
+              ).run(normalizedOperator, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
+              continue;
+            }
+
+            if (confirmedObservedPrice === previous.price) {
+              // Recheck degisiklik olmadigini dogruladi.
+              db.prepare(
+                "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = NULL, pending_seen_count = 0 WHERE id = ?"
+              ).run(normalizedOperator, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
+              continue;
+            }
+
             const previousPendingPrice = Number(previous.pending_price || 0);
             const previousPendingCount = Number(previous.pending_seen_count || 0);
-            const pendingCount = previousPendingPrice === journey.price
+            const pendingCount = previousPendingPrice === confirmedObservedPrice
               ? previousPendingCount + 1
               : 1;
 
@@ -5064,16 +5125,16 @@ async function processObiletTarget(target) {
                 operator: normalizedOperator,
                 departure_time: journey.time,
                 oldPrice: previous.price,
-                newPrice: journey.price
+                newPrice: confirmedObservedPrice
               });
 
               db.prepare(
                 "UPDATE obilet_prices SET operator = ?, price = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = NULL, pending_seen_count = 0 WHERE id = ?"
-              ).run(normalizedOperator, journey.price, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
+              ).run(normalizedOperator, confirmedObservedPrice, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
 
               addPricingNotification(
                 "oBilet Fiyat Takip",
-                `${toDotDate(journey.journey_date)} ${normalizedOperator} (${journey.time}, ${journey.departureStop || "-"}) fiyatı değişti: ${previous.price} TL -> ${journey.price} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
+                `${toDotDate(journey.journey_date)} ${normalizedOperator} (${journey.time}, ${journey.departureStop || "-"}) fiyatı değişti: ${previous.price} TL -> ${confirmedObservedPrice} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
               );
             } else {
               db.prepare(
@@ -5083,7 +5144,7 @@ async function processObiletTarget(target) {
                 journey.departureStop || "",
                 journey.arrivalStop || "",
                 now,
-                journey.price,
+                confirmedObservedPrice,
                 pendingCount,
                 previous.id
               );
