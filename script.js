@@ -3539,7 +3539,6 @@ function setupObiletOperatorPicker(root) {
 async function initObiletPanel() {
   await renderObiletTargets();
   setupObiletForm();
-  setupObiletActionButtons();
 }
 
 // CSV formatına çevir (Excel'de açılabilir - Türkiye için noktalı virgül delimiter)
@@ -3968,32 +3967,4 @@ function setupObiletForm() {
   });
 }
 
-function setupObiletActionButtons() {
-  const testEmailBtn = document.getElementById("obiletTestEmailBtn");
-  if (testEmailBtn) {
-    const newBtn2 = testEmailBtn.cloneNode(true);
-    testEmailBtn.parentNode.replaceChild(newBtn2, testEmailBtn);
-    newBtn2.addEventListener("click", async () => {
-      const statusEl = document.getElementById("obiletActionStatus");
-      const emailInput = document.getElementById("obiletTestEmailAddr");
-      const email = emailInput ? emailInput.value.trim() : "hasan.hazer@kamilkoc.com.tr";
-      if (!email) {
-        if (statusEl) { statusEl.style.color = "#d64545"; statusEl.textContent = "Lütfen test e-posta adresi girin."; }
-        return;
-      }
-      try {
-        newBtn2.disabled = true;
-        newBtn2.textContent = "⏳ Gönderiliyor...";
-        if (statusEl) { statusEl.style.color = "var(--muted)"; statusEl.textContent = "Test e-postası gönderiliyor..."; }
-        await apiFetch("/api/obilet/test-email", { method: "POST", body: JSON.stringify({ email }) });
-        if (statusEl) { statusEl.style.color = "#1f7a1f"; statusEl.textContent = `✅ Test e-postası ${email} adresine gönderildi!`; }
-      } catch (err) {
-        if (statusEl) { statusEl.style.color = "#d64545"; statusEl.textContent = "E-posta hatası: " + err.message; }
-      } finally {
-        newBtn2.disabled = false;
-        newBtn2.textContent = "📧 Test E-postası Gönder";
-      }
-    });
-  }
 
-}

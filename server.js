@@ -4882,34 +4882,6 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
   return info;
 }
 
-// Test E-postası Gönderim Fonksiyonu
-async function sendTestEmail(emailAddress) {
-  const { smtpUser } = createSmtpTransportsWithFallback();
-
-  const smtpFrom = process.env.SMTP_FROM || `"oBilet Fiyat Takip" <${smtpUser}>`;
-
-  const mailOptions = {
-    from: smtpFrom,
-    to: emailAddress,
-    subject: OBILET_SUBJECT_TEST,
-    html: `
-      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #ddd; border-radius: 8px; padding: 25px; box-shadow: 0 2px 8px rgba(0,0,0,0.05);">
-        <h2 style="color: #2a5298; margin-top: 0;">E-posta Baglanti Testi Basarili!</h2>
-        <p>Merhaba,</p>
-        <p>Bu e-posta, otobüs fiyat yönetim panelinizdeki oBilet SMTP bağlantısının çalıştığını doğrulamak amacıyla gönderilmiştir.</p>
-        <p><strong>Gönderici Adresi (SMTP User):</strong> ${smtpUser}</p>
-        <p><strong>Alıcı Adresi:</strong> ${emailAddress}</p>
-        <p><strong>Zaman:</strong> ${nowStamp()}</p>
-        <hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;"/>
-        <p style="color: #777; font-size: 12px; line-height: 1.4;">Sisteminiz sorunsuz bir şekilde fiyat değişim e-postalarını göndermeye hazırdır.</p>
-        ${renderEmailSignature()}
-      </div>
-    `
-  };
-
-  const result = await sendMailWithSmtpFallback(mailOptions);
-  return result.info;
-}
 
 // Tek oBilet Target İşleme Fonksiyonu (Ortak)
 async function processObiletTarget(target) {
@@ -5491,23 +5463,6 @@ app.get("/api/obilet/targets/:id/prices", requireAuth, (req, res) => {
     res.json(prices);
   } catch (error) {
     res.status(500).json({ message: error.message || "Fiyat geçmişi alınamadı." });
-  }
-});
-
-// API: E-posta Bağlantı Testi
-app.post("/api/obilet/test-email", requireAuth, async (req, res) => {
-  const email = String(req.body.email || "").trim();
-  if (!email) {
-    return res.status(400).json({ message: "E-posta adresi zorunludur." });
-  }
-  
-  try {
-    await sendTestEmail(email);
-    res.json({ ok: true, message: "Test e-postasi basariyla gonderildi." });
-  } catch (error) {
-    res.status(500).json({
-      message: `SMTP Hatasi: ${error.message}. Railway Variables icinde SMTP_HOST/PORT/USER/PASS degerlerini kontrol edin. Gmail icin 587 portu da denenebilir.`,
-    });
   }
 });
 
