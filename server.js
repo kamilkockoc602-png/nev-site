@@ -4221,14 +4221,21 @@ async function scrapeObilet(origin, destination, dateIso) {
                 if (parsed > 0) secondaryPrices.push(parsed);
               });
 
+            const text = card.textContent || "";
+            const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
+            for (const match of text.matchAll(regex)) {
+              const parsed = pushPrice(match[1]);
+              if (parsed > 0) fallbackPrices.push(parsed);
+            }
+
             const dedupe = (arr) => Array.from(new Set(arr));
             const primary = dedupe(primaryPrices);
             const secondary = dedupe(secondaryPrices);
             const fallback = dedupe(fallbackPrices);
 
-            // Kararli secim: once kartin birincil fiyat alani (DOM sirasindaki ilk gecerli deger), sonra ikincil alan.
+            // Kararli secim: once kartin birincil fiyat alani (DOM sirasindaki ilk gecerli deger), sonra ikincil alan, sonra metin fallback.
             const chosenPrimary = orderedPrimary.length ? orderedPrimary[0] : 0;
-            const chosen = chosenPrimary || secondary[0] || fallback[0] || 0;
+            const chosen = chosenPrimary || secondary[0] || fallback[0] || primary[0] || 0;
             if (!chosen) return [];
             return [chosen, ...secondary.filter((v) => v !== chosen), ...fallback.filter((v) => v !== chosen)];
           };
