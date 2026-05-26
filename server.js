@@ -33,6 +33,14 @@ const OBILET_EMAIL_INTERVAL_HOURS = Number.parseInt(
   process.env.OBILET_EMAIL_INTERVAL_HOURS || "1",
   10
 );
+const OBILET_PRICE_CONFIRM_RUNS_RAW = Number.parseInt(
+  process.env.OBILET_PRICE_CONFIRM_RUNS || "2",
+  10
+);
+const OBILET_PRICE_CONFIRM_RUNS =
+  Number.isFinite(OBILET_PRICE_CONFIRM_RUNS_RAW) && OBILET_PRICE_CONFIRM_RUNS_RAW > 0
+    ? OBILET_PRICE_CONFIRM_RUNS_RAW
+    : 2;
 const OBILET_SUBJECT_CHANGE = String(process.env.OBILET_SUBJECT_CHANGE || "oBilet Fiyat Raporu").trim();
 const OBILET_SUBJECT_NO_CHANGE = String(process.env.OBILET_SUBJECT_NO_CHANGE || "oBilet Fiyat Raporu").trim();
 const OBILET_SUBJECT_PRICE_ALERT = String(process.env.OBILET_SUBJECT_PRICE_ALERT || "oBilet Fiyat Degisikligi").trim();
@@ -507,6 +515,8 @@ CREATE TABLE IF NOT EXISTS obilet_prices (
   departure_stop TEXT NOT NULL DEFAULT '',
   arrival_stop TEXT NOT NULL DEFAULT '',
   price INTEGER NOT NULL,
+  pending_price INTEGER,
+  pending_seen_count INTEGER NOT NULL DEFAULT 0,
   last_updated TEXT NOT NULL,
   FOREIGN KEY (target_id) REFERENCES obilet_targets(id) ON DELETE CASCADE
 );
@@ -523,6 +533,8 @@ try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_email_sent_at TEXT NOT
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN journey_date TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN departure_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN arrival_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+try { db.exec("ALTER TABLE obilet_prices ADD COLUMN pending_price INTEGER"); } catch(e) {}
+try { db.exec("ALTER TABLE obilet_prices ADD COLUMN pending_seen_count INTEGER NOT NULL DEFAULT 0"); } catch(e) {}
 
 const pricingItemColumns = db.prepare("PRAGMA table_info(pricing_upload_items)").all();
 const hasRowDirectionColumn = pricingItemColumns.some((col) => col.name === "row_direction");
@@ -5002,31 +5014,58 @@ async function processObiletTarget(target) {
         trackedJourneys.push(...dayTracked);
 
         for (const journey of dayTracked) {
-          // Onceki kaydı bul: SADECE operator + departure_time ile eslestiryoruz
-          // departure_stop kullanmiyoruz cunku oBilet'te ayni durak farkli yazilabiliyor
-          // Birden fazla kayit varsa en son guncellenen kaydi al
-          const previous = db.prepare(
-            "SELECT * FROM obilet_prices WHERE target_id = ? AND journey_date = ? AND operator = ? AND departure_time = ? ORDER BY last_updated DESC LIMIT 1"
-          ).get(target.id, journey.journey_date, journey.operator, journey.time);
+          const normalizedOperator = normalizeObiletOperatorName(journey.operator) || journey.operator;
+          const journeyKey = buildJourneyIdentityKey(normalizedOperator, journey.time);
+          const candidates = db.prepare(
+            "SELECT * FROM obilet_prices WHERE target_id = ? AND journey_date = ? AND departure_time = ? ORDER BY last_updated DESC"
+          ).all(target.id, journey.journey_date, journey.time);
+          const previous = candidates.find(
+            (row) => buildJourneyIdentityKey(row.operator, row.departure_time) === journeyKey
+          );
 
           if (previous) {
-            if (previous.price !== journey.price) {
+            if (previous.price === journey.price) {
+              // Fiyat degismediyse pending durumunu sifirla ve metadata'yi guncel tut.
+              db.prepare(
+                "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = NULL, pending_seen_count = 0 WHERE id = ?"
+              ).run(normalizedOperator, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
+              continue;
+            }
+
+            const previousPendingPrice = Number(previous.pending_price || 0);
+            const previousPendingCount = Number(previous.pending_seen_count || 0);
+            const pendingCount = previousPendingPrice === journey.price
+              ? previousPendingCount + 1
+              : 1;
+
+            if (pendingCount >= OBILET_PRICE_CONFIRM_RUNS) {
               changes.push({
                 journey_date: journey.journey_date,
-                operator: journey.operator,
+                operator: normalizedOperator,
                 departure_time: journey.time,
                 oldPrice: previous.price,
                 newPrice: journey.price
               });
 
-              // Fiyat ve durak bilgilerini guncelle (oBilet durak isimleri degisebiliyor)
               db.prepare(
-                "UPDATE obilet_prices SET price = ?, departure_stop = ?, arrival_stop = ?, last_updated = ? WHERE id = ?"
-              ).run(journey.price, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
+                "UPDATE obilet_prices SET operator = ?, price = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = NULL, pending_seen_count = 0 WHERE id = ?"
+              ).run(normalizedOperator, journey.price, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
 
               addPricingNotification(
                 "oBilet Fiyat Takip",
-                `${toDotDate(journey.journey_date)} ${journey.operator} (${journey.time}, ${journey.departureStop || "-"}) fiyatı değişti: ${previous.price} TL -> ${journey.price} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
+                `${toDotDate(journey.journey_date)} ${normalizedOperator} (${journey.time}, ${journey.departureStop || "-"}) fiyatı değişti: ${previous.price} TL -> ${journey.price} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
+              );
+            } else {
+              db.prepare(
+                "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = ?, pending_seen_count = ? WHERE id = ?"
+              ).run(
+                normalizedOperator,
+                journey.departureStop || "",
+                journey.arrivalStop || "",
+                now,
+                journey.price,
+                pendingCount,
+                previous.id
               );
             }
           } else {
@@ -5035,7 +5074,7 @@ async function processObiletTarget(target) {
             ).run(
               target.id,
               journey.journey_date,
-              journey.operator,
+              normalizedOperator,
               journey.time,
               journey.departureStop || "",
               journey.arrivalStop || "",
