@@ -4385,7 +4385,8 @@ async function scrapeObilet(origin, destination, dateIso) {
           mergeSource.forEach((journey) => {
             const key = `${toObiletOperatorMatchKey(journey.operator)}|${String(journey.time || "").trim()}`;
             const existing = apiMap.get(key);
-            if (!existing || journey.price < existing.price) {
+            // API'den gelen en yuksek fiyati tercih et (dusuk fiyat kampanya/indirim olabilir)
+            if (!existing || journey.price > existing.price) {
               apiMap.set(key, journey);
             }
           });
@@ -4394,13 +4395,20 @@ async function scrapeObilet(origin, destination, dateIso) {
             journeys = journeys.map((journey) => {
               const key = `${toObiletOperatorMatchKey(journey.operator)}|${String(journey.time || "").trim()}`;
               const apiMatch = apiMap.get(key);
-              if (apiMatch && apiMatch.price && journey.price <= 0) {
+              if (apiMatch && apiMatch.price > 0) {
+                // API fiyati her zaman DOM fiyatindan daha guvenilirdir.
+                // DOM scraping yanlis fiyat cekmis olabilir (ornegin kampanya/indirim fiyati).
                 if (DEBUG_OBILET_PRICE) {
                   console.log(
-                    `[oBilet][DEBUG] API fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${apiMatch.price}`
+                    `[oBilet][DEBUG] API fiyat tercih edildi: ${journey.operator} ${journey.time} DOM:${journey.price} -> API:${apiMatch.price}`
                   );
                 }
-                return { ...journey, price: apiMatch.price };
+                return {
+                  ...journey,
+                  price: apiMatch.price,
+                  departureStop: apiMatch.departureStop || journey.departureStop,
+                  arrivalStop: apiMatch.arrivalStop || journey.arrivalStop,
+                };
               }
               return journey;
             });
@@ -4577,15 +4585,15 @@ async function scrapeObilet(origin, destination, dateIso) {
                   return operatorMatch && timeMatch;
                 });
 
-                if (detailMatch && detailMatch.price && journey.price <= 0) {
+                if (detailMatch && detailMatch.price > 0 && (journey.price <= 0 || detailMatch.price > journey.price)) {
                   if (DEBUG_OBILET_PRICE) {
                     console.log(
-                      `[oBilet][DEBUG] Detay fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${detailMatch.price}`
+                      `[oBilet][DEBUG] Detay fiyat tercih edildi: ${journey.operator} ${journey.time} DOM:${journey.price} -> Detay:${detailMatch.price}`
                     );
                   }
                   journey.price = detailMatch.price;
                 } else if (DEBUG_OBILET_PRICE) {
-                  console.log(`[oBilet][DEBUG]     Eslesme bulunamadi veya fiyat daha yuksek`);
+                  console.log(`[oBilet][DEBUG]     Eslesme bulunamadi veya detay fiyat daha dusuk`);
                 }
               }
 
@@ -4608,10 +4616,10 @@ async function scrapeObilet(origin, destination, dateIso) {
 
           for (const journey of detailTargets) {
             const detailPrice = await fetchDetailPrice(journey.detailUrl);
-            if (detailPrice && journey.price <= 0) {
+            if (detailPrice > 0 && (journey.price <= 0 || detailPrice > journey.price)) {
               if (DEBUG_OBILET_PRICE) {
                 console.log(
-                  `[oBilet][DEBUG] Detay fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${detailPrice}`
+                  `[oBilet][DEBUG] Detay URL fiyat tercih edildi: ${journey.operator} ${journey.time} DOM:${journey.price} -> Detay:${detailPrice}`
                 );
               }
               journey.price = detailPrice;
@@ -4632,10 +4640,10 @@ async function scrapeObilet(origin, destination, dateIso) {
               await popup.waitForLoadState("networkidle", { timeout: 30000 });
               await new Promise((resolve) => setTimeout(resolve, 1500));
               const popupPrice = await readMinPriceFromPage(popup);
-              if (popupPrice && journey.price <= 0) {
+              if (popupPrice > 0 && (journey.price <= 0 || popupPrice > journey.price)) {
                 if (DEBUG_OBILET_PRICE) {
                   console.log(
-                    `[oBilet][DEBUG] Popup fiyat bulundu: ${journey.operator} ${journey.time} ${journey.price} -> ${popupPrice}`
+                    `[oBilet][DEBUG] Popup fiyat tercih edildi: ${journey.operator} ${journey.time} DOM:${journey.price} -> Popup:${popupPrice}`
                   );
                 }
                 journey.price = popupPrice;
