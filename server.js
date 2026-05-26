@@ -70,6 +70,7 @@ const OBILET_OPERATOR_CATALOG = [
   "Dogu Kars",
   "Ede Turizm",
   "Elazig Hazar Turizm",
+  "Enver Geçgel Turizm",
   "Esadas Turizm",
   "Esenler Seyahat",
   "Efe Tur",
