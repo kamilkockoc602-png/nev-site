@@ -4237,26 +4237,28 @@ async function scrapeObilet(origin, destination, dateIso) {
                 }
               });
 
-            card
-              .querySelectorAll(
-                "[itemprop='price'], .no-cache-price, .ticket-price, .fare, .journey-price, [class*='journey-price'], [class*='trip-price']"
-              )
-              .forEach((node) => {
-                const parsed = pushPrice(node.getAttribute("content") || node.textContent || "", "[itemprop/price-class]");
-                if (parsed > 0) {
-                  primaryPrices.push(parsed);
-                  orderedPrimary.push(parsed);
-                }
-              });
+            // DISABLED: CSS classes and itemprop selectors are unreliable and pick discount prices
+            // card
+            //   .querySelectorAll(
+            //     "[itemprop='price'], .no-cache-price, .ticket-price, .fare, .journey-price, [class*='journey-price'], [class*='trip-price']"
+            //   )
+            //   .forEach((node) => {
+            //     const parsed = pushPrice(node.getAttribute("content") || node.textContent || "", "[itemprop/price-class]");
+            //     if (parsed > 0) {
+            //       primaryPrices.push(parsed);
+            //       orderedPrimary.push(parsed);
+            //     }
+            //   });
 
-            card
-              .querySelectorAll(
-                ".price, .amount, .sale-price"
-              )
-              .forEach((node) => {
-                const parsed = pushPrice(node.textContent || "", ".price/.amount/.sale-price");
-                if (parsed > 0) secondaryPrices.push(parsed);
-              });
+            // DISABLED: Generic class selectors often pick wrong elements
+            // card
+            //   .querySelectorAll(
+            //     ".price, .amount, .sale-price"
+            //   )
+            //   .forEach((node) => {
+            //     const parsed = pushPrice(node.textContent || "", ".price/.amount/.sale-price");
+            //     if (parsed > 0) secondaryPrices.push(parsed);
+            //   });
 
             const text = card.textContent || "";
             const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
