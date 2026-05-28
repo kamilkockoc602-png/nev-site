@@ -4204,14 +4204,19 @@ async function scrapeObilet(origin, destination, dateIso) {
             const secondaryPrices = [];
             const fallbackPrices = [];
             const orderedPrimary = [];
-            const pushPrice = (value) => {
+            const sourceLog = []; // Track which selector found what price
+            
+            const pushPrice = (value, source) => {
               const parsed = parsePrice(value);
-              if (parsed >= 300 && parsed <= 5000) return parsed;
+              if (parsed >= 300 && parsed <= 5000) {
+                sourceLog.push({ price: parsed, source, rawValue: value });
+                return parsed;
+              }
               return 0;
             };
 
             card.querySelectorAll("[data-price]").forEach((node) => {
-              const parsed = pushPrice(node.getAttribute("data-price"));
+              const parsed = pushPrice(node.getAttribute("data-price"), "[data-price]");
               if (parsed > 0) {
                 primaryPrices.push(parsed);
                 orderedPrimary.push(parsed);
@@ -4220,8 +4225,8 @@ async function scrapeObilet(origin, destination, dateIso) {
 
             card.querySelectorAll("[data-amount], [data-sale-price]")
               .forEach((node) => {
-                const a = pushPrice(node.getAttribute("data-amount"));
-                const b = pushPrice(node.getAttribute("data-sale-price"));
+                const a = pushPrice(node.getAttribute("data-amount"), "[data-amount]");
+                const b = pushPrice(node.getAttribute("data-sale-price"), "[data-sale-price]");
                 if (a > 0) {
                   primaryPrices.push(a);
                   orderedPrimary.push(a);
@@ -4237,7 +4242,7 @@ async function scrapeObilet(origin, destination, dateIso) {
                 "[itemprop='price'], .no-cache-price, .ticket-price, .fare, .journey-price, [class*='journey-price'], [class*='trip-price']"
               )
               .forEach((node) => {
-                const parsed = pushPrice(node.getAttribute("content") || node.textContent || "");
+                const parsed = pushPrice(node.getAttribute("content") || node.textContent || "", "[itemprop/price-class]");
                 if (parsed > 0) {
                   primaryPrices.push(parsed);
                   orderedPrimary.push(parsed);
@@ -4249,14 +4254,14 @@ async function scrapeObilet(origin, destination, dateIso) {
                 ".price, .amount, .sale-price"
               )
               .forEach((node) => {
-                const parsed = pushPrice(node.textContent || "");
+                const parsed = pushPrice(node.textContent || "", ".price/.amount/.sale-price");
                 if (parsed > 0) secondaryPrices.push(parsed);
               });
 
             const text = card.textContent || "";
             const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
             for (const match of text.matchAll(regex)) {
-              const parsed = pushPrice(match[1]);
+              const parsed = pushPrice(match[1], "regex-TL");
               if (parsed > 0) fallbackPrices.push(parsed);
             }
 
@@ -4283,8 +4288,12 @@ async function scrapeObilet(origin, destination, dateIso) {
             // Use modal (most common) primary price instead of first, prevents DOM selection inconsistencies
             const chosenPrimary = orderedPrimary.length ? getModalPrice(orderedPrimary) : 0;
             const chosen = chosenPrimary || secondary[0] || fallback[0] || primary[0] || 0;
-            if (!chosen) return [];
-            return [chosen, ...secondary.filter((v) => v !== chosen), ...fallback.filter((v) => v !== chosen)];
+            if (!chosen) return { prices: [], sources: sourceLog };
+            
+            return {
+              prices: [chosen, ...secondary.filter((v) => v !== chosen), ...fallback.filter((v) => v !== chosen)],
+              sources: sourceLog
+            };
           };
 
           const addJourney = (
@@ -4331,7 +4340,9 @@ async function scrapeObilet(origin, destination, dateIso) {
               card.querySelector(".departure-time")?.textContent ||
               "";
 
-            const priceCandidates = collectCardPrices(card);
+            const priceData = collectCardPrices(card);
+            const priceCandidates = priceData.prices || [];
+            const debugSources = priceData.sources || [];
             // Karttaki ana fiyat degerini tercih et.
             const bestPrice = priceCandidates.length > 0 ? priceCandidates[0] : 0;
 
@@ -4387,7 +4398,7 @@ async function scrapeObilet(origin, destination, dateIso) {
               bestPrice,
               departureStop,
               arrivalStop,
-              priceCandidates,
+              debugSources.map(s => `${s.price}(${s.source})`),
               detailUrl,
               detailSelector
             );
@@ -4716,7 +4727,7 @@ async function scrapeObilet(origin, destination, dateIso) {
             journeys.forEach((journey) => {
               if (Array.isArray(journey.debugPrices) && journey.debugPrices.length > 0) {
                 console.log(
-                  `[oBilet][DEBUG] ${journey.operator} ${journey.time} fiyat adaylari: ${journey.debugPrices.join(", ")}`
+                  `[oBilet][DEBUG] ${journey.operator} ${journey.time}: ${journey.price}TL | sources: ${journey.debugPrices.join(", ")}`
                 );
               }
             });
@@ -5174,7 +5185,7 @@ async function processObiletTarget(target) {
               );
             } else {
               const debugLabel = `[oBilet ${target.origin}→${target.destination}] ${journeyKey}`;
-              if (process.env.DEBUG_OBILET_PRICE === "1") {
+              if (DEBUG_OBILET_PRICE) {
                 console.log(`${debugLabel}: Pending turda ${previousPendingCount}→${pendingCount} (${previous.price}→${confirmedObservedPrice}TL)`);
               }
               db.prepare(
