@@ -34,13 +34,13 @@ const OBILET_EMAIL_INTERVAL_HOURS = Number.parseInt(
   10
 );
 const OBILET_PRICE_CONFIRM_RUNS_RAW = Number.parseInt(
-  process.env.OBILET_PRICE_CONFIRM_RUNS || "2",
+  process.env.OBILET_PRICE_CONFIRM_RUNS || "3",
   10
 );
 const OBILET_PRICE_CONFIRM_RUNS =
   Number.isFinite(OBILET_PRICE_CONFIRM_RUNS_RAW) && OBILET_PRICE_CONFIRM_RUNS_RAW > 0
     ? OBILET_PRICE_CONFIRM_RUNS_RAW
-    : 2;
+    : 3;
 const OBILET_SUBJECT_CHANGE = String(process.env.OBILET_SUBJECT_CHANGE || "oBilet Fiyat Raporu").trim();
 const OBILET_SUBJECT_NO_CHANGE = String(process.env.OBILET_SUBJECT_NO_CHANGE || "oBilet Fiyat Raporu").trim();
 const OBILET_SUBJECT_PRICE_ALERT = String(process.env.OBILET_SUBJECT_PRICE_ALERT || "oBilet Fiyat Degisikligi").trim();
@@ -5079,9 +5079,24 @@ async function processObiletTarget(target) {
 
             const previousPendingPrice = Number(previous.pending_price || 0);
             const previousPendingCount = Number(previous.pending_seen_count || 0);
-            const pendingCount = previousPendingPrice === confirmedObservedPrice
-              ? previousPendingCount + 1
-              : 1;
+            
+            // If price hasn't changed, clear pending and skip
+            if (confirmedObservedPrice === previous.price) {
+              db.prepare(
+                "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = NULL, pending_seen_count = 0 WHERE id = ?"
+              ).run(normalizedOperator, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
+              continue;
+            }
+
+            // Price changed: check if matches pending or is new change
+            let pendingCount;
+            if (previousPendingPrice === confirmedObservedPrice) {
+              // Same as pending, increment counter for multi-run validation
+              pendingCount = previousPendingCount + 1;
+            } else {
+              // New price (different from pending or no pending), start fresh counter
+              pendingCount = 1;
+            }
 
             if (pendingCount >= OBILET_PRICE_CONFIRM_RUNS) {
               changes.push({
@@ -5101,6 +5116,10 @@ async function processObiletTarget(target) {
                 `${toDotDate(journey.journey_date)} ${normalizedOperator} (${journey.time}, ${journey.departureStop || "-"}) fiyatı değişti: ${previous.price} TL -> ${confirmedObservedPrice} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
               );
             } else {
+              const debugLabel = `[oBilet ${target.origin}→${target.destination}] ${journeyKey}`;
+              if (process.env.DEBUG_OBILET_PRICE === "1") {
+                console.log(`${debugLabel}: Pending turda ${previousPendingCount}→${pendingCount} (${previous.price}→${confirmedObservedPrice}TL)`);
+              }
               db.prepare(
                 "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = ?, pending_seen_count = ? WHERE id = ?"
               ).run(
@@ -5108,7 +5127,7 @@ async function processObiletTarget(target) {
                 journey.departureStop || "",
                 journey.arrivalStop || "",
                 now,
-                confirmedObservedPrice,
+                pendingCount > 0 ? confirmedObservedPrice : null,
                 pendingCount,
                 previous.id
               );
