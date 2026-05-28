@@ -4233,8 +4233,23 @@ async function scrapeObilet(origin, destination, dateIso) {
             const secondary = dedupe(secondaryPrices);
             const fallback = dedupe(fallbackPrices);
 
-            // Kararli secim: once kartin birincil fiyat alani (DOM sirasindaki ilk gecerli deger), sonra ikincil alan, sonra metin fallback.
-            const chosenPrimary = orderedPrimary.length ? orderedPrimary[0] : 0;
+            // Find most common (modal) primary price if multiple candidates
+            const getModalPrice = (arr) => {
+              if (!arr.length) return 0;
+              const counts = {};
+              let maxCount = 0, modalValue = arr[0];
+              arr.forEach(v => {
+                counts[v] = (counts[v] || 0) + 1;
+                if (counts[v] > maxCount) {
+                  maxCount = counts[v];
+                  modalValue = v;
+                }
+              });
+              return modalValue;
+            };
+
+            // Use modal (most common) primary price instead of first, prevents DOM selection inconsistencies
+            const chosenPrimary = orderedPrimary.length ? getModalPrice(orderedPrimary) : 0;
             const chosen = chosenPrimary || secondary[0] || fallback[0] || primary[0] || 0;
             if (!chosen) return [];
             return [chosen, ...secondary.filter((v) => v !== chosen), ...fallback.filter((v) => v !== chosen)];
