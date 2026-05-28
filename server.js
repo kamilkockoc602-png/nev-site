@@ -620,12 +620,13 @@ function toDotDate(dateText) {
 }
 
 function todayIsoInIstanbul() {
-  const raw = new Date().toLocaleDateString("en-CA", { timeZone: "Europe/Istanbul" });
-  const m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (m) {
-    return `${m[3]}-${m[1].padStart(2, "0")}-${m[2].padStart(2, "0")}`;
-  }
-  return raw;
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Istanbul",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  });
+  return formatter.format(new Date()); // "2026-05-28"
 }
 
 function currentTimeInIstanbul() {
