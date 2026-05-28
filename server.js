@@ -628,6 +628,37 @@ function todayIsoInIstanbul() {
   return raw;
 }
 
+function currentTimeInIstanbul() {
+  const now = new Date();
+  const timeStr = now.toLocaleTimeString("tr-TR", {
+    timeZone: "Europe/Istanbul",
+    hour12: false,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return timeStr; // e.g., "20:36"
+}
+
+function isJourneyInFuture(journeyDate, departureTime) {
+  // journeyDate: "2026-05-28", departureTime: "17:00"
+  const today = todayIsoInIstanbul();
+  const now = currentTimeInIstanbul(); // "HH:mm"
+  
+  // If journey date is in the future, always include it
+  if (journeyDate > today) {
+    return true;
+  }
+  
+  // If journey date is in the past, exclude it
+  if (journeyDate < today) {
+    return false;
+  }
+  
+  // Today: compare departure time with current time
+  const depTimeStr = String(departureTime || "").trim().substring(0, 5); // "17:00"
+  return depTimeStr > now; // "17:00" > "20:36"? false → excluded
+}
+
 function shiftIsoDate(dateIso, dayOffset) {
   const m = String(dateIso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) {
@@ -4984,6 +5015,10 @@ async function processObiletTarget(target) {
             const journeyStopKey = normalizeSearchText(journey.departureStop || "");
             return journeyStopKey.includes(departureStopFilterKey);
           })
+          .filter((journey) => {
+            // Exclude journeys with departure time in the past
+            return isJourneyInFuture(journeyDate, journey.time);
+          })
           .map((journey) => ({ ...journey, journey_date: journeyDate }));
 
         // Ayni firma+saat seferinde birden fazla kayit cikarsa tek kayda indir.
@@ -5042,10 +5077,16 @@ async function processObiletTarget(target) {
         );
 
         const existingRows = db
-          .prepare("SELECT id, operator, departure_time, departure_stop, arrival_stop FROM obilet_prices WHERE target_id = ? AND journey_date = ?")
+          .prepare("SELECT id, operator, departure_time, journey_date, departure_stop, arrival_stop FROM obilet_prices WHERE target_id = ? AND journey_date = ?")
           .all(target.id, journeyDate);
 
         for (const row of existingRows) {
+          // Clean up past departure times from today
+          if (!isJourneyInFuture(row.journey_date, row.departure_time)) {
+            db.prepare("DELETE FROM obilet_prices WHERE id = ?").run(row.id);
+            continue;
+          }
+
           const operatorMatched = targetOperators.some((op) => isObiletOperatorMatch(op, row.operator));
           if (!operatorMatched) {
             continue;
@@ -5398,12 +5439,16 @@ app.get("/api/obilet/prices/:targetId", requireAuth, (req, res) => {
   const targetId = Number(req.params.targetId);
   try {
     const prices = db.prepare("SELECT * FROM obilet_prices WHERE target_id = ? ORDER BY journey_date ASC, departure_time ASC").all(targetId);
+    
+    // Filter out past departure times (same journey_date, time < now)
+    const futurePrices = prices.filter(p => isJourneyInFuture(p.journey_date, p.departure_time));
+    
     const target = db
       .prepare("SELECT id, date, end_date, last_sync_status, last_sync_at FROM obilet_targets WHERE id = ?")
       .get(targetId);
     res.json({
       ok: true,
-      prices,
+      prices: futurePrices,
       targetStatus: target
         ? {
             date: target.date || "",
