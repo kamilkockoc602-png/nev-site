@@ -26,7 +26,7 @@ const OBILET_CHECK_INTERVAL_MS =
   (Number.isFinite(OBILET_CHECK_INTERVAL_MINUTES) && OBILET_CHECK_INTERVAL_MINUTES > 0
     ? OBILET_CHECK_INTERVAL_MINUTES
     : 5) * 60 * 1000;
-const OBILET_EMAIL_MODE = String(process.env.OBILET_EMAIL_MODE || "always")
+const OBILET_EMAIL_MODE = String(process.env.OBILET_EMAIL_MODE || "changes")
   .trim()
   .toLocaleLowerCase("tr-TR");
 const OBILET_EMAIL_INTERVAL_HOURS = Number.parseInt(
@@ -5244,38 +5244,19 @@ async function processObiletTarget(target) {
     if (emails.length > 0) {
       let shouldSendEmail = false;
       
-      if (OBILET_EMAIL_MODE === "smart") {
-        // Smart mod: Değişiklik varsa veya son mailden X saat geçmişse gönder
-        if (changes.length > 0) {
-          shouldSendEmail = true;
-          console.log("[Takip Görevi] Değişiklik tespit edildi, mail gönderiliyor...");
-        } else {
-          const lastEmailSentAt = target.last_email_sent_at || "";
-          if (!lastEmailSentAt) {
-            shouldSendEmail = true;
-            console.log("[Takip Görevi] İlk mail gönderiliyor...");
-          } else {
-            const lastEmailTime = new Date(lastEmailSentAt).getTime();
-            const nowTime = Date.now();
-            const hoursPassed = (nowTime - lastEmailTime) / (1000 * 60 * 60);
-            const intervalHours = Number.isFinite(OBILET_EMAIL_INTERVAL_HOURS) && OBILET_EMAIL_INTERVAL_HOURS > 0
-              ? OBILET_EMAIL_INTERVAL_HOURS
-              : 1;
-            
-            if (hoursPassed >= intervalHours) {
-              shouldSendEmail = true;
-              console.log(`[Takip Görevi] Son mailden ${hoursPassed.toFixed(1)} saat geçti, özet mail gönderiliyor...`);
-            } else {
-              console.log(`[Takip Görevi] Son mailden ${hoursPassed.toFixed(1)} saat geçti, henüz ${intervalHours} saat dolmadı.`);
-            }
-          }
-        }
-      } else if (OBILET_EMAIL_MODE === "changes") {
-        // Changes mod: Sadece değişiklik varsa gönder
+      if (OBILET_EMAIL_MODE === "changes") {
+        // Default mode: Sadece fiyat değişimi olunca mail gönder
         shouldSendEmail = changes.length > 0;
-      } else {
-        // Always mod: Her zaman gönder
+        if (!shouldSendEmail) {
+          console.log("[Takip Görevi] Fiyat değişikliği yok, mail gönderilmiyor.");
+        }
+      } else if (OBILET_EMAIL_MODE === "always") {
+        // Always mod: Her zaman gönder (spam olur, önerilmez)
         shouldSendEmail = true;
+      } else {
+        // Smart mod (DISABLED): Eski kod, deprecated
+        // Değişiklik olmayınca mail göndermemeliyiz - email spam yaratır
+        shouldSendEmail = changes.length > 0;
       }
       
       if (shouldSendEmail) {
