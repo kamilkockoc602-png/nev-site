@@ -4200,13 +4200,9 @@ async function scrapeObilet(origin, destination, dateIso) {
           };
 
           const collectCardPrices = (card) => {
-            const primaryPrices = [];
-            const secondaryPrices = [];
-            const fallbackPrices = [];
-            const orderedPrimary = [];
-            const sourceLog = []; // Track which selector found what price
+            const sourceLog = [];
             
-            const pushPrice = (value, source) => {
+            const parseAndValidate = (value, source) => {
               const parsed = parsePrice(value);
               if (parsed >= 300 && parsed <= 5000) {
                 sourceLog.push({ price: parsed, source, rawValue: value });
@@ -4215,87 +4211,41 @@ async function scrapeObilet(origin, destination, dateIso) {
               return 0;
             };
 
-            card.querySelectorAll("[data-price]").forEach((node) => {
-              const parsed = pushPrice(node.getAttribute("data-price"), "[data-price]");
-              if (parsed > 0) {
-                primaryPrices.push(parsed);
-                orderedPrimary.push(parsed);
-              }
-            });
+            // Strategy: Priority-based FIRST-MATCH (avoid modal confusion from mixed price types)
+            // Order: [data-amount] > [data-sale-price] > [data-price] > regex
+            // This prevents picking campaign/discount prices from conflicting sources
 
-            card.querySelectorAll("[data-amount], [data-sale-price]")
-              .forEach((node) => {
-                const a = pushPrice(node.getAttribute("data-amount"), "[data-amount]");
-                const b = pushPrice(node.getAttribute("data-sale-price"), "[data-sale-price]");
-                if (a > 0) {
-                  primaryPrices.push(a);
-                  orderedPrimary.push(a);
-                }
-                if (b > 0) {
-                  primaryPrices.push(b);
-                  orderedPrimary.push(b);
-                }
-              });
-
-            // DISABLED: CSS classes and itemprop selectors are unreliable and pick discount prices
-            // card
-            //   .querySelectorAll(
-            //     "[itemprop='price'], .no-cache-price, .ticket-price, .fare, .journey-price, [class*='journey-price'], [class*='trip-price']"
-            //   )
-            //   .forEach((node) => {
-            //     const parsed = pushPrice(node.getAttribute("content") || node.textContent || "", "[itemprop/price-class]");
-            //     if (parsed > 0) {
-            //       primaryPrices.push(parsed);
-            //       orderedPrimary.push(parsed);
-            //     }
-            //   });
-
-            // DISABLED: Generic class selectors often pick wrong elements
-            // card
-            //   .querySelectorAll(
-            //     ".price, .amount, .sale-price"
-            //   )
-            //   .forEach((node) => {
-            //     const parsed = pushPrice(node.textContent || "", ".price/.amount/.sale-price");
-            //     if (parsed > 0) secondaryPrices.push(parsed);
-            //   });
-
-            const text = card.textContent || "";
-            const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
-            for (const match of text.matchAll(regex)) {
-              const parsed = pushPrice(match[1], "regex-TL");
-              if (parsed > 0) fallbackPrices.push(parsed);
+            // 1. Try [data-amount] first (most reliable - actual ticket price)
+            for (const node of card.querySelectorAll("[data-amount]")) {
+              const price = parseAndValidate(node.getAttribute("data-amount"), "[data-amount]");
+              if (price > 0) return { prices: [price], sources: sourceLog };
             }
 
-            const dedupe = (arr) => Array.from(new Set(arr));
-            const primary = dedupe(primaryPrices);
-            const secondary = dedupe(secondaryPrices);
-            const fallback = dedupe(fallbackPrices);
+            // 2. Try [data-sale-price] (fallback to discounted but valid ticket price)
+            for (const node of card.querySelectorAll("[data-sale-price]")) {
+              const price = parseAndValidate(node.getAttribute("data-sale-price"), "[data-sale-price]");
+              if (price > 0) return { prices: [price], sources: sourceLog };
+            }
 
-            // Find most common (modal) primary price if multiple candidates
-            const getModalPrice = (arr) => {
-              if (!arr.length) return 0;
-              const counts = {};
-              let maxCount = 0, modalValue = arr[0];
-              arr.forEach(v => {
-                counts[v] = (counts[v] || 0) + 1;
-                if (counts[v] > maxCount) {
-                  maxCount = counts[v];
-                  modalValue = v;
-                }
-              });
-              return modalValue;
-            };
+            // 3. Try [data-price] (sometimes works, but often campaign/promo)
+            for (const node of card.querySelectorAll("[data-price]")) {
+              const price = parseAndValidate(node.getAttribute("data-price"), "[data-price]");
+              if (price > 0) return { prices: [price], sources: sourceLog };
+            }
 
-            // Use modal (most common) primary price instead of first, prevents DOM selection inconsistencies
-            const chosenPrimary = orderedPrimary.length ? getModalPrice(orderedPrimary) : 0;
-            const chosen = chosenPrimary || secondary[0] || fallback[0] || primary[0] || 0;
-            if (!chosen) return { prices: [], sources: sourceLog };
-            
-            return {
-              prices: [chosen, ...secondary.filter((v) => v !== chosen), ...fallback.filter((v) => v !== chosen)],
-              sources: sourceLog
-            };
+            // 4. Fallback: regex from text content (last resort, picks from visible text)
+            const text = card.textContent || "";
+            const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
+            const regexPrices = [];
+            for (const match of text.matchAll(regex)) {
+              const price = parseAndValidate(match[1], "regex-TL");
+              if (price > 0) regexPrices.push(price);
+            }
+            if (regexPrices.length > 0) {
+              return { prices: [regexPrices[0]], sources: sourceLog };
+            }
+
+            return { prices: [], sources: sourceLog };
           };
 
           const addJourney = (
