@@ -47,7 +47,7 @@ const OBILET_SUBJECT_PRICE_ALERT = String(process.env.OBILET_SUBJECT_PRICE_ALERT
 const OBILET_SUBJECT_TEST = String(process.env.OBILET_SUBJECT_TEST || "oBilet Test E-postasi").trim();
 const EMAIL_SIGNATURE_HTML = String(process.env.EMAIL_SIGNATURE_HTML || "").trim();
 const EMAIL_SIGNATURE_TEXT = String(process.env.EMAIL_SIGNATURE_TEXT || "").trim();
-const DEBUG_OBILET_PRICE = true; // TEMPORARY: Enable for 1 run to debug
+const DEBUG_OBILET_PRICE = false; // Set to true to debug price extraction
 const DEBUG_OBILET_API = String(process.env.DEBUG_OBILET_API || "").trim() === "1";
 const DEBUG_OBILET_XHR = String(process.env.DEBUG_OBILET_XHR || "").trim() === "1";
 const DEBUG_OBILET_XHR_BODY = String(process.env.DEBUG_OBILET_XHR_BODY || "").trim() === "1";
@@ -4894,6 +4894,13 @@ async function processObiletTarget(target) {
     const targetOperators = parseCsvList(target.operators)
       .map(normalizeObiletOperatorName)
       .filter(Boolean);
+    // Eğer firma seçilmemişse veya "*" varsa, TÜM firmaları kabul et
+    const acceptAllOperators = targetOperators.length === 0 || targetOperators.includes("*");
+    if (acceptAllOperators) {
+      console.log(`[Takip Görevi] TÜM firmalar kabul ediliyor (operator filtresi yok)`);
+    } else {
+      console.log(`[Takip Görevi] Sadece seçili firmalar: ${targetOperators.join(", ")}`);
+    }
     const departureStopFilter = String(target.departure_stop_filter || "").trim();
     const departureStopFilterKey = normalizeSearchText(departureStopFilter);
     const queryOriginPrimary = departureStopFilter || target.origin;
@@ -4917,11 +4924,12 @@ async function processObiletTarget(target) {
         });
 
         const dayTrackedRaw = journeys
-          .filter((journey) =>
-            targetOperators.some((op) =>
+          .filter((journey) => {
+            if (acceptAllOperators) return true;
+            return targetOperators.some((op) =>
               isObiletOperatorMatch(op, journey.operator)
-            )
-          )
+            );
+          })
           .filter((journey) => {
             if (!departureStopFilterKey) {
               return true;
@@ -4959,7 +4967,10 @@ async function processObiletTarget(target) {
           }
 
           const recheckTrackedRaw = recheckJourneys
-            .filter((item) => targetOperators.some((op) => isObiletOperatorMatch(op, item.operator)))
+            .filter((item) => {
+              if (acceptAllOperators) return true;
+              return targetOperators.some((op) => isObiletOperatorMatch(op, item.operator));
+            })
             .filter((item) => {
               if (!departureStopFilterKey) {
                 return true;
@@ -5001,7 +5012,7 @@ async function processObiletTarget(target) {
             continue;
           }
 
-          const operatorMatched = targetOperators.some((op) => isObiletOperatorMatch(op, row.operator));
+          const operatorMatched = acceptAllOperators || targetOperators.some((op) => isObiletOperatorMatch(op, row.operator));
           if (!operatorMatched) {
             continue;
           }
