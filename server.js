@@ -4247,17 +4247,36 @@ async function scrapeObilet(origin, destination, dateIso) {
             // Fallback to data attributes only if NO visible text price found
             for (const node of card.querySelectorAll("[data-amount]")) {
               const price = parseAndValidate(node.getAttribute("data-amount"), "[data-amount]");
-              if (price > 0) return { prices: [price], sources: sourceLog };
+              if (price > 0) {
+                if (debugMode) console.log(`[oBilet DEBUG] Data-amount fallback: ${price} TL`);
+                return { prices: [price], sources: sourceLog };
+              }
             }
 
             for (const node of card.querySelectorAll("[data-sale-price]")) {
               const price = parseAndValidate(node.getAttribute("data-sale-price"), "[data-sale-price]");
-              if (price > 0) return { prices: [price], sources: sourceLog };
+              if (price > 0) {
+                if (debugMode) console.log(`[oBilet DEBUG] Data-sale-price fallback: ${price} TL`);
+                return { prices: [price], sources: sourceLog };
+              }
             }
 
             for (const node of card.querySelectorAll("[data-price]")) {
               const price = parseAndValidate(node.getAttribute("data-price"), "[data-price]");
-              if (price > 0) return { prices: [price], sources: sourceLog };
+              if (price > 0) {
+                if (debugMode) console.log(`[oBilet DEBUG] Data-price fallback: ${price} TL`);
+                return { prices: [price], sources: sourceLog };
+              }
+            }
+
+            // DEBUG: Log cards with NO price found
+            if (debugMode) {
+              const operator = card.querySelector("[itemprop='provider'] meta[itemprop='name']")?.getAttribute("content") || 
+                               card.querySelector("[itemprop='provider'] img[alt]")?.getAttribute("alt") || 
+                               card.querySelector("img[alt]")?.getAttribute("alt") || "?";
+              const time = card.querySelector("[itemprop='departureTime']")?.textContent ||
+                           card.querySelector(".departure-time")?.textContent || "?";
+              console.log(`[oBilet DEBUG] NO PRICE FOUND - ${operator} ${time} - visible: ${allPrices.length > 0 ? allPrices.join(',') : 'NONE'}`);
             }
 
             return { prices: [], sources: sourceLog };
