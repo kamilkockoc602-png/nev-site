@@ -4598,33 +4598,10 @@ async function scrapeObilet(origin, destination, dateIso) {
                 detailJourneys.debugInfo.forEach(info => console.log(`[oBilet][DEBUG]   ${info}`));
               }
 
-              // Detay sayfasindaki fiyatlarla eslestir
-              for (const journey of journeys) {
-                if (DEBUG_OBILET_PRICE) {
-                  console.log(`[oBilet][DEBUG] Eslestirme araniyor: ${journey.operator} ${journey.time} (${journey.price} TL)`);
-                }
-
-                const detailMatch = detailJourneys.results.find((dj) => {
-                  const operatorMatch = toObiletOperatorMatchKey(dj.operator) === toObiletOperatorMatchKey(journey.operator);
-                  const timeMatch = String(dj.time || "").trim() === String(journey.time || "").trim();
-                  
-                  if (DEBUG_OBILET_PRICE && (operatorMatch || timeMatch)) {
-                    console.log(`[oBilet][DEBUG]     Test: ${dj.operator} ${dj.time} - operator:${operatorMatch} time:${timeMatch}`);
-                  }
-                  
-                  return operatorMatch && timeMatch;
-                });
-
-                if (detailMatch && detailMatch.price > 0 && (journey.price <= 0 || detailMatch.price > journey.price)) {
-                  if (DEBUG_OBILET_PRICE) {
-                    console.log(
-                      `[oBilet][DEBUG] Detay fiyat tercih edildi: ${journey.operator} ${journey.time} DOM:${journey.price} -> Detay:${detailMatch.price}`
-                    );
-                  }
-                  journey.price = detailMatch.price;
-                } else if (DEBUG_OBILET_PRICE) {
-                  console.log(`[oBilet][DEBUG]     Eslesme bulunamadi veya detay fiyat daha dusuk`);
-                }
+              // DISABLED: Detay sayfası fiyatları DOM fiyatlarını override etmesin
+              // DOM'dan gelen fiyat = doğru fiyat, detay sayfası farklı olabilir
+              if (DEBUG_OBILET_PRICE) {
+                console.log(`[oBilet][DEBUG] Detay sayfasinda ${detailJourneys.results.length} sefer bulundu (override DISABLED)`);
               }
 
               // Liste sayfasina geri don
@@ -4640,51 +4617,16 @@ async function scrapeObilet(origin, destination, dateIso) {
             }
           }
 
-          const detailTargets = journeys
-            .filter((journey) => journey.detailUrl)
-            .slice(0, maxDetailLookups);
-
-          for (const journey of detailTargets) {
-            const detailPrice = await fetchDetailPrice(journey.detailUrl);
-            if (detailPrice > 0 && (journey.price <= 0 || detailPrice > journey.price)) {
-              if (DEBUG_OBILET_PRICE) {
-                console.log(
-                  `[oBilet][DEBUG] Detay URL fiyat tercih edildi: ${journey.operator} ${journey.time} DOM:${journey.price} -> Detay:${detailPrice}`
-                );
-              }
-              journey.price = detailPrice;
-            }
+          // DISABLED: Detay URL fiyatları DOM fiyatlarını override etmesin
+          // DOM'dan gelen fiyat = doğru fiyat
+          if (DEBUG_OBILET_PRICE) {
+            console.log(`[oBilet][DEBUG] Detay URL override DISABLED - DOM fiyatlari kullaniliyor`);
           }
 
-          const clickTargets = journeys
-            .filter((journey) => !journey.detailUrl && journey.detailSelector)
-            .slice(0, maxDetailLookups);
-
-          for (const journey of clickTargets) {
-            const popupPromise = page.waitForEvent("popup", { timeout: 6000 }).catch(() => null);
-            await page.click(journey.detailSelector, { timeout: 3000 }).catch(() => null);
-            const popup = await popupPromise;
-            if (!popup) continue;
-
-            try {
-              await popup.waitForLoadState("networkidle", { timeout: 30000 });
-              await new Promise((resolve) => setTimeout(resolve, 1500));
-              const popupPrice = await readMinPriceFromPage(popup);
-              if (popupPrice > 0 && (journey.price <= 0 || popupPrice > journey.price)) {
-                if (DEBUG_OBILET_PRICE) {
-                  console.log(
-                    `[oBilet][DEBUG] Popup fiyat tercih edildi: ${journey.operator} ${journey.time} DOM:${journey.price} -> Popup:${popupPrice}`
-                  );
-                }
-                journey.price = popupPrice;
-              }
-            } catch (error) {
-              if (DEBUG_OBILET_PRICE) {
-                console.log(`[oBilet][DEBUG] Popup fiyat hatasi: ${error.message}`);
-              }
-            } finally {
-              await popup.close().catch(() => {});
-            }
+          // DISABLED: Popup fiyatları DOM fiyatlarını override etmesin
+          // DOM'dan gelen fiyat = doğru fiyat
+          if (DEBUG_OBILET_PRICE) {
+            console.log(`[oBilet][DEBUG] Popup override DISABLED - DOM fiyatlari kullaniliyor`);
           }
 
           console.log(`[oBilet] Basariyla ${journeys.length} adet sefer yuklendi.`);
