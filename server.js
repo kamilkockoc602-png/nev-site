@@ -4185,8 +4185,9 @@ async function scrapeObilet(origin, destination, dateIso) {
           return results.slice(0, maxPayloads);
         });
 
-        let journeys = await page.evaluate((debugMode) => {
+        const scrapeResult = await page.evaluate((debugMode) => {
           const items = [];
+          const debugInfo = [];
           const seen = new Set();
 
           const normalizeOperator = (value) => String(value || "").replace(/\s+/g, " ").trim();
@@ -4299,7 +4300,7 @@ async function scrapeObilet(origin, destination, dateIso) {
           const cardNodes = Array.from(document.querySelectorAll("li[itemprop='busTrip'], .journeys li"));
           
           if (debugMode) {
-            console.log(`[oBilet DEBUG] Toplam ${cardNodes.length} kart bulundu`);
+            debugInfo.push(`Toplam ${cardNodes.length} kart bulundu`);
           }
           
           cardNodes.forEach((card, cardIndex) => {
@@ -4323,7 +4324,7 @@ async function scrapeObilet(origin, destination, dateIso) {
             const bestPrice = priceCandidates.length > 0 ? priceCandidates[0] : 0;
 
             if (shouldDebug) {
-              console.log(`[oBilet DEBUG] Kart ${cardIndex + 1}: ${operator} ${departure} - Fiyat: ${bestPrice > 0 ? bestPrice + ' TL' : 'YOK'} - Kaynak: ${debugSources.length > 0 ? debugSources[0].source : 'NONE'} - AllPrices: [${debugSources.map(s => s.price).join(', ')}]`);
+              debugInfo.push(`Kart ${cardIndex + 1}: ${operator} ${departure} - Fiyat: ${bestPrice > 0 ? bestPrice + ' TL' : 'YOK'} - Kaynak: ${debugSources.length > 0 ? debugSources[0].source : 'NONE'} - AllPrices: [${debugSources.map(s => s.price).join(', ')}]`);
             }
 
             const departureStop =
@@ -4403,8 +4404,14 @@ async function scrapeObilet(origin, destination, dateIso) {
             });
           }
 
-          return items;
+          return { items, debugInfo };
         }, DEBUG_OBILET_PRICE);
+
+        // Extract journeys and log debug info from browser context
+        let journeys = scrapeResult.items || [];
+        if (DEBUG_OBILET_PRICE && scrapeResult.debugInfo && scrapeResult.debugInfo.length > 0) {
+          scrapeResult.debugInfo.forEach(msg => console.log(`[oBilet DEBUG] ${msg}`));
+        }
 
         const embeddedJourneys = [];
         if (embeddedPayloads.length > 0) {
