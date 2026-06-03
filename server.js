@@ -4422,22 +4422,17 @@ async function scrapeObilet(origin, destination, dateIso) {
             journeys = journeys.map((journey) => {
               const key = `${toObiletOperatorMatchKey(journey.operator)}|${String(journey.time || "").trim()}`;
               const apiMatch = apiMap.get(key);
-              if (apiMatch && apiMatch.price > 0) {
-                // API fiyati her zaman DOM fiyatindan daha guvenilirdir.
-                // DOM scraping yanlis fiyat cekmis olabilir (ornegin kampanya/indirim fiyati).
-                if (DEBUG_OBILET_PRICE) {
-                  console.log(
-                    `[oBilet][DEBUG] API fiyat tercih edildi: ${journey.operator} ${journey.time} DOM:${journey.price} -> API:${apiMatch.price}`
-                  );
-                }
-                return {
-                  ...journey,
-                  price: apiMatch.price,
-                  departureStop: apiMatch.departureStop || journey.departureStop,
-                  arrivalStop: apiMatch.arrivalStop || journey.arrivalStop,
-                };
-              }
-              return journey;
+              // DISABLED: API fiyati cogu zaman yanliste
+              // DOM'dan okunan TL fiyati (visible-text-TL) en guvenilir kaynaktir
+              // if (apiMatch && apiMatch.price > 0) {
+              //   return {
+              //     ...journey,
+              //     price: apiMatch.price,
+              //     departureStop: apiMatch.departureStop || journey.departureStop,
+              //     arrivalStop: apiMatch.arrivalStop || journey.arrivalStop,
+              //   };
+              // }
+              return journey; // Always use DOM price
             });
           } else {
             journeys = Array.from(apiMap.values());
