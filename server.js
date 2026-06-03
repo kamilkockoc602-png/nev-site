@@ -4298,6 +4298,13 @@ async function scrapeObilet(origin, destination, dateIso) {
             // Karttaki ana fiyat degerini tercih et.
             const bestPrice = priceCandidates.length > 0 ? priceCandidates[0] : 0;
 
+            if (debugMode && bestPrice > 0 && debugSources.length > 0) {
+              const selectedSource = debugSources.find(s => s.price === bestPrice);
+              if (selectedSource) {
+                console.log(`[oBilet DEBUG] Fiyat: ${bestPrice} TL, Kaynak: ${selectedSource.source}, İşletmeci: ${operator}, Saat: ${departure}`);
+              }
+            }
+
             const departureStop =
               card.querySelector("[itemprop='departureBusStop'] [itemprop='name']")?.textContent ||
               card.querySelector("[itemprop='departureBusStop']")?.textContent ||
