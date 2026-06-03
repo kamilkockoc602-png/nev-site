@@ -4201,54 +4201,54 @@ async function scrapeObilet(origin, destination, dateIso) {
 
           const collectCardPrices = (card) => {
             const sourceLog = [];
-            const allPrices = []; // Collect ALL found prices with sources
             
             const parseAndValidate = (value, source) => {
               const parsed = parsePrice(value);
               if (parsed >= 300 && parsed <= 5000) {
                 sourceLog.push({ price: parsed, source, rawValue: value });
-                allPrices.push({ price: parsed, source });
                 return parsed;
               }
               return 0;
             };
 
-            // Strategy: Collect ALL prices from all sources, then pick MAXIMUM
-            // (because campaign prices are ALWAYS lower than normal prices)
-            // This way: [data-amount]=1600 + [data-price]=2000 → pick 2000 ✓
+            // Strategy: Use VISIBLE text price (what user sees on screen)
+            // Ignore [data-*] attributes because they're invisible
+            // Pick FIRST TL price from card text (sayfa top-to-bottom render'da bulunur)
+            // This way: campaign price = 1100, kampanya var = 1100 ✓
+            // Normal price = 1100, kampanya yok = 1100 ✓
 
-            // 1. Collect from [data-amount] (often campaign/discount)
-            for (const node of card.querySelectorAll("[data-amount]")) {
-              parseAndValidate(node.getAttribute("data-amount"), "[data-amount]");
-            }
-
-            // 2. Collect from [data-sale-price]
-            for (const node of card.querySelectorAll("[data-sale-price]")) {
-              parseAndValidate(node.getAttribute("data-sale-price"), "[data-sale-price]");
-            }
-
-            // 3. Collect from [data-price] (usually normal/list price)
-            for (const node of card.querySelectorAll("[data-price]")) {
-              parseAndValidate(node.getAttribute("data-price"), "[data-price]");
-            }
-
-            // 4. Collect from regex fallback (visible text prices)
             const text = card.textContent || "";
             const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
+            
+            // FIRST matched TL price (visible on page)
             for (const match of text.matchAll(regex)) {
-              parseAndValidate(match[1], "regex-TL");
+              const price = parseAndValidate(match[1], "visible-text-TL");
+              if (price > 0) {
+                // Return first found (exactly what user sees)
+                return {
+                  prices: [price],
+                  sources: sourceLog
+                };
+              }
             }
 
-            // Return HIGHEST price (normal) instead of first (campaign)
-            if (allPrices.length === 0) {
-              return { prices: [], sources: sourceLog };
+            // Fallback to data attributes only if NO visible text price found
+            for (const node of card.querySelectorAll("[data-amount]")) {
+              const price = parseAndValidate(node.getAttribute("data-amount"), "[data-amount]");
+              if (price > 0) return { prices: [price], sources: sourceLog };
             }
 
-            const maxPrice = Math.max(...allPrices.map(p => p.price));
-            return {
-              prices: [maxPrice],
-              sources: sourceLog
-            };
+            for (const node of card.querySelectorAll("[data-sale-price]")) {
+              const price = parseAndValidate(node.getAttribute("data-sale-price"), "[data-sale-price]");
+              if (price > 0) return { prices: [price], sources: sourceLog };
+            }
+
+            for (const node of card.querySelectorAll("[data-price]")) {
+              const price = parseAndValidate(node.getAttribute("data-price"), "[data-price]");
+              if (price > 0) return { prices: [price], sources: sourceLog };
+            }
+
+            return { prices: [], sources: sourceLog };
           };
 
           const addJourney = (
