@@ -4419,28 +4419,16 @@ async function scrapeObilet(origin, destination, dateIso) {
           });
 
           if (journeys.length > 0) {
-            journeys = journeys.map((journey) => {
-              const key = `${toObiletOperatorMatchKey(journey.operator)}|${String(journey.time || "").trim()}`;
-              const apiMatch = apiMap.get(key);
-              
-              // Strategy: DOM fiyatı (visible-text-TL) birincil kaynak
-              // Eğer DOM fiyatı yoksa veya 0 ise, API'den fiyat al (fallback)
-              if (journey.price > 0) {
-                // DOM fiyatı güvenilir, kullan
+            journeys = journeys
+              .map((journey) => {
+                // Strategy: DOM fiyat (visible-text-TL) ONLY
+                // Eğer DOM'dan fiyat okunamadıysa, sefer geçersiz
+                // API'den fiyat alma - yanlış risk çok yüksek
                 return journey;
-              } else if (apiMatch && apiMatch.price > 0) {
-                // DOM'da fiyat bulunamadı, API'den al
-                return {
-                  ...journey,
-                  price: apiMatch.price,
-                  departureStop: apiMatch.departureStop || journey.departureStop,
-                  arrivalStop: apiMatch.arrivalStop || journey.arrivalStop,
-                };
-              }
-              return journey;
-            });
+              })
+              .filter((journey) => journey.price > 0); // Fiyatsız seferleri at
           } else {
-            journeys = Array.from(apiMap.values());
+            journeys = []; // API seferleri de kullanma, sadece DOM
           }
         }
 
