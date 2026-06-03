@@ -3650,13 +3650,25 @@ function isObiletOperatorMatch(selectedOperator, scrapedOperator) {
   return scrapedKey.includes(selectedKey) || selectedKey.includes(scrapedKey);
 }
 
-function buildJourneyIdentityKey(operator, departureTime) {
-  // Ayni firma + ayni saat = ayni sefer
-  // NOT: departureStop kullanmiyoruz cunku oBilet'te ayni durak farkli yazilabiliyor
-  return [
+function buildJourneyIdentityKey(operator, departureTime, departureStop = "", price = 0) {
+  // Aynı firma + aynı saat + aynı durak + aynı fiyat = aynı sefer
+  // NOT: departureStop ve price eklendi - aynı firma aynı saatte farklı araçlar/duraklar olabilir
+  const parts = [
     toObiletOperatorMatchKey(operator),
     String(departureTime || "").trim(),
-  ].join("|");
+  ];
+  
+  // departureStop varsa ekle (normalize edilmiş halde)
+  if (departureStop) {
+    parts.push(normalizeSearchText(departureStop));
+  }
+  
+  // Price varsa ekle
+  if (price > 0) {
+    parts.push(String(price));
+  }
+  
+  return parts.join("|");
 }
 
 function extractObiletJourneysFromApiPayload(payload) {
@@ -4959,11 +4971,10 @@ async function processObiletTarget(target) {
           })
           .map((journey) => ({ ...journey, journey_date: journeyDate }));
 
-        // Ayni firma+saat seferinde birden fazla kayit cikarsa tek kayda indir.
-        // Ilk okunan kart fiyati ana fiyat olarak kabul edilir.
+        // Ayni firma+saat+durak+fiyat seferinde birden fazla kayit cikarsa tek kayda indir.
         const dayTrackedMap = new Map();
         for (const journey of dayTrackedRaw) {
-          const key = buildJourneyIdentityKey(journey.operator, journey.time);
+          const key = buildJourneyIdentityKey(journey.operator, journey.time, journey.departureStop, journey.price);
           const existing = dayTrackedMap.get(key);
           if (!existing) {
             dayTrackedMap.set(key, journey);
@@ -4998,7 +5009,7 @@ async function processObiletTarget(target) {
 
           const map = new Map();
           for (const item of recheckTrackedRaw) {
-            const key = buildJourneyIdentityKey(item.operator, item.time);
+            const key = buildJourneyIdentityKey(item.operator, item.time, item.departureStop, item.price);
             if (!map.has(key)) {
               map.set(key, item);
             }
@@ -5012,7 +5023,9 @@ async function processObiletTarget(target) {
           dayTracked.map((journey) =>
             buildJourneyIdentityKey(
               journey.operator,
-              journey.time
+              journey.time,
+              journey.departureStop,
+              journey.price
             )
           )
         );
@@ -5042,7 +5055,9 @@ async function processObiletTarget(target) {
 
           const rowKey = buildJourneyIdentityKey(
             row.operator,
-            row.departure_time
+            row.departure_time,
+            row.departure_stop,
+            row.price
           );
 
           if (!currentKeys.has(rowKey)) {
@@ -5054,12 +5069,12 @@ async function processObiletTarget(target) {
 
         for (const journey of dayTracked) {
           const normalizedOperator = normalizeObiletOperatorName(journey.operator) || journey.operator;
-          const journeyKey = buildJourneyIdentityKey(normalizedOperator, journey.time);
+          const journeyKey = buildJourneyIdentityKey(normalizedOperator, journey.time, journey.departureStop, journey.price);
           const candidates = db.prepare(
             "SELECT * FROM obilet_prices WHERE target_id = ? AND journey_date = ? AND departure_time = ? ORDER BY last_updated DESC"
           ).all(target.id, journey.journey_date, journey.time);
           const previous = candidates.find(
-            (row) => buildJourneyIdentityKey(row.operator, row.departure_time) === journeyKey
+            (row) => buildJourneyIdentityKey(row.operator, row.departure_time, row.departure_stop, row.price) === journeyKey
           );
 
           if (previous) {
