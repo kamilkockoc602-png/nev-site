@@ -4227,19 +4227,13 @@ async function scrapeObilet(origin, destination, dateIso) {
               }
             }
 
-            // Get modal (most common) price
+            // Get MINIMUM price (cheapest option for user)
+            // Reason: Cards may show multiple prices (e.g., 700 TL economy + 750 TL business)
+            // User wants the cheapest, not the most common
             if (allPrices.length > 0) {
-              const counts = {};
-              let maxCount = 0, modalPrice = allPrices[0];
-              allPrices.forEach(p => {
-                counts[p] = (counts[p] || 0) + 1;
-                if (counts[p] > maxCount) {
-                  maxCount = counts[p];
-                  modalPrice = p;
-                }
-              });
+              const minPrice = Math.min(...allPrices);
               return {
-                prices: [modalPrice],
+                prices: [minPrice],
                 sources: sourceLog
               };
             }
@@ -4290,7 +4284,8 @@ async function scrapeObilet(origin, destination, dateIso) {
             arrivalStop = "",
             debugPrices = [],
             detailUrl = "",
-            detailSelector = ""
+            detailSelector = "",
+            cardIndex = 0
           ) => {
             const safeOperator = normalizeOperator(operator);
             const safeTime = String(time || "").trim();
@@ -4298,7 +4293,8 @@ async function scrapeObilet(origin, destination, dateIso) {
             const safeDepartureStop = String(departureStop || "").replace(/\s+/g, " ").trim();
             const safeArrivalStop = String(arrivalStop || "").replace(/\s+/g, " ").trim();
             if (!safeOperator || !safeTime || safePrice <= 0) return;
-            const key = `${safeOperator}|${safeTime}|${safePrice}|${safeDepartureStop}|${safeArrivalStop}`;
+            // Include cardIndex to allow multiple journeys with same operator/time/price (different vehicles/seat types)
+            const key = `${cardIndex}|${safeOperator}|${safeTime}|${safePrice}|${safeDepartureStop}|${safeArrivalStop}`;
             if (seen.has(key)) return;
             seen.add(key);
             items.push({
@@ -4395,17 +4391,18 @@ async function scrapeObilet(origin, destination, dateIso) {
               arrivalStop,
               debugSources.map(s => `${s.price}(${s.source})`),
               detailUrl,
-              detailSelector
+              detailSelector,
+              cardIndex
             );
           });
 
           if (!items.length) {
             const allText = document.body?.innerText || "";
             const blockCandidates = allText.split(/SATIN AL/i);
-            for (const block of blockCandidates) {
+            blockCandidates.forEach((block, blockIndex) => {
               const times = block.match(/\b([01]\d|2[0-3]):[0-5]\d\b/g) || [];
               const priceMatch = block.match(/(\d{1,3}(?:\.\d{3})*|\d+)\s*₺/);
-              if (times.length < 1 || !priceMatch) continue;
+              if (times.length < 1 || !priceMatch) return;
 
               const lines = block
                 .split("\n")
@@ -4413,8 +4410,8 @@ async function scrapeObilet(origin, destination, dateIso) {
                 .filter(Boolean);
               const ignored = new Set(["2+1", "2+2", "Adana", "Ankara"]);
               const operator = lines.find((line) => !ignored.has(line) && !line.includes("Otogarı") && !/^\d{1,2}:\d{2}$/.test(line));
-              addJourney(operator || "Bilinmeyen Firma", times[0], parsePrice(priceMatch[1]));
-            }
+              addJourney(operator || "Bilinmeyen Firma", times[0], parsePrice(priceMatch[1]), "", "", [], "", "", 999 + blockIndex);
+            });
           }
 
           return items;
