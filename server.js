@@ -4314,7 +4314,12 @@ async function scrapeObilet(origin, destination, dateIso) {
           };
 
           const cardNodes = Array.from(document.querySelectorAll("li[itemprop='busTrip'], .journeys li"));
-          cardNodes.forEach((card) => {
+          
+          if (debugMode) {
+            console.log(`[oBilet DEBUG] Toplam ${cardNodes.length} kart bulundu`);
+          }
+          
+          cardNodes.forEach((card, cardIndex) => {
             const operator =
               card.querySelector("[itemprop='provider'] meta[itemprop='name']")?.getAttribute("content") ||
               card.querySelector("[itemprop='provider'] img[alt]")?.getAttribute("alt") ||
@@ -4332,11 +4337,8 @@ async function scrapeObilet(origin, destination, dateIso) {
             // Karttaki ana fiyat degerini tercih et.
             const bestPrice = priceCandidates.length > 0 ? priceCandidates[0] : 0;
 
-            if (debugMode && bestPrice > 0 && debugSources.length > 0) {
-              const selectedSource = debugSources.find(s => s.price === bestPrice);
-              if (selectedSource) {
-                console.log(`[oBilet DEBUG] Fiyat: ${bestPrice} TL, Kaynak: ${selectedSource.source}, İşletmeci: ${operator}, Saat: ${departure}`);
-              }
+            if (debugMode) {
+              console.log(`[oBilet DEBUG] Kart ${cardIndex + 1}: ${operator} ${departure} - Fiyat: ${bestPrice > 0 ? bestPrice + ' TL' : 'YOK'} - Kaynak: ${debugSources.length > 0 ? debugSources[0].source : 'NONE'}`);
             }
 
             const departureStop =
