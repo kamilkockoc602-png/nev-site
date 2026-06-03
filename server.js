@@ -4418,30 +4418,14 @@ async function scrapeObilet(origin, destination, dateIso) {
           console.log(`[oBilet][DEBUG] Gömülü JSON sefer bulundu: ${embeddedJourneys.length}`);
         }
 
-        if (apiJourneys.length > 0 || embeddedJourneys.length > 0) {
-          const apiMap = new Map();
-          const mergeSource = apiJourneys.length > 0 ? apiJourneys : embeddedJourneys;
-          mergeSource.forEach((journey) => {
-            const key = `${toObiletOperatorMatchKey(journey.operator)}|${String(journey.time || "").trim()}`;
-            const existing = apiMap.get(key);
-            // API'den gelen en yuksek fiyati tercih et (dusuk fiyat kampanya/indirim olabilir)
-            if (!existing || journey.price > existing.price) {
-              apiMap.set(key, journey);
-            }
-          });
+        // DISABLED: API fiyatları yanlış olduğu için
+        // DOM sefer taşıyabilirsek (1600 TL) ama API yanlış fiyat verir (2100 TL)
+        // Bundan sonra SADECE DOM fiyatları kullan
+        // if (apiJourneys.length > 0 || embeddedJourneys.length > 0) { ... }
 
-          if (journeys.length > 0) {
-            journeys = journeys
-              .map((journey) => {
-                // Strategy: DOM fiyat (visible-text-TL) ONLY
-                // Eğer DOM'dan fiyat okunamadıysa, sefer geçersiz
-                // API'den fiyat alma - yanlış risk çok yüksek
-                return journey;
-              })
-              .filter((journey) => journey.price > 0); // Fiyatsız seferleri at
-          } else {
-            journeys = []; // API seferleri de kullanma, sadece DOM
-          }
+        // Filter: fiyatsız seferleri at
+        if (journeys.length > 0) {
+          journeys = journeys.filter((journey) => journey.price > 0);
         }
 
         if (journeys.length > 0) {
