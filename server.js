@@ -4284,12 +4284,11 @@ async function scrapeObilet(origin, destination, dateIso) {
 
           const cardNodes = Array.from(document.querySelectorAll("li[itemprop='busTrip'], .journeys li"));
           cardNodes.forEach((card) => {
-            // Extract operator with detailed fallback logging
-            const operatorMeta = card.querySelector("[itemprop='provider'] meta[itemprop='name']")?.getAttribute("content");
-            const operatorImg = card.querySelector("[itemprop='provider'] img[alt]")?.getAttribute("alt");
-            const operatorAlt = card.querySelector("img[alt]")?.getAttribute("alt");
-            
-            const operator = operatorMeta || operatorImg || operatorAlt || "";
+            const operator =
+              card.querySelector("[itemprop='provider'] meta[itemprop='name']")?.getAttribute("content") ||
+              card.querySelector("[itemprop='provider'] img[alt]")?.getAttribute("alt") ||
+              card.querySelector("img[alt]")?.getAttribute("alt") ||
+              "";
 
             const departure =
               card.querySelector("[itemprop='departureTime']")?.textContent ||
@@ -4302,9 +4301,11 @@ async function scrapeObilet(origin, destination, dateIso) {
             // Karttaki ana fiyat degerini tercih et.
             const bestPrice = priceCandidates.length > 0 ? priceCandidates[0] : 0;
 
-            if (debugMode) {
-              const selectedSource = debugSources.length > 0 ? debugSources[0] : null;
-              console.log(`[oBilet DEBUG] Sefer: ${operator} ${departure} ${bestPrice}TL | Kaynaklar: [meta=${operatorMeta||"null"}, img=${operatorImg||"null"}, alt=${operatorAlt||"null"}] | Fiyat kaynağı: ${selectedSource?.source || "bulunamadı"}`);
+            if (debugMode && bestPrice > 0 && debugSources.length > 0) {
+              const selectedSource = debugSources.find(s => s.price === bestPrice);
+              if (selectedSource) {
+                console.log(`[oBilet DEBUG] Fiyat: ${bestPrice} TL, Kaynak: ${selectedSource.source}, İşletmeci: ${operator}, Saat: ${departure}`);
+              }
             }
 
             const departureStop =
