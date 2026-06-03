@@ -4201,51 +4201,54 @@ async function scrapeObilet(origin, destination, dateIso) {
 
           const collectCardPrices = (card) => {
             const sourceLog = [];
+            const allPrices = []; // Collect ALL found prices with sources
             
             const parseAndValidate = (value, source) => {
               const parsed = parsePrice(value);
               if (parsed >= 300 && parsed <= 5000) {
                 sourceLog.push({ price: parsed, source, rawValue: value });
+                allPrices.push({ price: parsed, source });
                 return parsed;
               }
               return 0;
             };
 
-            // Strategy: Priority-based FIRST-MATCH (avoid modal confusion from mixed price types)
-            // Order: [data-amount] > [data-sale-price] > [data-price] > regex
-            // This prevents picking campaign/discount prices from conflicting sources
+            // Strategy: Collect ALL prices from all sources, then pick MAXIMUM
+            // (because campaign prices are ALWAYS lower than normal prices)
+            // This way: [data-amount]=1600 + [data-price]=2000 → pick 2000 ✓
 
-            // 1. Try [data-amount] first (most reliable - actual ticket price)
+            // 1. Collect from [data-amount] (often campaign/discount)
             for (const node of card.querySelectorAll("[data-amount]")) {
-              const price = parseAndValidate(node.getAttribute("data-amount"), "[data-amount]");
-              if (price > 0) return { prices: [price], sources: sourceLog };
+              parseAndValidate(node.getAttribute("data-amount"), "[data-amount]");
             }
 
-            // 2. Try [data-sale-price] (fallback to discounted but valid ticket price)
+            // 2. Collect from [data-sale-price]
             for (const node of card.querySelectorAll("[data-sale-price]")) {
-              const price = parseAndValidate(node.getAttribute("data-sale-price"), "[data-sale-price]");
-              if (price > 0) return { prices: [price], sources: sourceLog };
+              parseAndValidate(node.getAttribute("data-sale-price"), "[data-sale-price]");
             }
 
-            // 3. Try [data-price] (sometimes works, but often campaign/promo)
+            // 3. Collect from [data-price] (usually normal/list price)
             for (const node of card.querySelectorAll("[data-price]")) {
-              const price = parseAndValidate(node.getAttribute("data-price"), "[data-price]");
-              if (price > 0) return { prices: [price], sources: sourceLog };
+              parseAndValidate(node.getAttribute("data-price"), "[data-price]");
             }
 
-            // 4. Fallback: regex from text content (last resort, picks from visible text)
+            // 4. Collect from regex fallback (visible text prices)
             const text = card.textContent || "";
             const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
-            const regexPrices = [];
             for (const match of text.matchAll(regex)) {
-              const price = parseAndValidate(match[1], "regex-TL");
-              if (price > 0) regexPrices.push(price);
-            }
-            if (regexPrices.length > 0) {
-              return { prices: [regexPrices[0]], sources: sourceLog };
+              parseAndValidate(match[1], "regex-TL");
             }
 
-            return { prices: [], sources: sourceLog };
+            // Return HIGHEST price (normal) instead of first (campaign)
+            if (allPrices.length === 0) {
+              return { prices: [], sources: sourceLog };
+            }
+
+            const maxPrice = Math.max(...allPrices.map(p => p.price));
+            return {
+              prices: [maxPrice],
+              sources: sourceLog
+            };
           };
 
           const addJourney = (
