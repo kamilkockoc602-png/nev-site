@@ -47,7 +47,7 @@ const OBILET_SUBJECT_PRICE_ALERT = String(process.env.OBILET_SUBJECT_PRICE_ALERT
 const OBILET_SUBJECT_TEST = String(process.env.OBILET_SUBJECT_TEST || "oBilet Test E-postasi").trim();
 const EMAIL_SIGNATURE_HTML = String(process.env.EMAIL_SIGNATURE_HTML || "").trim();
 const EMAIL_SIGNATURE_TEXT = String(process.env.EMAIL_SIGNATURE_TEXT || "").trim();
-const DEBUG_OBILET_PRICE = false; // DISABLED: Railway log limit (was: process.env.DEBUG_OBILET_PRICE === "1")
+const DEBUG_OBILET_PRICE = true; // TEMPORARY: Enable for 1 run to debug
 const DEBUG_OBILET_API = String(process.env.DEBUG_OBILET_API || "").trim() === "1";
 const DEBUG_OBILET_XHR = String(process.env.DEBUG_OBILET_XHR || "").trim() === "1";
 const DEBUG_OBILET_XHR_BODY = String(process.env.DEBUG_OBILET_XHR_BODY || "").trim() === "1";
@@ -4242,7 +4242,6 @@ async function scrapeObilet(origin, destination, dateIso) {
             for (const node of card.querySelectorAll("[data-amount]")) {
               const price = parseAndValidate(node.getAttribute("data-amount"), "[data-amount]");
               if (price > 0) {
-                if (debugMode) console.log(`[oBilet DEBUG] Data-amount fallback: ${price} TL`);
                 return { prices: [price], sources: sourceLog };
               }
             }
@@ -4250,7 +4249,6 @@ async function scrapeObilet(origin, destination, dateIso) {
             for (const node of card.querySelectorAll("[data-sale-price]")) {
               const price = parseAndValidate(node.getAttribute("data-sale-price"), "[data-sale-price]");
               if (price > 0) {
-                if (debugMode) console.log(`[oBilet DEBUG] Data-sale-price fallback: ${price} TL`);
                 return { prices: [price], sources: sourceLog };
               }
             }
@@ -4258,19 +4256,8 @@ async function scrapeObilet(origin, destination, dateIso) {
             for (const node of card.querySelectorAll("[data-price]")) {
               const price = parseAndValidate(node.getAttribute("data-price"), "[data-price]");
               if (price > 0) {
-                if (debugMode) console.log(`[oBilet DEBUG] Data-price fallback: ${price} TL`);
                 return { prices: [price], sources: sourceLog };
               }
-            }
-
-            // DEBUG: Log cards with NO price found
-            if (debugMode) {
-              const operator = card.querySelector("[itemprop='provider'] meta[itemprop='name']")?.getAttribute("content") || 
-                               card.querySelector("[itemprop='provider'] img[alt]")?.getAttribute("alt") || 
-                               card.querySelector("img[alt]")?.getAttribute("alt") || "?";
-              const time = card.querySelector("[itemprop='departureTime']")?.textContent ||
-                           card.querySelector(".departure-time")?.textContent || "?";
-              console.log(`[oBilet DEBUG] NO PRICE FOUND - ${operator} ${time} - visible: ${allPrices.length > 0 ? allPrices.join(',') : 'NONE'}`);
             }
 
             return { prices: [], sources: sourceLog };
@@ -4316,6 +4303,8 @@ async function scrapeObilet(origin, destination, dateIso) {
           }
           
           cardNodes.forEach((card, cardIndex) => {
+            // TEMPORARY: Debug only first 10 cards to avoid log flood
+            const shouldDebug = debugMode && cardIndex < 10;
             const operator =
               card.querySelector("[itemprop='provider'] meta[itemprop='name']")?.getAttribute("content") ||
               card.querySelector("[itemprop='provider'] img[alt]")?.getAttribute("alt") ||
@@ -4333,8 +4322,8 @@ async function scrapeObilet(origin, destination, dateIso) {
             // Karttaki ana fiyat degerini tercih et.
             const bestPrice = priceCandidates.length > 0 ? priceCandidates[0] : 0;
 
-            if (debugMode) {
-              console.log(`[oBilet DEBUG] Kart ${cardIndex + 1}: ${operator} ${departure} - Fiyat: ${bestPrice > 0 ? bestPrice + ' TL' : 'YOK'} - Kaynak: ${debugSources.length > 0 ? debugSources[0].source : 'NONE'}`);
+            if (shouldDebug) {
+              console.log(`[oBilet DEBUG] Kart ${cardIndex + 1}: ${operator} ${departure} - Fiyat: ${bestPrice > 0 ? bestPrice + ' TL' : 'YOK'} - Kaynak: ${debugSources.length > 0 ? debugSources[0].source : 'NONE'} - AllPrices: [${debugSources.map(s => s.price).join(', ')}]`);
             }
 
             const departureStop =
