@@ -4211,25 +4211,37 @@ async function scrapeObilet(origin, destination, dateIso) {
               return 0;
             };
 
-            // Strategy: Use VISIBLE text price (what user sees on screen)
-            // Ignore [data-*] attributes because they're invisible
-            // Pick FIRST TL price from card text (sayfa top-to-bottom render'da bulunur)
-            // This way: campaign price = 1100, kampanya var = 1100 ✓
-            // Normal price = 1100, kampanya yok = 1100 ✓
+            // Strategy: Find ALL TL prices in visible text, pick MODAL (most common)
+            // Modal price = most frequently appearing price = normal price
+            // (because campaign/promo appears once or twice, normal appears multiple times)
+            // Example: "700 TL, 700 TL, 700 TL" (modal) + "750 TL" (promo) -> pick 700
 
             const text = card.textContent || "";
             const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
             
-            // FIRST matched TL price (visible on page)
+            const allPrices = [];
             for (const match of text.matchAll(regex)) {
               const price = parseAndValidate(match[1], "visible-text-TL");
               if (price > 0) {
-                // Return first found (exactly what user sees)
-                return {
-                  prices: [price],
-                  sources: sourceLog
-                };
+                allPrices.push(price);
               }
+            }
+
+            // Get modal (most common) price
+            if (allPrices.length > 0) {
+              const counts = {};
+              let maxCount = 0, modalPrice = allPrices[0];
+              allPrices.forEach(p => {
+                counts[p] = (counts[p] || 0) + 1;
+                if (counts[p] > maxCount) {
+                  maxCount = counts[p];
+                  modalPrice = p;
+                }
+              });
+              return {
+                prices: [modalPrice],
+                sources: sourceLog
+              };
             }
 
             // Fallback to data attributes only if NO visible text price found
