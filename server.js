@@ -47,7 +47,7 @@ const OBILET_SUBJECT_PRICE_ALERT = String(process.env.OBILET_SUBJECT_PRICE_ALERT
 const OBILET_SUBJECT_TEST = String(process.env.OBILET_SUBJECT_TEST || "oBilet Test E-postasi").trim();
 const EMAIL_SIGNATURE_HTML = String(process.env.EMAIL_SIGNATURE_HTML || "").trim();
 const EMAIL_SIGNATURE_TEXT = String(process.env.EMAIL_SIGNATURE_TEXT || "").trim();
-const DEBUG_OBILET_PRICE = String(process.env.DEBUG_OBILET_PRICE || "").trim() === "1";
+const DEBUG_OBILET_PRICE = false; // DISABLED: Railway log limit (was: process.env.DEBUG_OBILET_PRICE === "1")
 const DEBUG_OBILET_API = String(process.env.DEBUG_OBILET_API || "").trim() === "1";
 const DEBUG_OBILET_XHR = String(process.env.DEBUG_OBILET_XHR || "").trim() === "1";
 const DEBUG_OBILET_XHR_BODY = String(process.env.DEBUG_OBILET_XHR_BODY || "").trim() === "1";
