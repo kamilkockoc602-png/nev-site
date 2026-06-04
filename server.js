@@ -4256,13 +4256,13 @@ async function scrapeObilet(origin, destination, dateIso) {
               }
             }
 
-            // Get MINIMUM price (cheapest option for user)
-            // Reason: Cards may show multiple prices (e.g., 700 TL economy + 750 TL business)
-            // User wants the cheapest, not the most common
+            // Get MAXIMUM price (most reliable option for normal ticket price)
+            // Reason: Cards may show multiple prices (e.g., 700 TL economy + 750 TL normal)
+            // Picking max avoids mistakenly taking discounted/campaign prices
             if (allPrices.length > 0) {
-              const minPrice = Math.min(...allPrices);
+              const maxPrice = Math.max(...allPrices);
               return {
-                prices: [minPrice],
+                prices: [maxPrice],
                 sources: sourceLog
               };
             }
@@ -4428,7 +4428,11 @@ async function scrapeObilet(origin, destination, dateIso) {
                 .filter(Boolean);
               const ignored = new Set(["2+1", "2+2", "Adana", "Ankara"]);
               const operator = lines.find((line) => !ignored.has(line) && !line.includes("Otogarı") && !/^\d{1,2}:\d{2}$/.test(line));
-              addJourney(operator || "Bilinmeyen Firma", times[0], parsePrice(priceMatch[1]), "", "", [], "", "", 999 + blockIndex);
+              
+              // Her bir saat için sefer ekle (eskiden sadece times[0] ekleniyordu)
+              times.forEach((timeStr, timeIndex) => {
+                addJourney(operator || "Bilinmeyen Firma", timeStr, parsePrice(priceMatch[1]), "", "", [], "", "", 999 + blockIndex + (timeIndex * 100));
+              });
             });
           }
 
