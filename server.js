@@ -4506,6 +4506,9 @@ async function scrapeObilet(origin, destination, dateIso) {
                 console.log(`[oBilet][DEBUG] Detay sayfasina gidiliyor: ${seferlerUrl}`);
               }
 
+              // API journey'leri temizle - detay sayfadaki API response'u yakalayacağız
+              apiJourneys.length = 0;
+
               await page.goto(seferlerUrl, { waitUntil: "networkidle2", timeout: 90000 }).catch(() => {});
               
               // Cloudflare challenge kontrolü
@@ -4526,135 +4529,37 @@ async function scrapeObilet(origin, destination, dateIso) {
                 // ignore
               }
               
-              await new Promise((resolve) => setTimeout(resolve, 2000));
+              // API response'u bekliyoruz (response handler otomatik yakalıyor)
+              await new Promise((resolve) => setTimeout(resolve, 3000));
 
               if (DEBUG_OBILET_PRICE) {
-                console.log(`[oBilet][DEBUG] Detay sayfasi yuklendi, card scraping basliyor...`);
+                console.log(`[oBilet][DEBUG] API'den ${apiJourneys.length} sefer alindi`);
               }
 
-              // Detay sayfasindaki tum firma+saat+fiyat kombinasyonlarini al
-              const detailJourneys = await page.evaluate((debugMode) => {
-                try {
-                  const results = [];
-                  const debugInfo = [];
-                  const parsePrice = (text) => {
-                    const normalized = String(text || "").replace(/\./g, "").replace(",", ".");
-                    const number = parseFloat(normalized.replace(/[^0-9.]/g, ""));
-                    return Number.isFinite(number) ? Math.round(number) : 0;
-                  };
-
-                  // Sefer kartlarini bul (card, journey, trip classli divler veya li'ler)
-                  const cards = document.querySelectorAll('div[class*="card"], div[class*="journey"], li[class*="journey"], div[class*="trip"], li[itemprop="busTrip"]');
-                  
-                  if (debugMode) {
-                    debugInfo.push(`Total cards found: ${cards.length}`);
-                  }
-                  
-                  cards.forEach((card, cardIndex) => {
-                  // Fiyat: TÜM fiyatları topla ve minimum al
-                  const cardText = card.textContent || "";
-                  const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
-                  const allPrices = [];
-                  
-                  for (const match of cardText.matchAll(regex)) {
-                    const price = parsePrice(match[1]);
-                    if (price >= 300 && price <= 5000) {
-                      allPrices.push(price);
-                    }
-                  }
-                  
-                  if (allPrices.length === 0) {
-                    if (debugMode) debugInfo.push(`Card ${cardIndex}: No valid price`);
-                    return;
-                  }
-                  
-                  const price = Math.min(...allPrices); // MINIMUM fiyat al
-
-                  // Firma ismi (img alt attribute'u)
-                  const firmImg = card.querySelector('img[alt]');
-                  const operator = firmImg?.getAttribute('alt') || '';
-                  if (!operator || operator.length < 3) {
-                    if (debugMode) debugInfo.push(`Card ${cardIndex}: No operator (price: ${price})`);
-                    return;
-                  }
-
-                  // Saat (kalkış saati için özel selector'lar dene)
-                  let time = '';
-                  let timeSource = '';
-                  const timeSelectors = [
-                    '[itemprop="departureTime"]',
-                    '.departure-time',
-                    '.time',
-                    '[class*="departure"][class*="time"]',
-                    '[class*="time"]:first-of-type'
-                  ];
-                  
-                  for (const selector of timeSelectors) {
-                    const timeEl = card.querySelector(selector);
-                    if (timeEl) {
-                      const timeText = timeEl.textContent || '';
-                      const match = timeText.match(/\b([01]\d|2[0-3]):[0-5]\d\b/);
-                      if (match) {
-                        time = match[0];
-                        timeSource = `selector: ${selector}`;
-                        break;
-                      }
-                    }
-                  }
-                  
-                  // Selector'lardan bulunamadıysa, card içindeki SADECE ilk göze çarpan saati al
-                  // Ama önce firma isminden sonraki kısmı al (firma adında saat olabilir)
-                  if (!time) {
-                    const cardText = card.textContent || '';
-                    const operatorIndex = cardText.indexOf(operator);
-                    const textAfterOperator = operatorIndex >= 0 ? cardText.substring(operatorIndex + operator.length) : cardText;
-                    const timeMatch = textAfterOperator.match(/\b([01]\d|2[0-3]):[0-5]\d\b/);
-                    time = timeMatch ? timeMatch[0] : '';
-                    timeSource = 'text after operator';
-                  }
-                  
-                  if (!time) {
-                    if (debugMode) debugInfo.push(`Card ${cardIndex}: ${operator} - No time found (price: ${price})`);
-                    return;
-                  }
-                  
-                  if (debugMode) {
-                    debugInfo.push(`Card ${cardIndex}: ✓ ${operator} ${time} ${price}TL [all: ${allPrices.join(', ')}] (time from: ${timeSource})`);
-                  }
-
-                  results.push({ operator, time, price });
-                });
-
-                return { results, debugInfo };
-              } catch (evalErr) {
-                return { results: [], debugInfo: [`EVALUATE ERROR: ${evalErr.message}`] };
-              }
-            }, DEBUG_OBILET_PRICE).catch((err) => {
-              if (DEBUG_OBILET_PRICE) {
-                console.log(`[oBilet][DEBUG] page.evaluate() FAILED: ${err.message}`);
-              }
-              return { results: [], debugInfo: [] };
-            });
+              // API'den gelen fiyatları kullan
+              const detailJourneys = { results: apiJourneys, debugInfo: [] };
 
               if (DEBUG_OBILET_PRICE) {
                 console.log(`[oBilet][DEBUG] Detay sayfasinda ${detailJourneys.results.length} sefer bulundu`);
-                detailJourneys.debugInfo.forEach(info => console.log(`[oBilet][DEBUG]   ${info}`));
+                detailJourneys.results.forEach((j, idx) => {
+                  console.log(`[oBilet][DEBUG]   Journey ${idx + 1}: ✓ ${j.operator} ${j.time} ${j.price}TL (API)`);
+                });
               }
 
-              // USE DETAIL PAGE PRICES - detay sayfası fiyatları daha doğru
+              // USE DETAIL PAGE PRICES (API) - detay sayfası API fiyatları daha doğru
               if (detailJourneys.results.length > 0) {
                 // Her journey için detay sayfasındaki fiyatı bul ve güncelle
                 journeys.forEach(journey => {
                   const match = detailJourneys.results.find(
-                    d => d.operator === journey.operator && d.time === journey.time
+                    d => toObiletOperatorMatchKey(d.operator) === toObiletOperatorMatchKey(journey.operator) && d.time === journey.time
                   );
                   if (match && match.price > 0) {
                     if (DEBUG_OBILET_PRICE && journey.price !== match.price) {
-                      console.log(`[oBilet][DEBUG] FIYAT GÜNCELLENDİ: ${journey.operator} ${journey.time}: ${journey.price}TL → ${match.price}TL (detay sayfası)`);
+                      console.log(`[oBilet][DEBUG] FIYAT GÜNCELLENDİ: ${journey.operator} ${journey.time}: ${journey.price}TL → ${match.price}TL (detay API)`);
                     }
                     journey.price = match.price;
                     if (Array.isArray(journey.debugPrices)) {
-                      journey.debugPrices.push(`${match.price}(detay-sayfa-override)`);
+                      journey.debugPrices.push(`${match.price}(detay-api-override)`);
                     }
                   }
                 });
