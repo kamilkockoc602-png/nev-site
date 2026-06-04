@@ -47,7 +47,7 @@ const OBILET_SUBJECT_PRICE_ALERT = String(process.env.OBILET_SUBJECT_PRICE_ALERT
 const OBILET_SUBJECT_TEST = String(process.env.OBILET_SUBJECT_TEST || "oBilet Test E-postasi").trim();
 const EMAIL_SIGNATURE_HTML = String(process.env.EMAIL_SIGNATURE_HTML || "").trim();
 const EMAIL_SIGNATURE_TEXT = String(process.env.EMAIL_SIGNATURE_TEXT || "").trim();
-const DEBUG_OBILET_PRICE = false; // Set to true to debug price extraction
+const DEBUG_OBILET_PRICE = true; // TEMPORARY: Debug Enver Geçgel price issue (1100 vs 1300)
 const DEBUG_OBILET_API = String(process.env.DEBUG_OBILET_API || "").trim() === "1";
 const DEBUG_OBILET_XHR = String(process.env.DEBUG_OBILET_XHR || "").trim() === "1";
 const DEBUG_OBILET_XHR_BODY = String(process.env.DEBUG_OBILET_XHR_BODY || "").trim() === "1";
@@ -3650,17 +3650,6 @@ function isObiletOperatorMatch(selectedOperator, scrapedOperator) {
   return scrapedKey.includes(selectedKey) || selectedKey.includes(scrapedKey);
 }
 
-// Sadece firma + saat + durak ile seferi benzersiz olarak tanımlar (FİYAT HARİÇ)
-// Fiyat değişikliğini algılayabilmek için eski seferi fiyattan bağımsız bulmalıyız
-function buildJourneyMatchKey(operator, departureTime, departureStop = "") {
-  const parts = [
-    toObiletOperatorMatchKey(operator),
-    String(departureTime || "").trim(),
-  ];
-  if (departureStop) parts.push(normalizeSearchText(departureStop));
-  return parts.join("|");
-}
-
 function buildJourneyIdentityKey(operator, departureTime, departureStop = "", price = 0) {
   // Aynı firma + aynı saat + aynı durak + aynı fiyat = aynı sefer
   // NOT: departureStop ve price eklendi - aynı firma aynı saatte farklı araçlar/duraklar olabilir
@@ -4091,32 +4080,8 @@ async function scrapeObilet(origin, destination, dateIso) {
         await new Promise((resolve) => setTimeout(resolve, 3500));
 
         try {
-          // Gelişmiş sonsuz kaydırma (Infinite Scroll) - sayfanın sonuna kadar yavaşça inerek tüm kartların yüklenmesini sağlar
-          await page.evaluate(async () => {
-            await new Promise((resolve) => {
-              let totalHeight = 0;
-              let distance = 350;
-              let maxAttempts = 20; // Eğer yeni içerik yüklenmezse 20 deneme sonra dur
-              let attempts = 0;
-              
-              let timer = setInterval(() => {
-                let scrollHeight = document.body.scrollHeight;
-                window.scrollBy(0, distance);
-                totalHeight += distance;
-
-                if (totalHeight >= scrollHeight) {
-                  attempts++;
-                  if (attempts >= maxAttempts) {
-                    clearInterval(timer);
-                    resolve();
-                  }
-                } else {
-                  attempts = 0;
-                }
-              }, 400); // Her 400ms'de bir kaydır
-            });
-          });
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+          await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+          await new Promise((resolve) => setTimeout(resolve, 600));
           await page.evaluate(() => window.scrollTo(0, 0));
         } catch (scrollError) {
           // ignore scroll errors
@@ -4275,21 +4240,11 @@ async function scrapeObilet(origin, destination, dateIso) {
               return 0;
             };
 
-            // 1. ÖNCELİK: DATA NİTELİKLERİ
-            // Visible text parse etmek hatalı olabiliyor (üstü çizili eski fiyatı vs. de alıyor)
-            // oBilet data-price vb. attribute'ler içinde gerçek son fiyatı veriyor.
-            for (const node of card.querySelectorAll("[data-sale-price], [data-amount], [data-price]")) {
-              const attrValue = node.getAttribute("data-sale-price") || node.getAttribute("data-amount") || node.getAttribute("data-price");
-              if (attrValue) {
-                const price = parseAndValidate(attrValue, "data-attribute");
-                if (price > 0) {
-                  return { prices: [price], sources: sourceLog };
-                }
-              }
-            }
+            // Strategy: Find ALL TL prices in visible text, pick MODAL (most common)
+            // Modal price = most frequently appearing price = normal price
+            // (because campaign/promo appears once or twice, normal appears multiple times)
+            // Example: "700 TL, 700 TL, 700 TL" (modal) + "750 TL" (promo) -> pick 700
 
-            // 2. ÖNCELİK: GÖRÜNÜR METİN (Fallback)
-            // Strategy: Find ALL TL prices in visible text
             const text = card.textContent || "";
             const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
             
@@ -4301,12 +4256,37 @@ async function scrapeObilet(origin, destination, dateIso) {
               }
             }
 
+            // Get MINIMUM price (cheapest option for user)
+            // Reason: Cards may show multiple prices (e.g., 700 TL economy + 750 TL business)
+            // User wants the cheapest, not the most common
             if (allPrices.length > 0) {
-              const maxPrice = Math.max(...allPrices);
+              const minPrice = Math.min(...allPrices);
               return {
-                prices: [maxPrice],
+                prices: [minPrice],
                 sources: sourceLog
               };
+            }
+
+            // Fallback to data attributes only if NO visible text price found
+            for (const node of card.querySelectorAll("[data-amount]")) {
+              const price = parseAndValidate(node.getAttribute("data-amount"), "[data-amount]");
+              if (price > 0) {
+                return { prices: [price], sources: sourceLog };
+              }
+            }
+
+            for (const node of card.querySelectorAll("[data-sale-price]")) {
+              const price = parseAndValidate(node.getAttribute("data-sale-price"), "[data-sale-price]");
+              if (price > 0) {
+                return { prices: [price], sources: sourceLog };
+              }
+            }
+
+            for (const node of card.querySelectorAll("[data-price]")) {
+              const price = parseAndValidate(node.getAttribute("data-price"), "[data-price]");
+              if (price > 0) {
+                return { prices: [price], sources: sourceLog };
+              }
             }
 
             return { prices: [], sources: sourceLog };
@@ -4448,11 +4428,7 @@ async function scrapeObilet(origin, destination, dateIso) {
                 .filter(Boolean);
               const ignored = new Set(["2+1", "2+2", "Adana", "Ankara"]);
               const operator = lines.find((line) => !ignored.has(line) && !line.includes("Otogarı") && !/^\d{1,2}:\d{2}$/.test(line));
-              
-              // Her bir saat için sefer ekle (eskiden sadece times[0] ekleniyordu)
-              times.forEach((timeStr, timeIndex) => {
-                addJourney(operator || "Bilinmeyen Firma", timeStr, parsePrice(priceMatch[1]), "", "", [], "", "", 999 + blockIndex + (timeIndex * 100));
-              });
+              addJourney(operator || "Bilinmeyen Firma", times[0], parsePrice(priceMatch[1]), "", "", [], "", "", 999 + blockIndex);
             });
           }
 
@@ -5043,14 +5019,19 @@ async function processObiletTarget(target) {
           return dayRecheckMap;
         };
 
-        const currentMatchKeys = new Set(
+        const currentKeys = new Set(
           dayTracked.map((journey) =>
-            buildJourneyMatchKey(journey.operator, journey.time, journey.departureStop)
+            buildJourneyIdentityKey(
+              journey.operator,
+              journey.time,
+              journey.departureStop,
+              journey.price
+            )
           )
         );
 
         const existingRows = db
-          .prepare("SELECT id, operator, departure_time, journey_date, departure_stop, arrival_stop, price, pending_price, pending_seen_count FROM obilet_prices WHERE target_id = ? AND journey_date = ?")
+          .prepare("SELECT id, operator, departure_time, journey_date, departure_stop, arrival_stop FROM obilet_prices WHERE target_id = ? AND journey_date = ?")
           .all(target.id, journeyDate);
 
         for (const row of existingRows) {
@@ -5072,10 +5053,14 @@ async function processObiletTarget(target) {
             }
           }
 
-          // Eğer fiyatı değil de seferi (firma+saat+durak) silinmişse sil
-          const rowMatchKey = buildJourneyMatchKey(row.operator, row.departure_time, row.departure_stop);
+          const rowKey = buildJourneyIdentityKey(
+            row.operator,
+            row.departure_time,
+            row.departure_stop,
+            row.price
+          );
 
-          if (!currentMatchKeys.has(rowMatchKey)) {
+          if (!currentKeys.has(rowKey)) {
             db.prepare("DELETE FROM obilet_prices WHERE id = ?").run(row.id);
           }
         }
@@ -5084,14 +5069,12 @@ async function processObiletTarget(target) {
 
         for (const journey of dayTracked) {
           const normalizedOperator = normalizeObiletOperatorName(journey.operator) || journey.operator;
-          const matchKey = buildJourneyMatchKey(normalizedOperator, journey.time, journey.departureStop);
+          const journeyKey = buildJourneyIdentityKey(normalizedOperator, journey.time, journey.departureStop, journey.price);
           const candidates = db.prepare(
             "SELECT * FROM obilet_prices WHERE target_id = ? AND journey_date = ? AND departure_time = ? ORDER BY last_updated DESC"
           ).all(target.id, journey.journey_date, journey.time);
-          
-          // Fiyat harici kimliğe göre eşleştir ki eski fiyatı görebilelim
           const previous = candidates.find(
-            (row) => buildJourneyMatchKey(row.operator, row.departure_time, row.departure_stop) === matchKey
+            (row) => buildJourneyIdentityKey(row.operator, row.departure_time, row.departure_stop, row.price) === journeyKey
           );
 
           if (previous) {
