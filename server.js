@@ -3650,6 +3650,17 @@ function isObiletOperatorMatch(selectedOperator, scrapedOperator) {
   return scrapedKey.includes(selectedKey) || selectedKey.includes(scrapedKey);
 }
 
+// Sadece firma + saat + durak ile seferi benzersiz olarak tanımlar (FİYAT HARİÇ)
+// Fiyat değişikliğini algılayabilmek için eski seferi fiyattan bağımsız bulmalıyız
+function buildJourneyMatchKey(operator, departureTime, departureStop = "") {
+  const parts = [
+    toObiletOperatorMatchKey(operator),
+    String(departureTime || "").trim(),
+  ];
+  if (departureStop) parts.push(normalizeSearchText(departureStop));
+  return parts.join("|");
+}
+
 function buildJourneyIdentityKey(operator, departureTime, departureStop = "", price = 0) {
   // Aynı firma + aynı saat + aynı durak + aynı fiyat = aynı sefer
   // NOT: departureStop ve price eklendi - aynı firma aynı saatte farklı araçlar/duraklar olabilir
@@ -5032,19 +5043,14 @@ async function processObiletTarget(target) {
           return dayRecheckMap;
         };
 
-        const currentKeys = new Set(
+        const currentMatchKeys = new Set(
           dayTracked.map((journey) =>
-            buildJourneyIdentityKey(
-              journey.operator,
-              journey.time,
-              journey.departureStop,
-              journey.price
-            )
+            buildJourneyMatchKey(journey.operator, journey.time, journey.departureStop)
           )
         );
 
         const existingRows = db
-          .prepare("SELECT id, operator, departure_time, journey_date, departure_stop, arrival_stop FROM obilet_prices WHERE target_id = ? AND journey_date = ?")
+          .prepare("SELECT id, operator, departure_time, journey_date, departure_stop, arrival_stop, price, pending_price, pending_seen_count FROM obilet_prices WHERE target_id = ? AND journey_date = ?")
           .all(target.id, journeyDate);
 
         for (const row of existingRows) {
@@ -5066,14 +5072,10 @@ async function processObiletTarget(target) {
             }
           }
 
-          const rowKey = buildJourneyIdentityKey(
-            row.operator,
-            row.departure_time,
-            row.departure_stop,
-            row.price
-          );
+          // Eğer fiyatı değil de seferi (firma+saat+durak) silinmişse sil
+          const rowMatchKey = buildJourneyMatchKey(row.operator, row.departure_time, row.departure_stop);
 
-          if (!currentKeys.has(rowKey)) {
+          if (!currentMatchKeys.has(rowMatchKey)) {
             db.prepare("DELETE FROM obilet_prices WHERE id = ?").run(row.id);
           }
         }
@@ -5082,12 +5084,14 @@ async function processObiletTarget(target) {
 
         for (const journey of dayTracked) {
           const normalizedOperator = normalizeObiletOperatorName(journey.operator) || journey.operator;
-          const journeyKey = buildJourneyIdentityKey(normalizedOperator, journey.time, journey.departureStop, journey.price);
+          const matchKey = buildJourneyMatchKey(normalizedOperator, journey.time, journey.departureStop);
           const candidates = db.prepare(
             "SELECT * FROM obilet_prices WHERE target_id = ? AND journey_date = ? AND departure_time = ? ORDER BY last_updated DESC"
           ).all(target.id, journey.journey_date, journey.time);
+          
+          // Fiyat harici kimliğe göre eşleştir ki eski fiyatı görebilelim
           const previous = candidates.find(
-            (row) => buildJourneyIdentityKey(row.operator, row.departure_time, row.departure_stop, row.price) === journeyKey
+            (row) => buildJourneyMatchKey(row.operator, row.departure_time, row.departure_stop) === matchKey
           );
 
           if (previous) {
