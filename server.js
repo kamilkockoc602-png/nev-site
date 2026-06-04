@@ -4445,21 +4445,49 @@ async function scrapeObilet(origin, destination, dateIso) {
         if (journeys.length > 0) {
           const listUrl = page.url();
           
-          // Origin ve Destination ID'lerini SATIN AL butonundan al
+          // Origin ve Destination ID'lerini butondan al
           try {
-            await page.waitForSelector("button.journey.btn", { timeout: 10000 }).catch(() => {
-              if (DEBUG_OBILET_PRICE) {
-                console.log(`[oBilet][DEBUG] Button selector bulunamadi, detay sayfa atlandi`);
+            // Çeşitli button selector'ları dene
+            const buttonSelectors = [
+              'button[data-origin-id]',
+              'a[data-origin-id]',
+              'button.journey',
+              'button:has-text("KOLTUK")',
+              'button:has-text("SATIN AL")'
+            ];
+            
+            let foundSelector = null;
+            for (const selector of buttonSelectors) {
+              try {
+                await page.waitForSelector(selector, { timeout: 3000 });
+                foundSelector = selector;
+                if (DEBUG_OBILET_PRICE) {
+                  console.log(`[oBilet][DEBUG] Button bulundu: ${selector}`);
+                }
+                break;
+              } catch (e) {
+                // Devam et
               }
-            });
+            }
+            
+            if (!foundSelector) {
+              if (DEBUG_OBILET_PRICE) {
+                console.log(`[oBilet][DEBUG] Hiçbir button selector bulunamadi, detay sayfa atlandi`);
+              }
+              throw new Error("Button not found");
+            }
 
-            const buttonData = await page.$$eval("button.journey.btn", (buttons) => {
-              const firstBtn = buttons[0];
-              if (!firstBtn) return null;
-              return {
-                originId: firstBtn.getAttribute("data-origin-id"),
-                destId: firstBtn.getAttribute("data-destination-id"),
-              };
+            const buttonData = await page.evaluate(() => {
+              // data-origin-id ve data-destination-id olan ilk elementi bul
+              const buttons = Array.from(document.querySelectorAll('button, a'));
+              for (const btn of buttons) {
+                const originId = btn.getAttribute('data-origin-id');
+                const destId = btn.getAttribute('data-destination-id');
+                if (originId && destId) {
+                  return { originId, destId };
+                }
+              }
+              return null;
             }).catch((err) => {
               if (DEBUG_OBILET_PRICE) {
                 console.log(`[oBilet][DEBUG] Button veri okuma hatasi: ${err.message}`);
@@ -4630,18 +4658,6 @@ async function scrapeObilet(origin, destination, dateIso) {
             if (DEBUG_OBILET_PRICE) {
               console.log(`[oBilet][DEBUG] Detay sayfa hatasi: ${detailPageError.message}`);
             }
-          }
-
-          // DISABLED: Detay URL fiyatları DOM fiyatlarını override etmesin
-          // DOM'dan gelen fiyat = doğru fiyat
-          if (DEBUG_OBILET_PRICE) {
-            console.log(`[oBilet][DEBUG] Detay URL override DISABLED - DOM fiyatlari kullaniliyor`);
-          }
-
-          // DISABLED: Popup fiyatları DOM fiyatlarını override etmesin
-          // DOM'dan gelen fiyat = doğru fiyat
-          if (DEBUG_OBILET_PRICE) {
-            console.log(`[oBilet][DEBUG] Popup override DISABLED - DOM fiyatlari kullaniliyor`);
           }
 
           console.log(`[oBilet] Basariyla ${journeys.length} adet sefer yuklendi.`);
