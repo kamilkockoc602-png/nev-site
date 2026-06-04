@@ -4332,8 +4332,6 @@ async function scrapeObilet(origin, destination, dateIso) {
           ) => {
             const safeOperator = normalizeOperator(operator);
             const safeTime = String(time || "").trim();
-            const safeOperator = normalizeOperator(operator);
-            const safeTime = String(time || "").trim();
             const safePrice = Number(price) || 0;
             const safeDepartureStop = String(departureStop || "").replace(/\s+/g, " ").trim();
             const safeArrivalStop = String(arrivalStop || "").replace(/\s+/g, " ").trim();
