@@ -4240,57 +4240,13 @@ async function scrapeObilet(origin, destination, dateIso) {
               return 0;
             };
 
-            // STRATEGY 1: Try specific class selectors (most reliable for oBilet)
-            for (const selector of ['.price', '[itemprop="price"]', '.amount', '.fare']) {
-              const elements = card.querySelectorAll(selector);
-              for (const elem of elements) {
-                const text = elem.textContent || "";
-                const match = text.match(/(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/i);
-                if (match) {
-                  const price = parseAndValidate(match[1], selector);
-                  if (price > 0) {
-                    return { prices: [price], sources: sourceLog };
-                  }
-                }
-              }
-            }
-
-            // STRATEGY 2: Look for price in button/link elements
-            const buttons = Array.from(card.querySelectorAll('button, a, [role="button"]'));
-            for (const btn of buttons) {
-              const btnText = btn.textContent || "";
-              // Look for buttons containing "KOLTUK" or "SEÇ" (seat selection buttons)
-              if (btnText.includes("KOLTUK") || btnText.includes("SEÇ")) {
-                // Check button's previous sibling or parent for price
-                let priceContainer = btn.previousElementSibling || btn.parentElement;
-                if (priceContainer) {
-                  const priceText = priceContainer.textContent || "";
-                  const match = priceText.match(/(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/i);
-                  if (match) {
-                    const price = parseAndValidate(match[1], "button-sibling");
-                    if (price > 0) {
-                      return { prices: [price], sources: sourceLog };
-                    }
-                  }
-                }
-              }
-              // Also check if button itself contains price
-              const match = btnText.match(/(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/i);
-              if (match && btnText.length < 100) {  // Avoid matching prices in long text blocks
-                const price = parseAndValidate(match[1], "button-text");
-                if (price > 0) {
-                  return { prices: [price], sources: sourceLog };
-                }
-              }
-            }
-
-            // STRATEGY 3: Find all TL prices in visible text as last resort
+            // STRATEGY: Find ALL TL prices in card, return MINIMUM (cheapest for user)
             const text = card.textContent || "";
             const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
             
             const allPrices = [];
             for (const match of text.matchAll(regex)) {
-              const price = parseAndValidate(match[1], "visible-text-TL");
+              const price = parseAndValidate(match[1], "card-text-TL");
               if (price > 0) {
                 allPrices.push(price);
               }
