@@ -4528,24 +4528,29 @@ async function scrapeObilet(origin, destination, dateIso) {
               
               await new Promise((resolve) => setTimeout(resolve, 2000));
 
+              if (DEBUG_OBILET_PRICE) {
+                console.log(`[oBilet][DEBUG] Detay sayfasi yuklendi, card scraping basliyor...`);
+              }
+
               // Detay sayfasindaki tum firma+saat+fiyat kombinasyonlarini al
               const detailJourneys = await page.evaluate((debugMode) => {
-                const results = [];
-                const debugInfo = [];
-                const parsePrice = (text) => {
-                  const normalized = String(text || "").replace(/\./g, "").replace(",", ".");
-                  const number = parseFloat(normalized.replace(/[^0-9.]/g, ""));
-                  return Number.isFinite(number) ? Math.round(number) : 0;
-                };
+                try {
+                  const results = [];
+                  const debugInfo = [];
+                  const parsePrice = (text) => {
+                    const normalized = String(text || "").replace(/\./g, "").replace(",", ".");
+                    const number = parseFloat(normalized.replace(/[^0-9.]/g, ""));
+                    return Number.isFinite(number) ? Math.round(number) : 0;
+                  };
 
-                // Sefer kartlarini bul (card, journey, trip classli divler veya li'ler)
-                const cards = document.querySelectorAll('div[class*="card"], div[class*="journey"], li[class*="journey"], div[class*="trip"]');
-                
-                if (debugMode) {
-                  debugInfo.push(`Total cards found: ${cards.length}`);
-                }
-                
-                cards.forEach((card, cardIndex) => {
+                  // Sefer kartlarini bul (card, journey, trip classli divler veya li'ler)
+                  const cards = document.querySelectorAll('div[class*="card"], div[class*="journey"], li[class*="journey"], div[class*="trip"], li[itemprop="busTrip"]');
+                  
+                  if (debugMode) {
+                    debugInfo.push(`Total cards found: ${cards.length}`);
+                  }
+                  
+                  cards.forEach((card, cardIndex) => {
                   // Fiyat: TÜM fiyatları topla ve minimum al
                   const cardText = card.textContent || "";
                   const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
@@ -4621,7 +4626,15 @@ async function scrapeObilet(origin, destination, dateIso) {
                 });
 
                 return { results, debugInfo };
-              }, DEBUG_OBILET_PRICE);
+              } catch (evalErr) {
+                return { results: [], debugInfo: [`EVALUATE ERROR: ${evalErr.message}`] };
+              }
+            }, DEBUG_OBILET_PRICE).catch((err) => {
+              if (DEBUG_OBILET_PRICE) {
+                console.log(`[oBilet][DEBUG] page.evaluate() FAILED: ${err.message}`);
+              }
+              return { results: [], debugInfo: [] };
+            });
 
               if (DEBUG_OBILET_PRICE) {
                 console.log(`[oBilet][DEBUG] Detay sayfasinda ${detailJourneys.results.length} sefer bulundu`);
