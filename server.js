@@ -4593,10 +4593,23 @@ async function scrapeObilet(origin, destination, dateIso) {
                 detailJourneys.debugInfo.forEach(info => console.log(`[oBilet][DEBUG]   ${info}`));
               }
 
-              // DISABLED: Detay sayfası fiyatları DOM fiyatlarını override etmesin
-              // DOM'dan gelen fiyat = doğru fiyat, detay sayfası farklı olabilir
-              if (DEBUG_OBILET_PRICE) {
-                console.log(`[oBilet][DEBUG] Detay sayfasinda ${detailJourneys.results.length} sefer bulundu (override DISABLED)`);
+              // USE DETAIL PAGE PRICES - detay sayfası fiyatları daha doğru
+              if (detailJourneys.results.length > 0) {
+                // Her journey için detay sayfasındaki fiyatı bul ve güncelle
+                journeys.forEach(journey => {
+                  const match = detailJourneys.results.find(
+                    d => d.operator === journey.operator && d.time === journey.time
+                  );
+                  if (match && match.price > 0) {
+                    if (DEBUG_OBILET_PRICE && journey.price !== match.price) {
+                      console.log(`[oBilet][DEBUG] FIYAT GÜNCELLENDİ: ${journey.operator} ${journey.time}: ${journey.price}TL → ${match.price}TL (detay sayfası)`);
+                    }
+                    journey.price = match.price;
+                    if (Array.isArray(journey.debugPrices)) {
+                      journey.debugPrices.push(`${match.price}(detay-sayfa-override)`);
+                    }
+                  }
+                });
               }
 
               // Liste sayfasina geri don
