@@ -4518,17 +4518,24 @@ async function scrapeObilet(origin, destination, dateIso) {
                 }
                 
                 cards.forEach((card, cardIndex) => {
-                  // Fiyat
-                  const priceEl = card.querySelector('[itemprop="price"], .price, .amount');
-                  if (!priceEl) {
-                    if (debugMode) debugInfo.push(`Card ${cardIndex}: No price element`);
+                  // Fiyat: TÜM fiyatları topla ve minimum al
+                  const cardText = card.textContent || "";
+                  const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
+                  const allPrices = [];
+                  
+                  for (const match of cardText.matchAll(regex)) {
+                    const price = parsePrice(match[1]);
+                    if (price >= 300 && price <= 5000) {
+                      allPrices.push(price);
+                    }
+                  }
+                  
+                  if (allPrices.length === 0) {
+                    if (debugMode) debugInfo.push(`Card ${cardIndex}: No valid price`);
                     return;
                   }
-                  const price = parsePrice(priceEl.textContent);
-                  if (price < 300) {
-                    if (debugMode) debugInfo.push(`Card ${cardIndex}: Price too low (${price})`);
-                    return;
-                  }
+                  
+                  const price = Math.min(...allPrices); // MINIMUM fiyat al
 
                   // Firma ismi (img alt attribute'u)
                   const firmImg = card.querySelector('img[alt]');
@@ -4579,7 +4586,7 @@ async function scrapeObilet(origin, destination, dateIso) {
                   }
                   
                   if (debugMode) {
-                    debugInfo.push(`Card ${cardIndex}: ✓ ${operator} ${time} ${price}TL (time from: ${timeSource})`);
+                    debugInfo.push(`Card ${cardIndex}: ✓ ${operator} ${time} ${price}TL [all: ${allPrices.join(', ')}] (time from: ${timeSource})`);
                   }
 
                   results.push({ operator, time, price });
