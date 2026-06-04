@@ -3789,8 +3789,114 @@ function extractObiletJourneysFromApiPayload(payload) {
   return results;
 }
 
-// oBilet Scraper (Puppeteer Tabanlı)
+// oBilet İstasyon ID Önbelleği
+const obiletStationCache = new Map();
+
+// oBilet API: İstasyon ID'si bul
+async function findObiletStationId(cityName) {
+  const key = slugTr(cityName);
+  if (obiletStationCache.has(key)) return obiletStationCache.get(key);
+
+  try {
+    const res = await fetch(`https://api.obilet.com/api/station/getstations?query=${encodeURIComponent(cityName)}&culture=tr-TR`, {
+      headers: { "Content-Type": "application/json", "Accept": "application/json" }
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const stations = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
+      const match = stations.find(s => {
+        const name = slugTr(s?.name || s?.city_name || "");
+        return name === key || name.includes(key) || key.includes(name);
+      });
+      if (match) {
+        const id = match.id || match.station_id;
+        obiletStationCache.set(key, id);
+        return id;
+      }
+    }
+  } catch (e) { /* ignore */ }
+
+  return null;
+}
+
+// oBilet API: Seferleri çek (resmi API)
+async function fetchObiletJourneysViaApi(origin, destination, dateIso) {
+  const dateParts = dateIso.split("-");
+  const dateFormatted = `${dateParts[2]}.${dateParts[1]}.${dateParts[0]}`; // DD.MM.YYYY
+
+  // Önce istasyon ID'lerini bul
+  const [originId, destId] = await Promise.all([
+    findObiletStationId(origin),
+    findObiletStationId(destination)
+  ]);
+
+  const journeys = [];
+
+  // Yöntem 1: Resmi /api/journey endpoint
+  if (originId && destId) {
+    try {
+      const payload = {
+        "device-session": { "session-id": crypto.randomUUID(), "device-id": crypto.randomUUID() },
+        "date": dateFormatted,
+        "origin-id": originId,
+        "destination-id": destId,
+        "currency": "TRY",
+        "language": "tr-TR"
+      };
+
+      const res = await fetch("https://api.obilet.com/api/journey/getbusjourneys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Accept": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const items = Array.isArray(data?.data) ? data.data : [];
+        for (const item of items) {
+          const operator = toTurkishTitleCase(String(
+            item?.partner_name || item?.bus_company?.name || item?.company_name || ""
+          ).trim());
+          const depTime = String(item?.departure_time || item?.departure?.time || "").trim().substring(0, 5);
+          const price = Math.round(Number(item?.internet_price || item?.price || item?.min_price || 0));
+          const depStop = String(item?.origin_location || item?.departure?.name || "").trim();
+          const arrStop = String(item?.destination_location || item?.arrival?.name || "").trim();
+
+          if (operator && depTime && price >= 100) {
+            journeys.push({ operator, time: depTime, price, departureStop: depStop, arrivalStop: arrStop });
+          }
+        }
+        if (journeys.length > 0) {
+          console.log(`[oBilet API] ${origin}→${destination} ${dateIso}: ${journeys.length} sefer bulundu (resmi API)`);
+          return journeys;
+        }
+      }
+    } catch (e) {
+      console.log(`[oBilet API] Resmi API hatası: ${e.message}`);
+    }
+  }
+
+  return journeys;
+}
+
+// oBilet Scraper - Puppeteer + API hibrit
 async function scrapeObilet(origin, destination, dateIso) {
+  // Önce resmi API'yi dene (daha hızlı ve doğru)
+  try {
+    const apiJourneys = await fetchObiletJourneysViaApi(origin, destination, dateIso);
+    if (apiJourneys.length > 0) {
+      return apiJourneys;
+    }
+  } catch (e) {
+    console.log(`[oBilet] API denemesi başarısız, Puppeteer'a geçiliyor: ${e.message}`);
+  }
+
+  // API çalışmazsa Puppeteer scrape yap
+  return scrapeObiletViaPuppeteer(origin, destination, dateIso);
+}
+
+// oBilet Puppeteer Scraper (yedek)
+async function scrapeObiletViaPuppeteer(origin, destination, dateIso) {
   const originSlug = slugTr(origin).replace(/\s+/g, "-");
   const destSlug = slugTr(destination).replace(/\s+/g, "-");
   const dateParts = dateIso.split("-");
@@ -4228,7 +4334,7 @@ async function scrapeObilet(origin, destination, dateIso) {
             
             const parseAndValidate = (value, source) => {
               const parsed = parsePrice(value);
-              if (parsed >= 300 && parsed <= 5000) {
+              if (parsed >= 100 && parsed <= 10000) {
                 sourceLog.push({ price: parsed, source, rawValue: value });
                 return parsed;
               }
@@ -4276,8 +4382,8 @@ async function scrapeObilet(origin, destination, dateIso) {
             const safeDepartureStop = String(departureStop || "").replace(/\s+/g, " ").trim();
             const safeArrivalStop = String(arrivalStop || "").replace(/\s+/g, " ").trim();
             if (!safeOperator || !safeTime || safePrice <= 0) return;
-            // Include cardIndex to allow multiple journeys with same operator/time/price (different vehicles/seat types)
-            const key = `${cardIndex}|${safeOperator}|${safeTime}|${safePrice}|${safeDepartureStop}|${safeArrivalStop}`;
+            // Firma + saat + fiyat kombinasyonu unique sefer tanımlar
+            const key = `${safeOperator}|${safeTime}|${safePrice}|${safeDepartureStop}`;
             if (seen.has(key)) return;
             seen.add(key);
             items.push({
