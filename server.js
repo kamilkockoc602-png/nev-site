@@ -4320,22 +4320,6 @@ async function scrapeObilet(origin, destination, dateIso) {
           };
 
           const addJourney = (
-              if (price > 0) {
-                return { prices: [price], sources: sourceLog };
-              }
-            }
-
-            for (const node of card.querySelectorAll("[data-price]")) {
-              const price = parseAndValidate(node.getAttribute("data-price"), "[data-price]");
-              if (price > 0) {
-                return { prices: [price], sources: sourceLog };
-              }
-            }
-
-            return { prices: [], sources: sourceLog };
-          };
-
-          const addJourney = (
             operator,
             time,
             price,
@@ -4346,6 +4330,8 @@ async function scrapeObilet(origin, destination, dateIso) {
             detailSelector = "",
             cardIndex = 0
           ) => {
+            const safeOperator = normalizeOperator(operator);
+            const safeTime = String(time || "").trim();
             const safeOperator = normalizeOperator(operator);
             const safeTime = String(time || "").trim();
             const safePrice = Number(price) || 0;
