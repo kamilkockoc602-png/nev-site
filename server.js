@@ -4240,11 +4240,62 @@ async function scrapeObilet(origin, destination, dateIso) {
               return 0;
             };
 
-            // Strategy: Find ALL TL prices in visible text, pick MODAL (most common)
-            // Modal price = most frequently appearing price = normal price
-            // (because campaign/promo appears once or twice, normal appears multiple times)
-            // Example: "700 TL, 700 TL, 700 TL" (modal) + "750 TL" (promo) -> pick 700
+            // STRATEGY 1: Look for price in button/link elements (most reliable for oBilet)
+            const buttons = Array.from(card.querySelectorAll('button, a, [role="button"]'));
+            for (const btn of buttons) {
+              const btnText = btn.textContent || "";
+              // Look for buttons containing "KOLTUK" or "SEÇ" (seat selection buttons)
+              if (btnText.includes("KOLTUK") || btnText.includes("SEÇ")) {
+                // Check button's previous sibling or parent for price
+                let priceContainer = btn.previousElementSibling || btn.parentElement;
+                if (priceContainer) {
+                  const priceText = priceContainer.textContent || "";
+                  const match = priceText.match(/(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/i);
+                  if (match) {
+                    const price = parseAndValidate(match[1], "button-sibling");
+                    if (price > 0) {
+                      return { prices: [price], sources: sourceLog };
+                    }
+                  }
+                }
+              }
+              // Also check if button itself contains price
+              const match = btnText.match(/(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/i);
+              if (match && btnText.length < 100) {  // Avoid matching prices in long text blocks
+                const price = parseAndValidate(match[1], "button-text");
+                if (price > 0) {
+                  return { prices: [price], sources: sourceLog };
+                }
+              }
+            }
 
+            // STRATEGY 2: Try specific data attributes
+            for (const attr of ['data-price', 'data-amount', 'data-sale-price']) {
+              const elements = card.querySelectorAll(`[${attr}]`);
+              for (const elem of elements) {
+                const price = parseAndValidate(elem.getAttribute(attr), attr);
+                if (price > 0) {
+                  return { prices: [price], sources: sourceLog };
+                }
+              }
+            }
+
+            // STRATEGY 3: Try specific class selectors
+            for (const selector of ['.price', '[itemprop="price"]', '.amount', '.fare']) {
+              const elements = card.querySelectorAll(selector);
+              for (const elem of elements) {
+                const text = elem.textContent || "";
+                const match = text.match(/(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/i);
+                if (match) {
+                  const price = parseAndValidate(match[1], selector);
+                  if (price > 0) {
+                    return { prices: [price], sources: sourceLog };
+                  }
+                }
+              }
+            }
+
+            // STRATEGY 4: Find all TL prices in visible text as last resort
             const text = card.textContent || "";
             const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
             
@@ -4257,8 +4308,6 @@ async function scrapeObilet(origin, destination, dateIso) {
             }
 
             // Get MINIMUM price (cheapest option for user)
-            // Reason: Cards may show multiple prices (e.g., 700 TL economy + 750 TL business)
-            // User wants the cheapest, not the most common
             if (allPrices.length > 0) {
               const minPrice = Math.min(...allPrices);
               return {
@@ -4267,16 +4316,10 @@ async function scrapeObilet(origin, destination, dateIso) {
               };
             }
 
-            // Fallback to data attributes only if NO visible text price found
-            for (const node of card.querySelectorAll("[data-amount]")) {
-              const price = parseAndValidate(node.getAttribute("data-amount"), "[data-amount]");
-              if (price > 0) {
-                return { prices: [price], sources: sourceLog };
-              }
-            }
+            return { prices: [], sources: sourceLog };
+          };
 
-            for (const node of card.querySelectorAll("[data-sale-price]")) {
-              const price = parseAndValidate(node.getAttribute("data-sale-price"), "[data-sale-price]");
+          const addJourney = (
               if (price > 0) {
                 return { prices: [price], sources: sourceLog };
               }
