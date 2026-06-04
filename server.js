@@ -4240,7 +4240,22 @@ async function scrapeObilet(origin, destination, dateIso) {
               return 0;
             };
 
-            // STRATEGY 1: Look for price in button/link elements (most reliable for oBilet)
+            // STRATEGY 1: Try specific class selectors (most reliable for oBilet)
+            for (const selector of ['.price', '[itemprop="price"]', '.amount', '.fare']) {
+              const elements = card.querySelectorAll(selector);
+              for (const elem of elements) {
+                const text = elem.textContent || "";
+                const match = text.match(/(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/i);
+                if (match) {
+                  const price = parseAndValidate(match[1], selector);
+                  if (price > 0) {
+                    return { prices: [price], sources: sourceLog };
+                  }
+                }
+              }
+            }
+
+            // STRATEGY 2: Look for price in button/link elements
             const buttons = Array.from(card.querySelectorAll('button, a, [role="button"]'));
             for (const btn of buttons) {
               const btnText = btn.textContent || "";
@@ -4269,33 +4284,7 @@ async function scrapeObilet(origin, destination, dateIso) {
               }
             }
 
-            // STRATEGY 2: Try specific data attributes
-            for (const attr of ['data-price', 'data-amount', 'data-sale-price']) {
-              const elements = card.querySelectorAll(`[${attr}]`);
-              for (const elem of elements) {
-                const price = parseAndValidate(elem.getAttribute(attr), attr);
-                if (price > 0) {
-                  return { prices: [price], sources: sourceLog };
-                }
-              }
-            }
-
-            // STRATEGY 3: Try specific class selectors
-            for (const selector of ['.price', '[itemprop="price"]', '.amount', '.fare']) {
-              const elements = card.querySelectorAll(selector);
-              for (const elem of elements) {
-                const text = elem.textContent || "";
-                const match = text.match(/(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/i);
-                if (match) {
-                  const price = parseAndValidate(match[1], selector);
-                  if (price > 0) {
-                    return { prices: [price], sources: sourceLog };
-                  }
-                }
-              }
-            }
-
-            // STRATEGY 4: Find all TL prices in visible text as last resort
+            // STRATEGY 3: Find all TL prices in visible text as last resort
             const text = card.textContent || "";
             const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
             
