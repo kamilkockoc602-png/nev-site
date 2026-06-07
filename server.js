@@ -498,6 +498,7 @@ try { db.exec("ALTER TABLE obilet_targets ADD COLUMN departure_stop_filter TEXT 
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_sync_status TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_sync_at TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_email_sent_at TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+try { db.exec("ALTER TABLE obilet_targets ADD COLUMN route_id TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN journey_date TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN departure_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN arrival_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
@@ -3847,15 +3848,80 @@ async function fetchObiletJourneysViaApi(origin, destination, dateIso) {
   }
 }
 
-// oBilet Ana Scraper - API önce, Puppeteer yedek
-async function scrapeObilet(origin, destination, dateIso) {
-  // Önce gerçek API dene
+// oBilet Ana Scraper
+// Onceligi: target'in elindeki route_id varsa direkt /seferler/{routeId}/{date} kazi.
+// Yoksa: Node.js API -> Puppeteer (browser-API + /seferler/ fallback).
+async function scrapeObilet(origin, destination, dateIso, routeId = null) {
+  // 1) Elde route_id varsa direkt /seferler/ sayfasini kazi — en saglam yol
+  if (routeId && /^\d+-\d+$/.test(routeId)) {
+    console.log(`[oBilet] Route ID kullanilarak direkt cekiliyor: ${routeId}`);
+    const browser = await getBrowserInstance();
+    const journeys = await scrapeObiletSeferlerPage(browser, routeId, dateIso);
+    if (journeys.length > 0) return journeys;
+    console.log(`[oBilet] Verilen route_id (${routeId}) sonuc dondurmedi.`);
+  }
+
+  // 2) Statik tablodan route_id cikar (Kadirli=595, Ankara=356 gibi bilinenler)
+  const localRouteId = buildObiletRouteIdLocal(origin, destination);
+  if (localRouteId) {
+    console.log(`[oBilet] Yerel station tablosundan route_id: ${origin}->${destination} = ${localRouteId}`);
+    const browser = await getBrowserInstance();
+    const journeys = await scrapeObiletSeferlerPage(browser, localRouteId, dateIso);
+    if (journeys.length > 0) return journeys;
+  }
+
+  // 3) Resmi API dene (Node.js'den)
   const apiResult = await fetchObiletJourneysViaApi(origin, destination, dateIso);
   if (apiResult.length > 0) return apiResult;
 
-  // API başarısız → Puppeteer
+  // 4) Puppeteer fallback (browser-API + route discovery)
   console.log(`[oBilet] API başarısız, Puppeteer deneniyor: ${origin}→${destination} ${dateIso}`);
   return scrapeObiletViaPuppeteer(origin, destination, dateIso);
+}
+
+// oBilet station ID katalogu (kalıcı, koddan).
+// /seferler/{originId}-{destId}/{date} URL'sini kurabilmek icin gereklidir.
+// Yeni sehir eklemek icin: oBilet sitesinde sehirleri secip Otobus Ara'ya basin, acilan
+// URL'den ID'yi alin (ornek: /seferler/595-356/... ise Kadirli=595, Ankara=356).
+const OBILET_STATION_IDS = {
+  // Kullanicidan dogrulanmis ID'ler
+  "kadirli": 595,
+  "ankara": 356,
+  // Yaygın il merkezleri (oBilet'in standart listesi — kullanıcı doğrulamayınca yedek olarak şüpheli kabul edin)
+  "adana": 354,
+  "istanbul": 350,
+  "izmir": 351,
+  "bursa": 357,
+  "antalya": 363,
+  "konya": 362,
+  "gaziantep": 366,
+  "kayseri": 360,
+  "mersin": 369,
+  "samsun": 364,
+  "diyarbakir": 371,
+  "trabzon": 376,
+  "eskisehir": 359,
+  "sanliurfa": 365,
+  "malatya": 367,
+};
+
+function findObiletStationIdLocal(cityName) {
+  const key = slugTr(cityName).replace(/\s+/g, "");
+  if (Object.prototype.hasOwnProperty.call(OBILET_STATION_IDS, key)) {
+    return OBILET_STATION_IDS[key];
+  }
+  // Kismi eslesme (kadirli-otogari -> kadirli)
+  for (const known of Object.keys(OBILET_STATION_IDS)) {
+    if (key.includes(known) || known.includes(key)) return OBILET_STATION_IDS[known];
+  }
+  return null;
+}
+
+function buildObiletRouteIdLocal(origin, destination) {
+  const o = findObiletStationIdLocal(origin);
+  const d = findObiletStationIdLocal(destination);
+  if (o && d) return `${o}-${d}`;
+  return null;
 }
 
 // oBilet route ID cache: "kadirli|ankara" -> "595-356"
@@ -4495,11 +4561,12 @@ async function processObiletTarget(target) {
     const now = nowStamp();
     const scrapedOperators = new Set();
 
+    const targetRouteId = String(target.route_id || "").trim();
     for (const journeyDate of dateList) {
-        let journeys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate);
+        let journeys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate, targetRouteId);
         if (departureStopFilter && !journeys.length) {
           // Bazi gunlerde durak bazli URL bos donebilir; sehir bazli rotaya geri dus.
-          journeys = await scrapeObilet(target.origin, target.destination, journeyDate);
+          journeys = await scrapeObilet(target.origin, target.destination, journeyDate, targetRouteId);
         }
         journeys.forEach((journey) => {
           const normalized = normalizeObiletOperatorName(journey.operator);
@@ -4545,9 +4612,9 @@ async function processObiletTarget(target) {
             return dayRecheckMap;
           }
 
-          let recheckJourneys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate);
+          let recheckJourneys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate, targetRouteId);
           if (departureStopFilter && !recheckJourneys.length) {
-            recheckJourneys = await scrapeObilet(target.origin, target.destination, journeyDate);
+            recheckJourneys = await scrapeObilet(target.origin, target.destination, journeyDate, targetRouteId);
           }
 
           const recheckTrackedRaw = recheckJourneys
@@ -4863,7 +4930,8 @@ app.post("/api/obilet/targets", requireAuth, (req, res) => {
   const departureStopFilter = String(req.body.departureStopFilter || "").trim();
   const operators = String(req.body.operators || "").trim();
   let emailNotifications = String(req.body.emailNotifications || "").trim();
-  
+  let routeId = String(req.body.routeId || req.body.route_id || "").trim();
+
   if (!origin || !destination || !date || !operators) {
     return res.status(400).json({ message: "Kalkis, Varis, Tarih ve Firmalar alanlari zorunludur." });
   }
@@ -4879,23 +4947,37 @@ app.post("/api/obilet/targets", requireAuth, (req, res) => {
   if (rangeDays > 45) {
     return res.status(400).json({ message: "Tarih araligi en fazla 45 gun olabilir." });
   }
-  
+
+  // route_id format validasyonu (varsa)
+  if (routeId && !/^\d+-\d+$/.test(routeId)) {
+    return res.status(400).json({ message: "oBilet Route ID formati gecersiz. Ornek: 595-356" });
+  }
+
+  // route_id verilmediyse statik tablodan otomatik bul
+  if (!routeId) {
+    const auto = buildObiletRouteIdLocal(origin, destination);
+    if (auto) {
+      routeId = auto;
+      console.log(`[oBilet] route_id otomatik atandi: ${origin}->${destination} = ${routeId}`);
+    }
+  }
+
   // E-posta boşsa varsayılanı kullan
   if (!emailNotifications) {
     emailNotifications = String(process.env.DEFAULT_NOTIF_EMAIL || "").trim();
   }
-  
+
   try {
     const result = db.prepare(
-      "INSERT INTO obilet_targets (origin, destination, date, end_date, departure_stop_filter, operators, email_notifications, telegram_chat_ids, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ).run(origin, destination, date, normalizedEndDate, departureStopFilter, operators, emailNotifications, "", nowStamp());
-    
+      "INSERT INTO obilet_targets (origin, destination, date, end_date, departure_stop_filter, operators, email_notifications, telegram_chat_ids, route_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(origin, destination, date, normalizedEndDate, departureStopFilter, operators, emailNotifications, "", routeId, nowStamp());
+
     // Ekleme işleminden sonra fiyatları hemen çekmek için arka planda tetikle
     setTimeout(() => {
       refreshObiletPricesTask().catch(() => null);
     }, 1000);
-    
-    res.json({ ok: true, id: result.lastInsertRowid });
+
+    res.json({ ok: true, id: result.lastInsertRowid, routeId });
   } catch (error) {
     res.status(500).json({ message: error.message || "Kayit basarisiz." });
   }
@@ -5065,6 +5147,24 @@ try {
   console.log("[oBilet] Eski pending fiyat kayıtları temizlendi.");
 } catch (e) {
   console.warn("[oBilet] Pending temizleme atlandı:", e.message);
+}
+
+// Boot-time backfill: route_id'si bos olan hatlar icin statik tablodan otomatik doldur.
+try {
+  const emptyTargets = db.prepare("SELECT id, origin, destination FROM obilet_targets WHERE TRIM(route_id) = ''").all();
+  const updateStmt = db.prepare("UPDATE obilet_targets SET route_id = ? WHERE id = ?");
+  let filled = 0;
+  for (const t of emptyTargets) {
+    const rid = buildObiletRouteIdLocal(t.origin, t.destination);
+    if (rid) {
+      updateStmt.run(rid, t.id);
+      console.log(`[oBilet] Hat #${t.id} (${t.origin}->${t.destination}) icin route_id atandi: ${rid}`);
+      filled++;
+    }
+  }
+  if (filled > 0) console.log(`[oBilet] ${filled} hat icin route_id otomatik dolduruldu.`);
+} catch (e) {
+  console.warn("[oBilet] Route ID backfill atlandı:", e.message);
 }
 
 // Graceful shutdown: Browser instance'ı temizle

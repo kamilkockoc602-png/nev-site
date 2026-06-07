@@ -3892,6 +3892,7 @@ function setupObiletForm() {
       const rawEndDate = row.querySelector(".obilet-end-date")?.value.trim() || "";
       const endDate = rawEndDate || date;
       const departureStopFilter = row.querySelector(".obilet-departure-filter")?.value.trim() || "";
+      const routeId = row.querySelector(".obilet-route-id")?.value.trim() || "";
       const operators = row.querySelector(".obilet-operators-hidden")?.value.trim() || "";
       const emails = row.querySelector(".obilet-emails")?.value.trim() || "";
 
@@ -3905,6 +3906,11 @@ function setupObiletForm() {
         msgEl.textContent = `Hat ${index + 1}: Bitis tarihi baslangic tarihinden once olamaz.`;
         return;
       }
+      if (routeId && !/^\d+-\d+$/.test(routeId)) {
+        msgEl.style.color = "#d64545";
+        msgEl.textContent = `Hat ${index + 1}: oBilet Route ID formati gecersiz (orn: 595-356).`;
+        return;
+      }
 
       payloads.push({
         origin,
@@ -3912,6 +3918,7 @@ function setupObiletForm() {
         date,
         endDate,
         departureStopFilter,
+        routeId,
         operators,
         emailNotifications: emails,
       });
