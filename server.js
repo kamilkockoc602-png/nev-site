@@ -4158,41 +4158,43 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
           item?.partner?.name || item?.busCompany?.name || ""
         ).trim());
 
-        // Time: journey.stops icinde is-origin=true olanin time ISO'su
+        // Time: en hizli yol journey.departure (ISO "2026-06-09T08:30:00"), sonra stops dizisi
         let tm = null;
-        let depStop = "";
-        let arrStop = "";
-        const stops = item?.journey?.stops || item?.stops || [];
-        if (Array.isArray(stops) && stops.length) {
-          const originStop = stops.find(s => s?.["is-origin"] === true || s?.is_origin === true || s?.isOrigin === true) || stops[0];
-          const destStop = stops.find(s => s?.["is-destination"] === true || s?.is_destination === true || s?.isDestination === true) || stops[stops.length - 1];
-          if (originStop?.time) {
-            const m = String(originStop.time).match(/T?(\d{2}):(\d{2})/);
-            if (m) tm = [`${m[1]}:${m[2]}`, m[1], m[2]];
-          }
-          depStop = String(originStop?.name || "").trim();
-          arrStop = String(destStop?.name || "").trim();
+        let depStop = String(item?.journey?.origin || item?.["origin-location"] || "").trim();
+        let arrStop = String(item?.journey?.destination || item?.["destination-location"] || "").trim();
+
+        const directDeparture = item?.journey?.departure || item?.departure || item?.["departure-time"] || item?.departure_time;
+        if (directDeparture) {
+          const m = String(directDeparture).match(/T?(\d{2}):(\d{2})/);
+          if (m) tm = [`${m[1]}:${m[2]}`, m[1], m[2]];
         }
-        // Fallback: direkt alanlar
+        // Yedek: stops dizisinden is-origin olani bul
         if (!tm) {
-          const rawTime = String(
-            item?.["departure-time"] || item?.departure_time || item?.departureTime ||
-            item?.departure?.time || item?.time || ""
-          );
-          const m = rawTime.match(/([01]\d|2[0-3]):[0-5]\d/);
-          if (m) tm = m;
+          const stops = item?.journey?.stops || item?.stops || [];
+          if (Array.isArray(stops) && stops.length) {
+            const originStop = stops.find(s => s?.["is-origin"] === true || s?.is_origin === true || s?.isOrigin === true) || stops[0];
+            const destStop = stops.find(s => s?.["is-destination"] === true || s?.is_destination === true || s?.isDestination === true) || stops[stops.length - 1];
+            if (originStop?.time) {
+              const m = String(originStop.time).match(/T?(\d{2}):(\d{2})/);
+              if (m) tm = [`${m[1]}:${m[2]}`, m[1], m[2]];
+            }
+            if (!depStop) depStop = String(originStop?.name || "").trim();
+            if (!arrStop) arrStop = String(destStop?.name || "").trim();
+          }
         }
 
-        // Price: cok genis arama — internet-price oncelik, sonra sale, sonra price-related her sey
+        // Price: GERCEK yapida fiyat journey.internet-price icinde (log'dan teyit edildi).
+        // Oncelik: journey.internet-price -> top-level internet-price -> sale/discounted -> son care original-price
         let price = 0;
         const priceCandidates = [
+          item?.journey?.["internet-price"], item?.journey?.internet_price, item?.journey?.internetPrice,
           item?.["internet-price"], item?.internet_price, item?.internetPrice,
-          item?.["sale-price"], item?.sale_price, item?.salePrice,
-          item?.["discounted-price"], item?.discounted_price, item?.discountedPrice,
-          item?.["partner-price"], item?.partner_price,
-          item?.["original-price"], item?.original_price,  // son care — yine de original'a izin verelim, hicbir sey yoksa
-          item?.price, item?.amount, item?.fare,
-          item?.journey?.price, item?.journey?.amount,
+          item?.journey?.["sale-price"], item?.["sale-price"], item?.sale_price,
+          item?.journey?.["discounted-price"], item?.["discounted-price"],
+          item?.journey?.["partner-price"], item?.["partner-price"],
+          item?.journey?.price, item?.price, item?.amount, item?.fare,
+          // Son care — original-price (yuksek liste fiyati). Hicbir yerde internet-price yoksa bunu kullan.
+          item?.journey?.["original-price"], item?.["original-price"], item?.original_price,
         ];
         for (const c of priceCandidates) {
           if (c == null) continue;
