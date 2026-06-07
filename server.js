@@ -4143,39 +4143,62 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
         Array.isArray(data) ? data : [];
       console.log(`[oBilet Puppeteer] XHR yakalandi: ${list.length} sefer`);
 
-      // ILK item'ı tam dump et — alan adlarini cozmek icin (production'da bir kere goresegimiz icin yeterli)
+      // ILK item'in TUM key'lerini ve uzun bir dump'ini logla — alan adlarini netlestirmek icin
       if (list.length > 0 && DEBUG_OBILET_PRICE) {
-        console.log(`[oBilet Puppeteer XHR DEBUG] Ornek item: ${JSON.stringify(list[0]).substring(0, 1500)}`);
+        console.log(`[oBilet Puppeteer XHR DEBUG] Ilk item top-level keys: ${Object.keys(list[0]).join(", ")}`);
+        console.log(`[oBilet Puppeteer XHR DEBUG] Ilk item dump: ${JSON.stringify(list[0]).substring(0, 3000)}`);
       }
 
       let parsed = 0, skipped_op = 0, skipped_time = 0, skipped_price = 0;
       for (const item of list) {
-        // Genis alan adi yelpazesi — kebab/snake/camel ve nested
+        // Operator: partner-name kesin alani
         const operator = toTurkishTitleCase(String(
           item?.["partner-name"] || item?.partner_name || item?.partnerName ||
           item?.["company-name"] || item?.company_name || item?.companyName ||
-          item?.["operator-name"] || item?.operator_name || item?.operatorName || item?.operator ||
-          item?.busCompany?.name || item?.bus_company?.name || item?.["bus-company"]?.name ||
-          item?.partner?.name || item?.company?.name || item?.provider?.name || ""
+          item?.partner?.name || item?.busCompany?.name || ""
         ).trim());
-        const rawTime = String(
-          item?.["departure-time"] || item?.departure_time || item?.departureTime ||
-          item?.departure?.time || item?.time || ""
-        );
-        const tm = rawTime.match(/([01]\d|2[0-3]):[0-5]\d/);
-        const priceRaw =
-          item?.["internet-price"] ?? item?.internet_price ?? item?.internetPrice ??
-          item?.["sale-price"] ?? item?.sale_price ?? item?.salePrice ??
-          item?.price ?? 0;
-        const price = Math.round(Number(priceRaw));
-        const depStop = String(
-          item?.["origin-location"] || item?.origin_location || item?.originLocation ||
-          item?.departure?.name || ""
-        ).trim();
-        const arrStop = String(
-          item?.["destination-location"] || item?.destination_location || item?.destinationLocation ||
-          item?.arrival?.name || ""
-        ).trim();
+
+        // Time: journey.stops icinde is-origin=true olanin time ISO'su
+        let tm = null;
+        let depStop = "";
+        let arrStop = "";
+        const stops = item?.journey?.stops || item?.stops || [];
+        if (Array.isArray(stops) && stops.length) {
+          const originStop = stops.find(s => s?.["is-origin"] === true || s?.is_origin === true || s?.isOrigin === true) || stops[0];
+          const destStop = stops.find(s => s?.["is-destination"] === true || s?.is_destination === true || s?.isDestination === true) || stops[stops.length - 1];
+          if (originStop?.time) {
+            const m = String(originStop.time).match(/T?(\d{2}):(\d{2})/);
+            if (m) tm = [`${m[1]}:${m[2]}`, m[1], m[2]];
+          }
+          depStop = String(originStop?.name || "").trim();
+          arrStop = String(destStop?.name || "").trim();
+        }
+        // Fallback: direkt alanlar
+        if (!tm) {
+          const rawTime = String(
+            item?.["departure-time"] || item?.departure_time || item?.departureTime ||
+            item?.departure?.time || item?.time || ""
+          );
+          const m = rawTime.match(/([01]\d|2[0-3]):[0-5]\d/);
+          if (m) tm = m;
+        }
+
+        // Price: cok genis arama — internet-price oncelik, sonra sale, sonra price-related her sey
+        let price = 0;
+        const priceCandidates = [
+          item?.["internet-price"], item?.internet_price, item?.internetPrice,
+          item?.["sale-price"], item?.sale_price, item?.salePrice,
+          item?.["discounted-price"], item?.discounted_price, item?.discountedPrice,
+          item?.["partner-price"], item?.partner_price,
+          item?.["original-price"], item?.original_price,  // son care — yine de original'a izin verelim, hicbir sey yoksa
+          item?.price, item?.amount, item?.fare,
+          item?.journey?.price, item?.journey?.amount,
+        ];
+        for (const c of priceCandidates) {
+          if (c == null) continue;
+          const n = Math.round(Number(c));
+          if (Number.isFinite(n) && n >= 50 && n <= 50000) { price = n; break; }
+        }
 
         if (!operator) { skipped_op++; continue; }
         if (!tm) { skipped_time++; continue; }
@@ -4188,6 +4211,11 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
       }
       if (list.length > 0) {
         console.log(`[oBilet Puppeteer XHR] parse: ${parsed}, atlandi: op=${skipped_op} time=${skipped_time} price=${skipped_price}`);
+        if (DEBUG_OBILET_PRICE && capturedJourneys.length > 0) {
+          capturedJourneys.slice(-Math.min(parsed, 5)).forEach(j =>
+            console.log(`  -> ${j.operator} ${j.time}: ${j.price} TL`)
+          );
+        }
       }
     } catch (e) {
       if (DEBUG_OBILET_PRICE) console.log(`[oBilet Puppeteer XHR] handler hatasi: ${e.message}`);
