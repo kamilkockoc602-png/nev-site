@@ -3858,125 +3858,182 @@ async function scrapeObilet(origin, destination, dateIso) {
   return scrapeObiletViaPuppeteer(origin, destination, dateIso);
 }
 
-// oBilet Puppeteer Scraper (yedek - API çalışmazsa)
-async function scrapeObiletViaPuppeteer(origin, destination, dateIso) {
+// oBilet route ID cache: "kadirli|ankara" -> "595-356"
+// Landing sayfasinda "Otobus Ara"ya basinca acilan /seferler/X-Y/DATE URL'inden ogrenilir.
+const obiletRouteIdCache = new Map();
+
+// Puppeteer ile bir sayfa hazirla — Cloudflare bypass + reklam blok.
+async function setupObiletPage(browser) {
+  const page = await browser.newPage();
+
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+    Object.defineProperty(navigator, "languages", { get: () => ["tr-TR", "tr"] });
+    window.chrome = { runtime: {} };
+  });
+
+  await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+  await page.setViewport({ width: 1366, height: 768 });
+  await page.setExtraHTTPHeaders({ "Accept-Language": "tr-TR,tr;q=0.9" });
+  await page.setCacheEnabled(false);
+
+  await page.setRequestInterception(true);
+  page.on("request", (req) => {
+    const reqUrl = req.url();
+    if (/(doubleclick|googleads|googletagmanager|google-analytics|facebook\.com|fbcdn|hotjar|tiktok|yandex|criteo|taboola|outbrain|clarity|useinsider)/i.test(reqUrl)) {
+      return req.abort();
+    }
+    return req.continue();
+  });
+
+  return page;
+}
+
+// Landing sayfasini ac, Cloudflare'i bekle.
+async function gotoAndHandleCloudflare(page, url) {
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
+  const isChallenge = await page.evaluate(() =>
+    document.title.includes("Just a moment") ||
+    (document.body?.innerText || "").includes("Checking your browser")
+  ).catch(() => false);
+  if (isChallenge) {
+    console.log("[oBilet Puppeteer] Cloudflare, 12s bekleniyor...");
+    await new Promise(r => setTimeout(r, 12000));
+  }
+}
+
+// Bir Kadirli<->Ankara hatti icin route ID'sini (ornek: "595-356") kesfet.
+// Landing sayfasinda "Otobus Ara" butonuna basip /seferler/ID-ID/DATE yonlenmesini bekleriz.
+async function discoverObiletRouteId(browser, origin, destination, dateIso) {
   const originSlug = slugTr(origin).replace(/\s+/g, "-");
   const destSlug = slugTr(destination).replace(/\s+/g, "-");
-  const url = `https://www.obilet.com/otobus-bileti/${originSlug}-${destSlug}?date=${dateIso}&t=${Date.now()}`;
+  const landingUrl = `https://www.obilet.com/otobus-bileti/${originSlug}-${destSlug}?date=${dateIso}`;
 
-  console.log(`[oBilet Puppeteer] Açılıyor: ${url}`);
-
-  const browser = await getBrowserInstance();
-  let page = null;
+  console.log(`[oBilet] Route ID kesfediliyor: ${origin}->${destination}`);
+  const page = await setupObiletPage(browser);
 
   try {
-    page = await browser.newPage();
+    await gotoAndHandleCloudflare(page, landingUrl);
 
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-      Object.defineProperty(navigator, "languages", { get: () => ["tr-TR", "tr"] });
-      window.chrome = { runtime: {} };
-    });
+    // 1. Yol: HTML'deki form'dan veya linklerden /seferler/X-Y/ paterni bul
+    let routeId = await page.evaluate(() => {
+      const html = document.documentElement.outerHTML;
+      const m = html.match(/\/seferler\/(\d+)-(\d+)\//);
+      return m ? `${m[1]}-${m[2]}` : null;
+    }).catch(() => null);
 
-    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
-    await page.setViewport({ width: 1366, height: 768 });
-    await page.setExtraHTTPHeaders({ "Accept-Language": "tr-TR,tr;q=0.9" });
-    await page.setCacheEnabled(false);
-
-    // Sadece reklam/tracking blokla — stylesheet, font, image Cloudflare icin gerekli
-    // (bunlari engellersek bot olarak isaretlenip eksik fiyat aliriz)
-    await page.setRequestInterception(true);
-    page.on("request", (req) => {
-      const reqUrl = req.url();
-      if (/(doubleclick|googleads|googletagmanager|google-analytics|facebook\.com|fbcdn|hotjar|tiktok|yandex|criteo|taboola|outbrain|clarity|useinsider)/i.test(reqUrl)) {
-        return req.abort();
-      }
-      return req.continue();
-    });
-
-    // oBilet iç API yanıtlarını yakala — SSR durumunda bu da yakalanmayabilir, DOM parse yedek
-    const capturedJourneys = [];
-    const seenKeys = new Set();
-
-    page.on("response", async (response) => {
-      try {
-        const resUrl = response.url();
-        const status = response.status();
-        if (status < 200 || status >= 300) return;
-        const ct = response.headers()["content-type"] || "";
-        if (!ct.includes("json")) return;
-
-        if (!/(GetBusJourneys|GetJourneys|busjourneys|journeys|getbusjourneys)/i.test(resUrl)) return;
-
-        const text = await response.text().catch(() => "");
-        if (!text) return;
-
-        let data;
-        try { data = JSON.parse(text); } catch { return; }
-
-        const list = Array.isArray(data?.data) ? data.data :
-          Array.isArray(data?.journeys) ? data.journeys :
-          Array.isArray(data) ? data : [];
-
-        console.log(`[oBilet Puppeteer] XHR yakalandı: ${resUrl.split("?")[0]} → ${list.length} sefer`);
-
-        for (const item of list) {
-          const operator = toTurkishTitleCase(String(
-            item?.["partner-name"] || item?.partner_name || item?.partnerName ||
-            item?.busCompany?.name || item?.bus_company?.name || ""
-          ).trim());
-
-          const rawTime = String(item?.["departure-time"] || item?.departure_time || item?.departureTime || "");
-          const tm = rawTime.match(/([01]\d|2[0-3]):[0-5]\d/);
-          if (!tm) continue;
-
-          // KRITIK: Sadece internet-price (oBilet satis fiyati). original-price'a ASLA dusme.
-          const price = Math.round(Number(
-            item?.["internet-price"] ?? item?.internet_price ?? item?.internetPrice ?? item?.price ?? 0
-          ));
-
-          const depStop = String(item?.["origin-location"] || item?.origin_location || "").trim();
-          const arrStop = String(item?.["destination-location"] || item?.destination_location || "").trim();
-
-          if (!operator || price < 50) continue;
-          const key = `${toObiletOperatorMatchKey(operator)}|${tm[0]}`;
-          if (seenKeys.has(key)) continue;
-          seenKeys.add(key);
-          capturedJourneys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop });
-        }
-      } catch { /* ignore */ }
-    });
-
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
-
-    // Cloudflare challenge'i bekle
-    const isChallenge = await page.evaluate(() =>
-      document.title.includes("Just a moment") ||
-      (document.body?.innerText || "").includes("Checking your browser")
-    ).catch(() => false);
-    if (isChallenge) {
-      console.log("[oBilet Puppeteer] Cloudflare, 12s bekleniyor...");
-      await new Promise(r => setTimeout(r, 12000));
+    if (routeId) {
+      console.log(`[oBilet] Route ID bulundu (HTML): ${origin}->${destination} = ${routeId}`);
+      return routeId;
     }
 
-    // Fiyatlar JS ile render edildigi icin Schema.org price etiketinin gelmesini bekle (en fazla 20s).
+    // 2. Yol: "Otobus Ara" butonuna bas, yonlenmeyi bekle
+    const clicked = await page.evaluate(() => {
+      const isMatch = (text) => {
+        const n = String(text || "").toLocaleLowerCase("tr-TR").replace(/\s+/g, " ").trim();
+        return n === "otobüs ara" || n === "otobus ara" || n === "bilet ara" || n === "ara" || n.includes("otobüs ara") || n.includes("otobus ara");
+      };
+      const candidates = Array.from(document.querySelectorAll('button, a, input[type="submit"], [role="button"]'));
+      for (const el of candidates) {
+        if (isMatch(el.textContent || el.value)) {
+          try { el.click(); return true; } catch {}
+        }
+      }
+      return false;
+    }).catch(() => false);
+
+    if (clicked) {
+      try {
+        await page.waitForFunction(
+          () => /\/seferler\/\d+-\d+\//.test(location.pathname),
+          { timeout: 20000 }
+        );
+        const url = page.url();
+        const m = url.match(/\/seferler\/(\d+)-(\d+)\//);
+        if (m) {
+          routeId = `${m[1]}-${m[2]}`;
+          console.log(`[oBilet] Route ID bulundu (click yonlenme): ${origin}->${destination} = ${routeId}`);
+          return routeId;
+        }
+      } catch {
+        console.log(`[oBilet] Click sonrasi /seferler/ yonlenmesi gelmedi.`);
+      }
+    } else {
+      console.log(`[oBilet] "Otobus Ara" butonu bulunamadi.`);
+    }
+
+    return null;
+  } finally {
+    await page.close().catch(() => {});
+  }
+}
+
+// /seferler/{routeId}/{date} sayfasindan gercek satis fiyatlarini cek.
+async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
+  const url = `https://www.obilet.com/seferler/${routeId}/${dateIso}?t=${Date.now()}`;
+  console.log(`[oBilet Puppeteer] Seferler sayfasi: ${url}`);
+
+  const page = await setupObiletPage(browser);
+
+  // XHR yakalama — eger oBilet sayfa icinde API cagiriyorsa
+  const capturedJourneys = [];
+  const seenKeys = new Set();
+  page.on("response", async (response) => {
+    try {
+      if (response.status() < 200 || response.status() >= 300) return;
+      const ct = response.headers()["content-type"] || "";
+      if (!ct.includes("json")) return;
+      if (!/(getbusjourneys|busjourneys|journeys)/i.test(response.url())) return;
+
+      const text = await response.text().catch(() => "");
+      if (!text) return;
+      let data; try { data = JSON.parse(text); } catch { return; }
+      const list = Array.isArray(data?.data) ? data.data :
+        Array.isArray(data?.journeys) ? data.journeys :
+        Array.isArray(data) ? data : [];
+      console.log(`[oBilet Puppeteer] XHR yakalandi: ${list.length} sefer`);
+
+      for (const item of list) {
+        const operator = toTurkishTitleCase(String(
+          item?.["partner-name"] || item?.partner_name || item?.partnerName ||
+          item?.busCompany?.name || item?.bus_company?.name || ""
+        ).trim());
+        const rawTime = String(item?.["departure-time"] || item?.departure_time || item?.departureTime || "");
+        const tm = rawTime.match(/([01]\d|2[0-3]):[0-5]\d/);
+        if (!tm) continue;
+        const price = Math.round(Number(
+          item?.["internet-price"] ?? item?.internet_price ?? item?.internetPrice ?? item?.price ?? 0
+        ));
+        const depStop = String(item?.["origin-location"] || item?.origin_location || "").trim();
+        const arrStop = String(item?.["destination-location"] || item?.destination_location || "").trim();
+        if (!operator || price < 50) continue;
+        const key = `${toObiletOperatorMatchKey(operator)}|${tm[0]}`;
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+        capturedJourneys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop });
+      }
+    } catch { /* ignore */ }
+  });
+
+  try {
+    await gotoAndHandleCloudflare(page, url);
+
+    // Fiyat etiketinin (Schema.org veya text) gelmesini bekle
     await page.waitForFunction(
-      () => document.querySelectorAll("[itemprop='busTrip']").length > 0 &&
-            document.querySelector("[itemprop='busTrip'] [itemprop='price'][content]") !== null,
-      { timeout: 20000 }
+      () => /\d+\s*(TL|₺)/i.test(document.body?.innerText || ""),
+      { timeout: 25000 }
     ).catch(() => {
-      console.log("[oBilet Puppeteer] itemprop=price beklemesi zaman asti — DOM parse yine de denenecek.");
+      console.log("[oBilet Puppeteer] /seferler/ fiyat beklemesi zaman asti.");
     });
 
-    // XHR yakalama icin son bir bekleme
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, 1500));
 
     if (capturedJourneys.length > 0) {
-      console.log(`[oBilet Puppeteer] ${capturedJourneys.length} sefer (XHR'den)`);
+      console.log(`[oBilet Puppeteer] ${capturedJourneys.length} sefer (XHR)`);
       return capturedJourneys;
     }
 
-    // DOM parse — Schema.org markup'i (itemprop) authoritative kabul et
+    // DOM parse — /seferler/ sayfasinda fiyatlar net (1.100 TL gibi)
     const domJourneys = await page.evaluate(() => {
       const results = [];
       const seen = new Set();
@@ -3986,58 +4043,55 @@ async function scrapeObiletViaPuppeteer(origin, destination, dateIso) {
       };
       const isStruck = (el) => {
         if (!el) return false;
-        const tag = el.tagName?.toLowerCase();
-        if (tag === "del" || tag === "s" || tag === "strike") return true;
-        const parent = el.closest("del, s, strike");
-        if (parent) return true;
+        if (el.closest("del, s, strike")) return true;
         try {
-          const style = window.getComputedStyle(el);
-          if (style.textDecorationLine.includes("line-through")) return true;
+          if (window.getComputedStyle(el).textDecorationLine.includes("line-through")) return true;
         } catch {}
         return false;
       };
 
-      const cards = document.querySelectorAll("li[itemprop='busTrip'], .journeys li[itemtype*='BusTrip'], .journey-list li, .journeys li");
+      const cards = document.querySelectorAll("li[itemprop='busTrip'], .journeys li, .journey-list li, .journey-item");
       for (const card of cards) {
         const op = card.querySelector("[itemprop='provider'] meta[itemprop='name']")?.getAttribute("content") ||
           card.querySelector("[itemprop='provider'] [itemprop='name']")?.textContent?.trim() ||
           card.querySelector("img[alt]")?.getAttribute("alt") || "";
         const timeText = card.querySelector("[itemprop='departureTime']")?.getAttribute("content") ||
           card.querySelector("[itemprop='departureTime']")?.textContent ||
-          card.querySelector(".departure-time")?.textContent || "";
+          card.querySelector(".departure-time, .time")?.textContent || "";
         const tm = String(timeText).match(/([01]\d|2[0-3]):[0-5]\d/);
         if (!op || !tm) continue;
 
-        // ONCELIK 1: Schema.org itemprop=price content attribute (oBilet'in canonical satis fiyati)
         let price = 0;
-        const priceNodes = card.querySelectorAll("[itemprop='price']");
-        for (const node of priceNodes) {
+
+        // 1) Schema.org itemprop=price (cizik degilse)
+        for (const node of card.querySelectorAll("[itemprop='price']")) {
           if (isStruck(node)) continue;
-          const content = node.getAttribute("content");
-          const candidate = parseNumber(content || node.textContent);
-          if (candidate >= 100 && candidate <= 10000) {
-            price = candidate;
-            break;
-          }
+          const c = parseNumber(node.getAttribute("content") || node.textContent);
+          if (c >= 100 && c <= 10000) { price = c; break; }
         }
 
-        // ONCELIK 2: itemprop yoksa, kart icindeki cizilmemis TL fiyatlarini topla, EN DUSUGUNU al
+        // 2) .price, .amount tipindeki cizilmemis elemanlar — EN DUSUK
         if (!price) {
           const candidates = [];
-          const textNodes = card.querySelectorAll(".amount, .price, .ticket-price, .fare, [class*='price']");
-          for (const node of textNodes) {
-            if (isStruck(node)) continue;
+          card.querySelectorAll(".amount, .price, .ticket-price, .fare, [class*='price']").forEach(node => {
+            if (isStruck(node)) return;
             const c = parseNumber(node.textContent);
             if (c >= 100 && c <= 10000) candidates.push(c);
-          }
+          });
           if (candidates.length) price = Math.min(...candidates);
         }
 
-        // ONCELIK 3: Son care textContent regex (ama burada cizik fiyatlari ayirt edemeyiz)
+        // 3) Son care: kartin tum textContent'inden cizilmemis TL'leri bul
         if (!price) {
+          const struckSet = new Set();
+          card.querySelectorAll("del, s, strike, [style*='line-through']").forEach(el => {
+            struckSet.add((el.textContent || "").trim());
+          });
           const matches = [...(card.textContent || "").matchAll(/(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi)]
-            .map(m => parseNumber(m[1])).filter(p => p >= 100 && p <= 10000);
-          if (matches.length) price = Math.min(...matches);
+            .map(m => ({ raw: m[0], val: parseNumber(m[1]) }))
+            .filter(x => x.val >= 100 && x.val <= 10000)
+            .filter(x => ![...struckSet].some(s => s.includes(x.raw)));
+          if (matches.length) price = Math.min(...matches.map(x => x.val));
         }
 
         if (!price) continue;
@@ -4056,24 +4110,52 @@ async function scrapeObiletViaPuppeteer(origin, destination, dateIso) {
     }).catch(() => []);
 
     if (domJourneys.length > 0) {
-      console.log(`[oBilet Puppeteer] DOM'dan ${domJourneys.length} sefer`);
+      console.log(`[oBilet Puppeteer] /seferler/'den DOM: ${domJourneys.length} sefer`);
       if (DEBUG_OBILET_PRICE) {
-        domJourneys.slice(0, 5).forEach(j =>
-          console.log(`  → ${j.operator} ${j.time}: ${j.price} TL`)
+        domJourneys.slice(0, 8).forEach(j =>
+          console.log(`  -> ${j.operator} ${j.time}: ${j.price} TL`)
         );
       }
       return domJourneys;
     }
 
-    console.log(`[oBilet Puppeteer] Hiç sefer bulunamadı: ${origin}→${destination} ${dateIso}`);
+    console.log(`[oBilet Puppeteer] /seferler/ sayfasinda sefer bulunamadi.`);
     return [];
-
   } catch (e) {
-    console.error(`[oBilet Puppeteer] Hata: ${e.message}`);
+    console.error(`[oBilet Puppeteer] /seferler/ hatasi: ${e.message}`);
     return [];
   } finally {
-    if (page) await page.close().catch(() => {});
+    await page.close().catch(() => {});
   }
+}
+
+// oBilet Puppeteer Scraper (yedek - API çalışmazsa)
+// AKIS: Landing /otobus-bileti/... tanitim sayfasi yerine /seferler/X-Y/DATE gercek arama sayfasini kazi.
+async function scrapeObiletViaPuppeteer(origin, destination, dateIso) {
+  const cacheKey = `${slugTr(origin)}|${slugTr(destination)}`;
+  const browser = await getBrowserInstance();
+
+  let routeId = obiletRouteIdCache.get(cacheKey);
+  if (!routeId) {
+    routeId = await discoverObiletRouteId(browser, origin, destination, dateIso);
+    if (routeId) {
+      obiletRouteIdCache.set(cacheKey, routeId);
+    } else {
+      console.log(`[oBilet Puppeteer] Route ID kesfedilemedi, fallback ile devam.`);
+    }
+  }
+
+  if (!routeId) {
+    console.log(`[oBilet Puppeteer] Route ID kesfedilemedi. Veri yok dondurulecek (yanlis fiyat yazmamak icin).`);
+    return [];
+  }
+
+  const journeys = await scrapeObiletSeferlerPage(browser, routeId, dateIso);
+  if (journeys.length === 0) {
+    // /seferler/ sayfasi calismadi: route ID belki gecersiz hale geldi, cache'den dus.
+    obiletRouteIdCache.delete(cacheKey);
+  }
+  return journeys;
 }
 
 // Nodemailer ile E-posta Gönderim Servisi
