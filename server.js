@@ -3360,13 +3360,13 @@ async function getBrowserInstance() {
       console.log("[Browser Pool] Yeni browser instance oluşturuluyor...");
       sharedBrowser = await puppeteer.launch({
         headless: "new",
+        // NOT: --single-process ve --no-zygote bilinen "detached frame" hatalarinin sebebi.
+        // Bir sayfa kapatildiginda tum browser dusebiliyor. Bunlar olmadan da yeterince hafif.
         args: [
           "--no-sandbox",
           "--disable-setuid-sandbox",
           "--disable-dev-shm-usage",
           "--disable-blink-features=AutomationControlled",
-          "--single-process",
-          "--no-zygote",
           "--disable-gpu",
           "--disable-software-rasterizer",
           "--disable-extensions",
@@ -4143,26 +4143,55 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
         Array.isArray(data) ? data : [];
       console.log(`[oBilet Puppeteer] XHR yakalandi: ${list.length} sefer`);
 
+      // ILK item'ı tam dump et — alan adlarini cozmek icin (production'da bir kere goresegimiz icin yeterli)
+      if (list.length > 0 && DEBUG_OBILET_PRICE) {
+        console.log(`[oBilet Puppeteer XHR DEBUG] Ornek item: ${JSON.stringify(list[0]).substring(0, 1500)}`);
+      }
+
+      let parsed = 0, skipped_op = 0, skipped_time = 0, skipped_price = 0;
       for (const item of list) {
+        // Genis alan adi yelpazesi — kebab/snake/camel ve nested
         const operator = toTurkishTitleCase(String(
           item?.["partner-name"] || item?.partner_name || item?.partnerName ||
-          item?.busCompany?.name || item?.bus_company?.name || ""
+          item?.["company-name"] || item?.company_name || item?.companyName ||
+          item?.["operator-name"] || item?.operator_name || item?.operatorName || item?.operator ||
+          item?.busCompany?.name || item?.bus_company?.name || item?.["bus-company"]?.name ||
+          item?.partner?.name || item?.company?.name || item?.provider?.name || ""
         ).trim());
-        const rawTime = String(item?.["departure-time"] || item?.departure_time || item?.departureTime || "");
+        const rawTime = String(
+          item?.["departure-time"] || item?.departure_time || item?.departureTime ||
+          item?.departure?.time || item?.time || ""
+        );
         const tm = rawTime.match(/([01]\d|2[0-3]):[0-5]\d/);
-        if (!tm) continue;
-        const price = Math.round(Number(
-          item?.["internet-price"] ?? item?.internet_price ?? item?.internetPrice ?? item?.price ?? 0
-        ));
-        const depStop = String(item?.["origin-location"] || item?.origin_location || "").trim();
-        const arrStop = String(item?.["destination-location"] || item?.destination_location || "").trim();
-        if (!operator || price < 50) continue;
+        const priceRaw =
+          item?.["internet-price"] ?? item?.internet_price ?? item?.internetPrice ??
+          item?.["sale-price"] ?? item?.sale_price ?? item?.salePrice ??
+          item?.price ?? 0;
+        const price = Math.round(Number(priceRaw));
+        const depStop = String(
+          item?.["origin-location"] || item?.origin_location || item?.originLocation ||
+          item?.departure?.name || ""
+        ).trim();
+        const arrStop = String(
+          item?.["destination-location"] || item?.destination_location || item?.destinationLocation ||
+          item?.arrival?.name || ""
+        ).trim();
+
+        if (!operator) { skipped_op++; continue; }
+        if (!tm) { skipped_time++; continue; }
+        if (price < 50) { skipped_price++; continue; }
         const key = `${toObiletOperatorMatchKey(operator)}|${tm[0]}`;
         if (seenKeys.has(key)) continue;
         seenKeys.add(key);
         capturedJourneys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop });
+        parsed++;
       }
-    } catch { /* ignore */ }
+      if (list.length > 0) {
+        console.log(`[oBilet Puppeteer XHR] parse: ${parsed}, atlandi: op=${skipped_op} time=${skipped_time} price=${skipped_price}`);
+      }
+    } catch (e) {
+      if (DEBUG_OBILET_PRICE) console.log(`[oBilet Puppeteer XHR] handler hatasi: ${e.message}`);
+    }
   });
 
   try {
@@ -5049,22 +5078,32 @@ app.post("/api/obilet/targets/:id/refresh", requireAuth, async (req, res) => {
 
     // 8 saniye delay ekle (Cloudflare bot korumasını önlemek için)
     const delayMs = 8000;
-    
-    // Arka planda işle ve hemen yanıt dön
+
+    // Arka planda işle ve hemen yanıt dön — auto task ile cakismayi onle (obiletTaskRunning lock).
     (async () => {
       try {
+        // Auto task aktifse bitmesini bekle (max 60s)
+        for (let i = 0; i < 30 && obiletTaskRunning; i++) {
+          await new Promise(r => setTimeout(r, 2000));
+        }
         console.log(`[Manuel Güncelleme] ${target.origin} -> ${target.destination} için 8 saniye bekleniyor...`);
         await new Promise(resolve => setTimeout(resolve, delayMs));
-        await processObiletTarget(target);
+        obiletTaskRunning = true;
+        try {
+          await processObiletTarget(target);
+        } finally {
+          obiletTaskRunning = false;
+        }
         console.log(`[Manuel Güncelleme] ${target.origin} -> ${target.destination} tamamlandı.`);
       } catch (error) {
+        obiletTaskRunning = false;
         console.error(`[Manuel Güncelleme] Hata: ${error.message}`);
       }
     })();
 
-    res.json({ 
-      ok: true, 
-      message: `${target.origin} - ${target.destination} hattı 8 saniye sonra güncellenecek.` 
+    res.json({
+      ok: true,
+      message: `${target.origin} - ${target.destination} hattı 8 saniye sonra güncellenecek.`
     });
   } catch (error) {
     res.status(500).json({ message: error.message || "Manuel güncelleme tetiklenemedi." });
