@@ -47,7 +47,8 @@ const OBILET_SUBJECT_PRICE_ALERT = String(process.env.OBILET_SUBJECT_PRICE_ALERT
 const OBILET_SUBJECT_TEST = String(process.env.OBILET_SUBJECT_TEST || "oBilet Test E-postasi").trim();
 const EMAIL_SIGNATURE_HTML = String(process.env.EMAIL_SIGNATURE_HTML || "").trim();
 const EMAIL_SIGNATURE_TEXT = String(process.env.EMAIL_SIGNATURE_TEXT || "").trim();
-const DEBUG_OBILET_PRICE = true; // TEMPORARY: Debug Enver Geçgel price issue (1100 vs 1300)
+// Fiyat ayiklama loglari. Kapatmak icin env'e DEBUG_OBILET_PRICE=0
+const DEBUG_OBILET_PRICE = String(process.env.DEBUG_OBILET_PRICE ?? "1").trim() !== "0";
 const DEBUG_OBILET_API = String(process.env.DEBUG_OBILET_API || "").trim() === "1";
 const DEBUG_OBILET_XHR = String(process.env.DEBUG_OBILET_XHR || "").trim() === "1";
 const DEBUG_OBILET_XHR_BODY = String(process.env.DEBUG_OBILET_XHR_BODY || "").trim() === "1";
@@ -3882,20 +3883,18 @@ async function scrapeObiletViaPuppeteer(origin, destination, dateIso) {
     await page.setExtraHTTPHeaders({ "Accept-Language": "tr-TR,tr;q=0.9" });
     await page.setCacheEnabled(false);
 
+    // Sadece reklam/tracking blokla — stylesheet, font, image Cloudflare icin gerekli
+    // (bunlari engellersek bot olarak isaretlenip eksik fiyat aliriz)
     await page.setRequestInterception(true);
     page.on("request", (req) => {
-      const type = req.resourceType();
       const reqUrl = req.url();
-      if (/(doubleclick|googleads|googletagmanager|facebook\.com|hotjar|tiktok|yandex|criteo|taboola)/i.test(reqUrl)) {
-        return req.abort();
-      }
-      if (["image", "media", "font", "stylesheet"].includes(type)) {
+      if (/(doubleclick|googleads|googletagmanager|google-analytics|facebook\.com|fbcdn|hotjar|tiktok|yandex|criteo|taboola|outbrain|clarity|useinsider)/i.test(reqUrl)) {
         return req.abort();
       }
       return req.continue();
     });
 
-    // oBilet iç API yanıtlarını yakala
+    // oBilet iç API yanıtlarını yakala — SSR durumunda bu da yakalanmayabilir, DOM parse yedek
     const capturedJourneys = [];
     const seenKeys = new Set();
 
@@ -3907,8 +3906,7 @@ async function scrapeObiletViaPuppeteer(origin, destination, dateIso) {
         const ct = response.headers()["content-type"] || "";
         if (!ct.includes("json")) return;
 
-        const isJourneyUrl = /(GetBusJourneys|GetJourneys|busjourneys|journeys)/i.test(resUrl);
-        if (!isJourneyUrl) return;
+        if (!/(GetBusJourneys|GetJourneys|busjourneys|journeys|getbusjourneys)/i.test(resUrl)) return;
 
         const text = await response.text().catch(() => "");
         if (!text) return;
@@ -3920,23 +3918,25 @@ async function scrapeObiletViaPuppeteer(origin, destination, dateIso) {
           Array.isArray(data?.journeys) ? data.journeys :
           Array.isArray(data) ? data : [];
 
-        console.log(`[oBilet Puppeteer] Yakalandı: ${resUrl.split("?")[0]} → ${list.length} sefer`);
+        console.log(`[oBilet Puppeteer] XHR yakalandı: ${resUrl.split("?")[0]} → ${list.length} sefer`);
 
         for (const item of list) {
           const operator = toTurkishTitleCase(String(
-            item?.partner_name || item?.["partner-name"] || item?.busCompany?.name || item?.bus_company?.name || ""
+            item?.["partner-name"] || item?.partner_name || item?.partnerName ||
+            item?.busCompany?.name || item?.bus_company?.name || ""
           ).trim());
 
-          const rawTime = String(item?.departure_time || item?.["departure-time"] || "");
+          const rawTime = String(item?.["departure-time"] || item?.departure_time || item?.departureTime || "");
           const tm = rawTime.match(/([01]\d|2[0-3]):[0-5]\d/);
           if (!tm) continue;
 
+          // KRITIK: Sadece internet-price (oBilet satis fiyati). original-price'a ASLA dusme.
           const price = Math.round(Number(
-            item?.internet_price ?? item?.["internet-price"] ?? item?.internetPrice ?? item?.price ?? 0
+            item?.["internet-price"] ?? item?.internet_price ?? item?.internetPrice ?? item?.price ?? 0
           ));
 
-          const depStop = String(item?.origin_location || item?.["origin-location"] || "").trim();
-          const arrStop = String(item?.destination_location || item?.["destination-location"] || "").trim();
+          const depStop = String(item?.["origin-location"] || item?.origin_location || "").trim();
+          const arrStop = String(item?.["destination-location"] || item?.destination_location || "").trim();
 
           if (!operator || price < 50) continue;
           const key = `${toObiletOperatorMatchKey(operator)}|${tm[0]}`;
@@ -3947,50 +3947,107 @@ async function scrapeObiletViaPuppeteer(origin, destination, dateIso) {
       } catch { /* ignore */ }
     });
 
-    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
 
+    // Cloudflare challenge'i bekle
     const isChallenge = await page.evaluate(() =>
       document.title.includes("Just a moment") ||
       (document.body?.innerText || "").includes("Checking your browser")
     ).catch(() => false);
-
     if (isChallenge) {
       console.log("[oBilet Puppeteer] Cloudflare, 12s bekleniyor...");
       await new Promise(r => setTimeout(r, 12000));
     }
 
-    await new Promise(r => setTimeout(r, 3000));
+    // Fiyatlar JS ile render edildigi icin Schema.org price etiketinin gelmesini bekle (en fazla 20s).
+    await page.waitForFunction(
+      () => document.querySelectorAll("[itemprop='busTrip']").length > 0 &&
+            document.querySelector("[itemprop='busTrip'] [itemprop='price'][content]") !== null,
+      { timeout: 20000 }
+    ).catch(() => {
+      console.log("[oBilet Puppeteer] itemprop=price beklemesi zaman asti — DOM parse yine de denenecek.");
+    });
+
+    // XHR yakalama icin son bir bekleme
+    await new Promise(r => setTimeout(r, 2000));
 
     if (capturedJourneys.length > 0) {
-      console.log(`[oBilet Puppeteer] ${capturedJourneys.length} sefer yakalandı`);
+      console.log(`[oBilet Puppeteer] ${capturedJourneys.length} sefer (XHR'den)`);
       return capturedJourneys;
     }
 
-    // Son çare: DOM parse
+    // DOM parse — Schema.org markup'i (itemprop) authoritative kabul et
     const domJourneys = await page.evaluate(() => {
       const results = [];
       const seen = new Set();
-      const parsePrice = (raw) => {
+      const parseNumber = (raw) => {
         const n = parseFloat(String(raw || "").replace(/\./g, "").replace(",", ".").replace(/[^0-9.]/g, ""));
         return Number.isFinite(n) ? Math.round(n) : 0;
       };
+      const isStruck = (el) => {
+        if (!el) return false;
+        const tag = el.tagName?.toLowerCase();
+        if (tag === "del" || tag === "s" || tag === "strike") return true;
+        const parent = el.closest("del, s, strike");
+        if (parent) return true;
+        try {
+          const style = window.getComputedStyle(el);
+          if (style.textDecorationLine.includes("line-through")) return true;
+        } catch {}
+        return false;
+      };
 
-      for (const card of document.querySelectorAll("li[itemprop='busTrip'], .journeys li")) {
+      const cards = document.querySelectorAll("li[itemprop='busTrip'], .journeys li[itemtype*='BusTrip'], .journey-list li, .journeys li");
+      for (const card of cards) {
         const op = card.querySelector("[itemprop='provider'] meta[itemprop='name']")?.getAttribute("content") ||
+          card.querySelector("[itemprop='provider'] [itemprop='name']")?.textContent?.trim() ||
           card.querySelector("img[alt]")?.getAttribute("alt") || "";
-        const timeText = card.querySelector("[itemprop='departureTime'], .departure-time")?.textContent || "";
-        const tm = timeText.match(/([01]\d|2[0-3]):[0-5]\d/);
+        const timeText = card.querySelector("[itemprop='departureTime']")?.getAttribute("content") ||
+          card.querySelector("[itemprop='departureTime']")?.textContent ||
+          card.querySelector(".departure-time")?.textContent || "";
+        const tm = String(timeText).match(/([01]\d|2[0-3]):[0-5]\d/);
         if (!op || !tm) continue;
 
-        const prices = [...(card.textContent || "").matchAll(/(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi)]
-          .map(m => parsePrice(m[1])).filter(p => p >= 100 && p <= 10000);
-        if (!prices.length) continue;
-        const price = Math.min(...prices);
+        // ONCELIK 1: Schema.org itemprop=price content attribute (oBilet'in canonical satis fiyati)
+        let price = 0;
+        const priceNodes = card.querySelectorAll("[itemprop='price']");
+        for (const node of priceNodes) {
+          if (isStruck(node)) continue;
+          const content = node.getAttribute("content");
+          const candidate = parseNumber(content || node.textContent);
+          if (candidate >= 100 && candidate <= 10000) {
+            price = candidate;
+            break;
+          }
+        }
 
-        const depStop = card.querySelector("[itemprop='departureBusStop'] [itemprop='name']")?.textContent?.trim() || "";
-        const arrStop = card.querySelector("[itemprop='arrivalBusStop'] [itemprop='name']")?.textContent?.trim() || "";
+        // ONCELIK 2: itemprop yoksa, kart icindeki cizilmemis TL fiyatlarini topla, EN DUSUGUNU al
+        if (!price) {
+          const candidates = [];
+          const textNodes = card.querySelectorAll(".amount, .price, .ticket-price, .fare, [class*='price']");
+          for (const node of textNodes) {
+            if (isStruck(node)) continue;
+            const c = parseNumber(node.textContent);
+            if (c >= 100 && c <= 10000) candidates.push(c);
+          }
+          if (candidates.length) price = Math.min(...candidates);
+        }
 
-        const key = `${op}|${tm[0]}|${price}`;
+        // ONCELIK 3: Son care textContent regex (ama burada cizik fiyatlari ayirt edemeyiz)
+        if (!price) {
+          const matches = [...(card.textContent || "").matchAll(/(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi)]
+            .map(m => parseNumber(m[1])).filter(p => p >= 100 && p <= 10000);
+          if (matches.length) price = Math.min(...matches);
+        }
+
+        if (!price) continue;
+
+        const depStop = card.querySelector("[itemprop='departureBusStop'] [itemprop='name']")?.textContent?.trim() ||
+          card.querySelector("[itemprop='departureBusStop']")?.textContent?.trim() || "";
+        const arrStop = card.querySelector("[itemprop='arrivalBusStop'] [itemprop='name']")?.textContent?.trim() ||
+          card.querySelector("[itemprop='arrivalBusStop']")?.textContent?.trim() || "";
+
+        const key = `${op}|${tm[0]}`;
         if (seen.has(key)) continue;
         seen.add(key);
         results.push({ operator: op, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop });
@@ -4000,6 +4057,11 @@ async function scrapeObiletViaPuppeteer(origin, destination, dateIso) {
 
     if (domJourneys.length > 0) {
       console.log(`[oBilet Puppeteer] DOM'dan ${domJourneys.length} sefer`);
+      if (DEBUG_OBILET_PRICE) {
+        domJourneys.slice(0, 5).forEach(j =>
+          console.log(`  → ${j.operator} ${j.time}: ${j.price} TL`)
+        );
+      }
       return domJourneys;
     }
 
@@ -4756,6 +4818,20 @@ app.post("/api/obilet/targets/:id/refresh", requireAuth, async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: error.message || "Manuel güncelleme tetiklenemedi." });
+  }
+});
+
+// API: Bir hattin tum kayitli fiyatlarini sil (kayitli hat duruyor, sadece fiyatlar temizlenir)
+// Eski yanlis fiyatlar DB'de kalmissa, bunu cagirip bir sonraki taramada temiz baslarsiniz.
+app.post("/api/obilet/targets/:id/clear-prices", requireAuth, (req, res) => {
+  try {
+    const targetId = parseInt(req.params.id, 10);
+    if (!targetId) return res.status(400).json({ message: "Gecersiz hat ID." });
+    const result = db.prepare("DELETE FROM obilet_prices WHERE target_id = ?").run(targetId);
+    console.log(`[Temizlik] target ${targetId}: ${result.changes} fiyat kaydi silindi.`);
+    res.json({ ok: true, deleted: result.changes });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Temizlik basarisiz." });
   }
 });
 
