@@ -3790,927 +3790,400 @@ function extractObiletJourneysFromApiPayload(payload) {
 }
 
 // oBilet İstasyon ID Önbelleği
-const obiletStationCache = new Map();
+// ============================================================
+// oBiLET GERÇEK API ENTEGRASYonu
+// oBilet'in resmi mobile/web API'sini kullanır
+// ============================================================
 
-// oBilet API: İstasyon ID'si bul
-async function findObiletStationId(cityName) {
-  const key = slugTr(cityName);
-  if (obiletStationCache.has(key)) return obiletStationCache.get(key);
+// Session önbelleği - her istekte yeni session açmayız
+let obiletSessionCache = null;
+let obiletSessionExpiry = 0;
+
+// oBilet API Session Al
+async function getObiletSession() {
+  const now = Date.now();
+  if (obiletSessionCache && now < obiletSessionExpiry) {
+    return obiletSessionCache;
+  }
 
   try {
-    const res = await fetch(`https://api.obilet.com/api/station/getstations?query=${encodeURIComponent(cityName)}&culture=tr-TR`, {
-      headers: { "Content-Type": "application/json", "Accept": "application/json" }
+    const res = await fetch("https://api.obilet.com/api/client/getsession", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": "Basic T25seUFQSTo3OEI0QzZFMy1BNDI1LTRFQUQtQTZFOS04QzA0OUZGNzBCMDY=",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0"
+      },
+      body: JSON.stringify({
+        "type": 4,
+        "connection": {
+          "ip-address": "1.1.1.1",
+          "port": "5000"
+        },
+        "browser": {
+          "name": "Chrome",
+          "version": "124"
+        }
+      })
     });
+
     if (res.ok) {
       const data = await res.json();
-      const stations = Array.isArray(data?.data) ? data.data : (Array.isArray(data) ? data : []);
-      const match = stations.find(s => {
-        const name = slugTr(s?.name || s?.city_name || "");
-        return name === key || name.includes(key) || key.includes(name);
-      });
-      if (match) {
-        const id = match.id || match.station_id;
-        obiletStationCache.set(key, id);
-        return id;
+      const session = data?.data;
+      if (session?.["session-id"] && session?.["device-id"]) {
+        obiletSessionCache = session;
+        // 20 dakika geçerli
+        obiletSessionExpiry = now + 20 * 60 * 1000;
+        console.log(`[oBilet] Session alındı: ${session["session-id"].substring(0, 8)}...`);
+        return session;
       }
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    console.log(`[oBilet] Session alma hatası: ${e.message}`);
+  }
+
+  // Fallback session
+  const fallback = {
+    "session-id": crypto.randomUUID(),
+    "device-id": crypto.randomUUID()
+  };
+  obiletSessionCache = fallback;
+  obiletSessionExpiry = now + 5 * 60 * 1000;
+  return fallback;
+}
+
+// oBilet İstasyon ID önbelleği
+const obiletStationIdCache = new Map();
+
+// oBilet API: Şehir → İstasyon ID bul
+async function getObiletStationId(cityName, session) {
+  const key = slugTr(cityName);
+  if (obiletStationIdCache.has(key)) return obiletStationIdCache.get(key);
+
+  try {
+    const res = await fetch("https://api.obilet.com/api/location/getbuslocations", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": "Basic T25seUFQSTo3OEI0QzZFMy1BNDI1LTRFQUQtQTZFOS04QzA0OUZGNzBCMDY="
+      },
+      body: JSON.stringify({
+        "data": cityName,
+        "device-session": session,
+        "date": new Date().toISOString(),
+        "language": "tr-TR"
+      })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      const locations = Array.isArray(data?.data) ? data.data : [];
+      
+      // Tam eşleşme önce, sonra içeren
+      let match = locations.find(loc => slugTr(loc?.name || "") === key);
+      if (!match) match = locations.find(loc => slugTr(loc?.name || "").includes(key) || key.includes(slugTr(loc?.name || "")));
+      
+      if (match?.id) {
+        obiletStationIdCache.set(key, match.id);
+        console.log(`[oBilet] İstasyon bulundu: ${cityName} → ID:${match.id} (${match.name})`);
+        return match.id;
+      }
+    }
+  } catch (e) {
+    console.log(`[oBilet] İstasyon arama hatası (${cityName}): ${e.message}`);
+  }
 
   return null;
 }
 
-// oBilet API: Seferleri çek (resmi API)
+// oBilet Gerçek API ile sefer çek
 async function fetchObiletJourneysViaApi(origin, destination, dateIso) {
-  const dateParts = dateIso.split("-");
-  const dateFormatted = `${dateParts[2]}.${dateParts[1]}.${dateParts[0]}`; // DD.MM.YYYY
+  try {
+    const session = await getObiletSession();
+    
+    const [originId, destId] = await Promise.all([
+      getObiletStationId(origin, session),
+      getObiletStationId(destination, session)
+    ]);
 
-  // Önce istasyon ID'lerini bul
-  const [originId, destId] = await Promise.all([
-    findObiletStationId(origin),
-    findObiletStationId(destination)
-  ]);
-
-  const journeys = [];
-
-  // Yöntem 1: Resmi /api/journey endpoint
-  if (originId && destId) {
-    try {
-      const payload = {
-        "device-session": { "session-id": crypto.randomUUID(), "device-id": crypto.randomUUID() },
-        "date": dateFormatted,
-        "origin-id": originId,
-        "destination-id": destId,
-        "currency": "TRY",
-        "language": "tr-TR"
-      };
-
-      const res = await fetch("https://api.obilet.com/api/journey/getbusjourneys", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Accept": "application/json" },
-        body: JSON.stringify(payload)
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        const items = Array.isArray(data?.data) ? data.data : [];
-        for (const item of items) {
-          const operator = toTurkishTitleCase(String(
-            item?.partner_name || item?.bus_company?.name || item?.company_name || ""
-          ).trim());
-          const depTime = String(item?.departure_time || item?.departure?.time || "").trim().substring(0, 5);
-          const price = Math.round(Number(item?.internet_price || item?.price || item?.min_price || 0));
-          const depStop = String(item?.origin_location || item?.departure?.name || "").trim();
-          const arrStop = String(item?.destination_location || item?.arrival?.name || "").trim();
-
-          if (operator && depTime && price >= 100) {
-            journeys.push({ operator, time: depTime, price, departureStop: depStop, arrivalStop: arrStop });
-          }
-        }
-        if (journeys.length > 0) {
-          console.log(`[oBilet API] ${origin}→${destination} ${dateIso}: ${journeys.length} sefer bulundu (resmi API)`);
-          return journeys;
-        }
-      }
-    } catch (e) {
-      console.log(`[oBilet API] Resmi API hatası: ${e.message}`);
+    if (!originId || !destId) {
+      console.log(`[oBilet API] İstasyon ID bulunamadı: ${origin}(${originId}) → ${destination}(${destId})`);
+      return [];
     }
-  }
 
-  return journeys;
+    const dateParts = dateIso.split("-");
+    const dateFormatted = `${dateParts[2]}.${dateParts[1]}.${dateParts[0]}`;
+
+    const res = await fetch("https://api.obilet.com/api/journey/getbusjourneys", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": "Basic T25seUFQSTo3OEI0QzZFMy1BNDI1LTRFQUQtQTZFOS04QzA0OUZGNzBCMDY="
+      },
+      body: JSON.stringify({
+        "data": {
+          "origin-id": originId,
+          "destination-id": destId,
+          "departure-date": dateFormatted,
+          "currency": "TRY"
+        },
+        "device-session": session,
+        "date": new Date().toISOString(),
+        "language": "tr-TR"
+      })
+    });
+
+    if (!res.ok) {
+      console.log(`[oBilet API] HTTP ${res.status} - ${origin} → ${destination}`);
+      return [];
+    }
+
+    const data = await res.json();
+    const items = Array.isArray(data?.data) ? data.data : [];
+
+    if (!items.length) {
+      console.log(`[oBilet API] Sonuç boş: ${origin} → ${destination} ${dateIso}`);
+      return [];
+    }
+
+    const journeys = [];
+    const seen = new Set();
+
+    for (const item of items) {
+      const operator = toTurkishTitleCase(String(
+        item?.partner_name ||
+        item?.["partner-name"] ||
+        item?.busCompany?.name ||
+        item?.bus_company?.name ||
+        ""
+      ).trim());
+
+      const rawTime = String(
+        item?.departure_time ||
+        item?.["departure-time"] ||
+        item?.departureTime ||
+        ""
+      );
+      const timeMatch = rawTime.match(/([01]\d|2[0-3]):[0-5]\d/);
+      if (!timeMatch) continue;
+      const depTime = timeMatch[0];
+
+      // Gerçek internet fiyatı - önce internet_price, sonra diğerleri
+      const price = Math.round(Number(
+        item?.internet_price ??
+        item?.["internet-price"] ??
+        item?.internetPrice ??
+        item?.original_price ??
+        item?.["original-price"] ??
+        item?.price ??
+        0
+      ));
+
+      const depStop = String(
+        item?.origin_location ||
+        item?.["origin-location"] ||
+        item?.originLocation ||
+        ""
+      ).replace(/\s+/g, " ").trim();
+
+      const arrStop = String(
+        item?.destination_location ||
+        item?.["destination-location"] ||
+        item?.destinationLocation ||
+        ""
+      ).replace(/\s+/g, " ").trim();
+
+      if (!operator || !depTime || price < 50) continue;
+
+      const key = `${toObiletOperatorMatchKey(operator)}|${depTime}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      journeys.push({ operator, time: depTime, price, departureStop: depStop, arrivalStop: arrStop });
+    }
+
+    console.log(`[oBilet API] ${origin}→${destination} ${dateIso}: ${journeys.length} sefer bulundu`);
+    if (journeys.length > 0) {
+      journeys.slice(0, 5).forEach(j => 
+        console.log(`  → ${j.operator} ${j.time}: ${j.price} TL (${j.departureStop})`)
+      );
+    }
+    return journeys;
+
+  } catch (e) {
+    console.log(`[oBilet API] Hata: ${e.message}`);
+    return [];
+  }
 }
 
-// oBilet Scraper - Puppeteer + API hibrit
+// oBilet Ana Scraper - API önce, Puppeteer yedek
 async function scrapeObilet(origin, destination, dateIso) {
-  // Önce resmi API'yi dene (daha hızlı ve doğru)
-  try {
-    const apiJourneys = await fetchObiletJourneysViaApi(origin, destination, dateIso);
-    if (apiJourneys.length > 0) {
-      return apiJourneys;
-    }
-  } catch (e) {
-    console.log(`[oBilet] API denemesi başarısız, Puppeteer'a geçiliyor: ${e.message}`);
-  }
+  // Önce gerçek API dene
+  const apiResult = await fetchObiletJourneysViaApi(origin, destination, dateIso);
+  if (apiResult.length > 0) return apiResult;
 
-  // API çalışmazsa Puppeteer scrape yap
+  // API başarısız → Puppeteer
+  console.log(`[oBilet] API başarısız, Puppeteer deneniyor: ${origin}→${destination} ${dateIso}`);
   return scrapeObiletViaPuppeteer(origin, destination, dateIso);
 }
 
-// oBilet Puppeteer Scraper (yedek)
+// oBilet Puppeteer Scraper (yedek - API çalışmazsa)
 async function scrapeObiletViaPuppeteer(origin, destination, dateIso) {
   const originSlug = slugTr(origin).replace(/\s+/g, "-");
   const destSlug = slugTr(destination).replace(/\s+/g, "-");
-  const dateParts = dateIso.split("-");
-  const dateStr = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`; // DD-MM-YYYY
-  const baseUrl = `https://www.obilet.com/otobus-bileti/${originSlug}-${destSlug}`;
-  const cacheBust = Date.now();
-  // NOTE: The /DD-MM-YYYY path frequently redirects to an oBilet error page
-  // in headless mode. Keep only the stable querystring form.
-  const candidateUrls = [`${baseUrl}?date=${dateIso}&cb=${cacheBust}`];
-  console.log(`[oBilet] Kazima baslatiliyor. Aday URL sayisi: ${candidateUrls.length}`);
-  
-  // Shared browser instance kullan
+  const url = `https://www.obilet.com/otobus-bileti/${originSlug}-${destSlug}?date=${dateIso}&t=${Date.now()}`;
+
+  console.log(`[oBilet Puppeteer] Açılıyor: ${url}`);
+
   const browser = await getBrowserInstance();
   let page = null;
-  
+
   try {
     page = await browser.newPage();
-    // Analytics, tracking ve gereksiz istekleri blokla (Cloudflare 403 problemi icin /event de eklendi)
-    const blockedRequestPattern = /(doubleclick|googleads|googletagmanager|google-analytics|analytics\.google|facebook\.com|fbcdn|criteo|useinsider|insider|clarity|hotjar|tiktok|yandex|adsystem|adservice|adnxs|taboola|outbrain|\/event$)/i;
-    await page.setRequestInterception(true);
-    page.on("request", (request) => {
-      const url = request.url();
-      if (DEBUG_OBILET_XHR && (request.resourceType() === "xhr" || request.resourceType() === "fetch")) {
-        console.log(`[oBilet][DEBUG] XHR istegi: ${request.method()} ${url}`);
-      }
-      if (blockedRequestPattern.test(url)) {
-        return request.abort();
-      }
-      return request.continue();
-    });
-    
-    // Cloudflare bypass için daha uzun timeout
-    await page.setDefaultNavigationTimeout(90000);
-    await page.setDefaultTimeout(90000);
-    
-    // ADVANCED STEALTH: Bot detection'ı atlatmak için
-    await page.evaluateOnNewDocument(() => {
-      // webdriver bayrağını gizle
-      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-      delete navigator.__proto__.webdriver;
-      
-      // Dil ayarları
-      Object.defineProperty(navigator, "languages", { get: () => ["tr-TR", "tr", "en-US", "en"] });
-      Object.defineProperty(navigator, "language", { get: () => "tr-TR" });
-      
-      // Platform
-      Object.defineProperty(navigator, "platform", { get: () => "Win32" });
-      
-      // Hardware
-      Object.defineProperty(navigator, "deviceMemory", { get: () => 8 });
-      Object.defineProperty(navigator, "hardwareConcurrency", { get: () => 8 });
-      
-      // Chrome object (headless detection)
-      window.chrome = {
-        runtime: {},
-        loadTimes: function() {},
-        csi: function() {},
-        app: {}
-      };
-      
-      // Permissions API override
-      const originalQuery = window.navigator.permissions.query;
-      window.navigator.permissions.query = (parameters) => (
-        parameters.name === 'notifications' ?
-          Promise.resolve({ state: Notification.permission }) :
-          originalQuery(parameters)
-      );
-      
-      // Plugin detection
-      Object.defineProperty(navigator, 'plugins', {
-        get: () => [1, 2, 3, 4, 5]
-      });
-      
-      // WebGL vendor override
-      const getParameter = WebGLRenderingContext.prototype.getParameter;
-      WebGLRenderingContext.prototype.getParameter = function(parameter) {
-        if (parameter === 37445) return 'Intel Inc.';
-        if (parameter === 37446) return 'Intel Iris OpenGL Engine';
-        return getParameter(parameter);
-      };
-    });
-    
-    await page.setCacheEnabled(false);
-    await page.setExtraHTTPHeaders({
-      "Cache-Control": "no-cache",
-      Pragma: "no-cache",
-      "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
-      "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-      "sec-ch-ua-mobile": "?0",
-      "sec-ch-ua-platform": '"Windows"',
-    });
-    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
-    await page.setViewport({ width: 1280, height: 800 });
 
-    let lastError = "Bilinmeyen hata";
-    const apiJourneys = [];
-    const apiUrlPattern = /(obilet|otobus|bus|journey|trip|search|ticket|sefer)/i;
-    const apiJsonHint = /(api|search|journey|trip|ticket|sefer)/i;
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+      Object.defineProperty(navigator, "languages", { get: () => ["tr-TR", "tr"] });
+      window.chrome = { runtime: {} };
+    });
+
+    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+    await page.setViewport({ width: 1366, height: 768 });
+    await page.setExtraHTTPHeaders({ "Accept-Language": "tr-TR,tr;q=0.9" });
+    await page.setCacheEnabled(false);
+
+    await page.setRequestInterception(true);
+    page.on("request", (req) => {
+      const type = req.resourceType();
+      const reqUrl = req.url();
+      if (/(doubleclick|googleads|googletagmanager|facebook\.com|hotjar|tiktok|yandex|criteo|taboola)/i.test(reqUrl)) {
+        return req.abort();
+      }
+      if (["image", "media", "font", "stylesheet"].includes(type)) {
+        return req.abort();
+      }
+      return req.continue();
+    });
+
+    // oBilet iç API yanıtlarını yakala
+    const capturedJourneys = [];
+    const seenKeys = new Set();
 
     page.on("response", async (response) => {
       try {
-        const url = response.url();
-        if (!apiUrlPattern.test(url)) return;
-        const contentType = response.headers()["content-type"] || "";
-        if (DEBUG_OBILET_API) {
-          console.log(`[oBilet][DEBUG] API yaniti: ${response.status()} ${url} (${contentType})`);
-        }
+        const resUrl = response.url();
+        const status = response.status();
+        if (status < 200 || status >= 300) return;
+        const ct = response.headers()["content-type"] || "";
+        if (!ct.includes("json")) return;
 
-        let data = null;
-        let rawText = "";
-        const shouldReadBody = (contentType.includes("json") || apiJsonHint.test(url));
-        if (shouldReadBody) {
-          rawText = await response.text().catch(() => "");
-          const trimmed = rawText.trim();
-          if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-            data = JSON.parse(trimmed);
-          }
-        }
+        const isJourneyUrl = /(GetBusJourneys|GetJourneys|busjourneys|journeys)/i.test(resUrl);
+        if (!isJourneyUrl) return;
 
-        if (DEBUG_OBILET_XHR_BODY && rawText && url.includes("/json/")) {
-          const preview = rawText.length > 1200 ? `${rawText.slice(0, 1200)}...` : rawText;
-          console.log(`[oBilet][DEBUG] XHR yaniti: ${url} :: ${preview}`);
-        }
+        const text = await response.text().catch(() => "");
+        if (!text) return;
 
-        if (!data) return;
-        const extracted = extractObiletJourneysFromApiPayload(data);
-        if (extracted.length > 0) {
-          apiJourneys.push(...extracted);
-          if (DEBUG_OBILET_API) {
-            console.log(`[oBilet][DEBUG] API fiyatlari bulundu: ${extracted.length}`);
-          }
+        let data;
+        try { data = JSON.parse(text); } catch { return; }
+
+        const list = Array.isArray(data?.data) ? data.data :
+          Array.isArray(data?.journeys) ? data.journeys :
+          Array.isArray(data) ? data : [];
+
+        console.log(`[oBilet Puppeteer] Yakalandı: ${resUrl.split("?")[0]} → ${list.length} sefer`);
+
+        for (const item of list) {
+          const operator = toTurkishTitleCase(String(
+            item?.partner_name || item?.["partner-name"] || item?.busCompany?.name || item?.bus_company?.name || ""
+          ).trim());
+
+          const rawTime = String(item?.departure_time || item?.["departure-time"] || "");
+          const tm = rawTime.match(/([01]\d|2[0-3]):[0-5]\d/);
+          if (!tm) continue;
+
+          const price = Math.round(Number(
+            item?.internet_price ?? item?.["internet-price"] ?? item?.internetPrice ?? item?.price ?? 0
+          ));
+
+          const depStop = String(item?.origin_location || item?.["origin-location"] || "").trim();
+          const arrStop = String(item?.destination_location || item?.["destination-location"] || "").trim();
+
+          if (!operator || price < 50) continue;
+          const key = `${toObiletOperatorMatchKey(operator)}|${tm[0]}`;
+          if (seenKeys.has(key)) continue;
+          seenKeys.add(key);
+          capturedJourneys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop });
         }
-      } catch (error) {
-        if (DEBUG_OBILET_PRICE) {
-          console.log(`[oBilet][DEBUG] API yanit okuma hatasi: ${error.message}`);
-        }
-      }
+      } catch { /* ignore */ }
     });
-    const maxDetailLookups = 8;
 
-    const readMinPriceFromPage = async (targetPage) => {
-      return targetPage.evaluate(() => {
-        const parsePrice = (value) => {
-          const raw = String(value || "");
-          if (!raw) return 0;
-          const normalized = raw.replace(/\./g, "").replace(",", ".");
-          const number = parseFloat(normalized.replace(/[^0-9.]/g, ""));
-          return Number.isFinite(number) ? Math.round(number) : 0;
-        };
+    await page.goto(url, { waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
 
-        const candidates = [];
-        document
-          .querySelectorAll(
-            "[itemprop='price'], [itemprop='lowPrice'], .price, .amount, .ticket-price, .fare, .sale-price, .discounted, .discount-price"
-          )
-          .forEach((node) => {
-            const value = node.getAttribute("content") || node.textContent || "";
-            const parsed = parsePrice(value);
-            if (parsed > 0) candidates.push(parsed);
-          });
+    const isChallenge = await page.evaluate(() =>
+      document.title.includes("Just a moment") ||
+      (document.body?.innerText || "").includes("Checking your browser")
+    ).catch(() => false);
 
-        const text = document.body?.innerText || "";
-        const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
-        for (const match of text.matchAll(regex)) {
-          const parsed = parsePrice(match[1]);
-          if (parsed > 0) candidates.push(parsed);
-        }
-
-        return candidates.length ? Math.min(...candidates) : 0;
-      });
-    };
-
-    const fetchDetailPrice = async (detailUrl) => {
-      if (!detailUrl) return null;
-      const normalizedUrl = detailUrl.startsWith("http")
-        ? detailUrl
-        : `https://www.obilet.com${detailUrl.startsWith("/") ? "" : "/"}${detailUrl}`;
-
-      const detailPage = await browser.newPage();
-      await detailPage.setRequestInterception(true);
-      detailPage.on("request", (request) => {
-        const url = request.url();
-        if (blockedRequestPattern.test(url)) {
-          return request.abort();
-        }
-        return request.continue();
-      });
-      await detailPage.setCacheEnabled(false);
-      await detailPage.setExtraHTTPHeaders({
-        "Cache-Control": "no-cache",
-        Pragma: "no-cache",
-        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
-      });
-      await detailPage.setUserAgent(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-      );
-      await detailPage.setViewport({ width: 1280, height: 800 });
-
-      try {
-        await detailPage.goto(normalizedUrl, { waitUntil: "networkidle2", timeout: 60000 });
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        await detailPage.waitForFunction(
-          () => /\b\d+\s*(TL|₺)\b/i.test(document.body?.innerText || ""),
-          { timeout: 8000 }
-        ).catch(() => {});
-
-        const price = await detailPage.evaluate(() => {
-          const parsePrice = (value) => {
-            const raw = String(value || "");
-            if (!raw) return 0;
-            const normalized = raw.replace(/\./g, "").replace(",", ".");
-            const number = parseFloat(normalized.replace(/[^0-9.]/g, ""));
-            return Number.isFinite(number) ? Math.round(number) : 0;
-          };
-
-          const candidates = [];
-
-          // Prefer explicit journey/seat area prices over generic banner texts.
-          document
-            .querySelectorAll(
-              ".journey .price, .journey [itemprop='price'], .seat-layout .price, .seat-layout [itemprop='price'], .bus-journey .price, .ticket-price"
-            )
-            .forEach((node) => {
-              const value = node.getAttribute("content") || node.textContent || "";
-              const parsed = parsePrice(value);
-              if (parsed > 0) candidates.push(parsed);
-            });
-
-          if (!candidates.length) {
-            const text = document.body?.innerText || "";
-            const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
-            for (const match of text.matchAll(regex)) {
-              const parsed = parsePrice(match[1]);
-              if (parsed > 0) candidates.push(parsed);
-            }
-          }
-
-          // Ignore promo labels like 100 TL app discount; bus fares are much higher on this route.
-          const realistic = candidates.filter((p) => p >= 300);
-          if (!realistic.length) {
-            return 0;
-          }
-
-          return Math.min(...realistic);
-        });
-
-        return price > 0 ? price : null;
-      } catch (error) {
-        if (DEBUG_OBILET_PRICE) {
-          console.log(`[oBilet][DEBUG] Detay sayfasi hatasi: ${error.message}`);
-        }
-        return null;
-      } finally {
-        await detailPage.close();
-      }
-    };
-
-    for (const url of candidateUrls) {
-      try {
-        console.log(`[oBilet] URL deneniyor: ${url}`);
-        const response = await page.goto(url, { waitUntil: "networkidle2", timeout: 90000 });
-        
-        // Cloudflare challenge kontrolü - challenge sayfasında ise bekle
-        try {
-          const isCloudflareChallenge = await page.evaluate(() => {
-            const title = document.title || "";
-            const bodyText = document.body?.innerText || "";
-            return title.includes("Just a moment") || 
-                   bodyText.includes("Checking your browser") ||
-                   bodyText.includes("challenge-platform") ||
-                   document.querySelector('#challenge-running') !== null;
-          });
-          
-          if (isCloudflareChallenge) {
-            console.log(`[oBilet] Cloudflare challenge algılandi, 10 saniye bekleniyor...`);
-            await new Promise(resolve => setTimeout(resolve, 10000));
-          }
-        } catch (cfErr) {
-          // ignore cloudflare check errors
-        }
-        
-        await new Promise((resolve) => setTimeout(resolve, 3500));
-
-        try {
-          await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-          await new Promise((resolve) => setTimeout(resolve, 600));
-          await page.evaluate(() => window.scrollTo(0, 0));
-        } catch (scrollError) {
-          // ignore scroll errors
-        }
-
-        const currentUrl = page.url();
-        const hasDateInUrl = currentUrl.includes(dateIso) || currentUrl.includes(dateStr);
-        if (!hasDateInUrl) {
-          lastError = `Tarih uyusmadi. Istenen: ${dateIso}, URL: ${currentUrl}`;
-          continue;
-        }
-
-        const pageState = await page.evaluate(() => {
-          const title = document.title || "";
-          const text = (document.body?.innerText || "").slice(0, 3000);
-          const hasErrorPage = /Bir hata oluştu|İşleminiz sırasında bir hata oluştu|isleminiz sirasinda bir hata olustu|Sayfa bulunamadi|Page not found/i
-            .test(`${title} ${text}`);
-          return { title, text, hasErrorPage };
-        });
-
-        if (pageState.hasErrorPage) {
-          lastError = `Hata sayfasi dondu (${response?.status?.() ?? "NA"}): ${pageState.title}`;
-          continue;
-        }
-
-        try {
-          await page.waitForSelector("li[itemprop='busTrip'], .journey.btn, .journeys li", { timeout: 12000 });
-        } catch (waitError) {
-          console.log("[oBilet] Sefer secicisi bekleme suresi asildi. Metin tabanli ayrisma denenecek.");
-        }
-
-        try {
-          await page.waitForFunction(
-            () => /\b\d+\s*(TL|₺)\b/i.test(document.body?.innerText || ""),
-            { timeout: 8000 }
-          );
-        } catch (priceWaitError) {
-          console.log("[oBilet] Fiyat metni bekleme suresi asildi. Mevcut DOM ile devam ediliyor.");
-        }
-
-        const expandedCount = await page.evaluate(() => {
-          const cards = Array.from(document.querySelectorAll("li[itemprop='busTrip'], .journeys li"));
-          const keywords = ["incele", "koltuk sec", "koltuk seç", "detay"];
-          let count = 0;
-
-          const isMatch = (text) => {
-            const normalized = String(text || "").toLocaleLowerCase("tr-TR").trim();
-            return keywords.some((key) => normalized.includes(key));
-          };
-
-          cards.forEach((card) => {
-            const candidates = Array.from(card.querySelectorAll("button, a, [role='button']"));
-            const target = candidates.find((node) => isMatch(node.textContent));
-            if (!target) return;
-
-            const tag = target.tagName.toLowerCase();
-            const href = target.getAttribute("href") || "";
-            if (tag === "a" && href && !href.startsWith("#") && !href.startsWith("javascript")) {
-              return;
-            }
-
-            try {
-              target.click();
-              count += 1;
-            } catch (error) {
-              // ignore click errors
-            }
-          });
-
-          return count;
-        });
-
-        if (expandedCount > 0) {
-          await new Promise((resolve) => setTimeout(resolve, 1200));
-        }
-
-        if (DEBUG_OBILET_PRICE && expandedCount > 0) {
-          console.log(`[oBilet][DEBUG] Kart detayi acildi: ${expandedCount}`);
-        }
-
-        const seatFlowPrices = [];
-
-        const embeddedPayloads = await page.evaluate(() => {
-          const results = [];
-          const maxPayloads = 6;
-          const maxLength = 250000;
-
-          const pushPayload = (text) => {
-            if (!text) return;
-            const trimmed = text.trim();
-            if (!trimmed || trimmed.length > maxLength) return;
-            if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-              results.push(trimmed);
-            }
-          };
-
-          const scripts = Array.from(document.querySelectorAll("script"));
-          for (const script of scripts) {
-            if (results.length >= maxPayloads) break;
-            const type = (script.getAttribute("type") || "").toLowerCase();
-            if (type.includes("json")) {
-              pushPayload(script.textContent || "");
-            }
-          }
-
-          const textScripts = scripts
-            .map((script) => script.textContent || "")
-            .filter(Boolean);
-
-          const patterns = [
-            /__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*;?/,
-            /__NEXT_DATA__\s*=\s*(\{[\s\S]*?\})\s*;?/,
-            /__NUXT__\s*=\s*(\{[\s\S]*?\})\s*;?/,
-            /window\.__INITIAL_STATE__\s*=\s*(\{[\s\S]*?\})\s*;?/,
-            /window\.__NUXT__\s*=\s*(\{[\s\S]*?\})\s*;?/,
-          ];
-
-          for (const scriptText of textScripts) {
-            if (results.length >= maxPayloads) break;
-            for (const pattern of patterns) {
-              const match = scriptText.match(pattern);
-              if (match && match[1]) {
-                pushPayload(match[1]);
-                break;
-              }
-            }
-          }
-
-          return results.slice(0, maxPayloads);
-        });
-
-        const scrapeResult = await page.evaluate((debugMode) => {
-          const items = [];
-          const debugInfo = [];
-          const seen = new Set();
-
-          const normalizeOperator = (value) => String(value || "").replace(/\s+/g, " ").trim();
-
-          const parsePrice = (value) => {
-            const raw = String(value || "");
-            if (!raw) return 0;
-            const normalized = raw.replace(/\./g, "").replace(",", ".");
-            const number = parseFloat(normalized.replace(/[^0-9.]/g, ""));
-            return Number.isFinite(number) ? Math.round(number) : 0;
-          };
-
-          const collectCardPrices = (card) => {
-            const sourceLog = [];
-            
-            const parseAndValidate = (value, source) => {
-              const parsed = parsePrice(value);
-              if (parsed >= 100 && parsed <= 10000) {
-                sourceLog.push({ price: parsed, source, rawValue: value });
-                return parsed;
-              }
-              return 0;
-            };
-
-            // STRATEGY: Find ALL TL prices in card, return MINIMUM (cheapest for user)
-            const text = card.textContent || "";
-            const regex = /(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi;
-            
-            const allPrices = [];
-            for (const match of text.matchAll(regex)) {
-              const price = parseAndValidate(match[1], "card-text-TL");
-              if (price > 0) {
-                allPrices.push(price);
-              }
-            }
-
-            // Get MINIMUM price (cheapest option for user)
-            if (allPrices.length > 0) {
-              const minPrice = Math.min(...allPrices);
-              return {
-                prices: [minPrice],
-                sources: sourceLog
-              };
-            }
-
-            return { prices: [], sources: sourceLog };
-          };
-
-          const addJourney = (
-            operator,
-            time,
-            price,
-            departureStop = "",
-            arrivalStop = "",
-            debugPrices = [],
-            detailUrl = "",
-            detailSelector = "",
-            cardIndex = 0
-          ) => {
-            const safeOperator = normalizeOperator(operator);
-            const safeTime = String(time || "").trim();
-            const safePrice = Number(price) || 0;
-            const safeDepartureStop = String(departureStop || "").replace(/\s+/g, " ").trim();
-            const safeArrivalStop = String(arrivalStop || "").replace(/\s+/g, " ").trim();
-            if (!safeOperator || !safeTime || safePrice <= 0) return;
-            // Firma + saat + fiyat kombinasyonu unique sefer tanımlar
-            const key = `${safeOperator}|${safeTime}|${safePrice}|${safeDepartureStop}`;
-            if (seen.has(key)) return;
-            seen.add(key);
-            items.push({
-              operator: safeOperator,
-              time: safeTime,
-              price: safePrice,
-              departureStop: safeDepartureStop,
-              arrivalStop: safeArrivalStop,
-              debugPrices: debugMode ? debugPrices : undefined,
-              detailUrl: detailUrl || "",
-              detailSelector: detailSelector || "",
-            });
-          };
-
-          const cardNodes = Array.from(document.querySelectorAll("li[itemprop='busTrip'], .journeys li"));
-          
-          if (debugMode) {
-            debugInfo.push(`Toplam ${cardNodes.length} kart bulundu`);
-          }
-          
-          cardNodes.forEach((card, cardIndex) => {
-            // TEMPORARY: Debug only first 10 cards to avoid log flood
-            const shouldDebug = debugMode && cardIndex < 10;
-            const operator =
-              card.querySelector("[itemprop='provider'] meta[itemprop='name']")?.getAttribute("content") ||
-              card.querySelector("[itemprop='provider'] img[alt]")?.getAttribute("alt") ||
-              card.querySelector("img[alt]")?.getAttribute("alt") ||
-              "";
-
-            const departure =
-              card.querySelector("[itemprop='departureTime']")?.textContent ||
-              card.querySelector(".departure-time")?.textContent ||
-              "";
-
-            const priceData = collectCardPrices(card);
-            const priceCandidates = priceData.prices || [];
-            const debugSources = priceData.sources || [];
-            // Karttaki ana fiyat degerini tercih et.
-            const bestPrice = priceCandidates.length > 0 ? priceCandidates[0] : 0;
-
-            if (shouldDebug) {
-              debugInfo.push(`Kart ${cardIndex + 1}: ${operator} ${departure} - Fiyat: ${bestPrice > 0 ? bestPrice + ' TL' : 'YOK'} - Kaynak: ${debugSources.length > 0 ? debugSources[0].source : 'NONE'} - AllPrices: [${debugSources.map(s => s.price).join(', ')}]`);
-            }
-
-            const departureStop =
-              card.querySelector("[itemprop='departureBusStop'] [itemprop='name']")?.textContent ||
-              card.querySelector("[itemprop='departureBusStop']")?.textContent ||
-              "";
-
-            const arrivalStop =
-              card.querySelector("[itemprop='arrivalBusStop'] [itemprop='name']")?.textContent ||
-              card.querySelector("[itemprop='arrivalBusStop']")?.textContent ||
-              "";
-
-            const linkCandidates = Array.from(card.querySelectorAll("a[href]"))
-              .map((node) => node.getAttribute("href") || "")
-              .filter(Boolean);
-            const detailHref = linkCandidates.find((href) =>
-              href.includes("/seferler/") || href.includes("/otobus-bileti/")
-            );
-
-            const buttonCandidates = Array.from(card.querySelectorAll("button, [role='button'], a"))
-              .map((node) =>
-                node.getAttribute("data-href") ||
-                node.getAttribute("data-url") ||
-                node.getAttribute("data-link") ||
-                node.getAttribute("href") ||
-                ""
-              )
-              .filter((value) => value && (value.includes("/seferler/") || value.includes("/otobus-bileti/")));
-            const detailUrl = detailHref || buttonCandidates[0] || "";
-
-            let detailSelector = "";
-            if (!detailUrl) {
-              const buttons = Array.from(card.querySelectorAll("button, [role='button'], a"));
-              const keyword = (text) =>
-                String(text || "")
-                  .toLocaleLowerCase("tr-TR")
-                  .includes("koltuk") ||
-                String(text || "")
-                  .toLocaleLowerCase("tr-TR")
-                  .includes("incele");
-              const target = buttons.find((node) => keyword(node.textContent));
-              if (target) {
-                const id = `obilet-btn-${Math.random().toString(36).slice(2, 10)}`;
-                target.setAttribute("data-obilet-btn", id);
-                detailSelector = `[data-obilet-btn="${id}"]`;
-              }
-            }
-
-            addJourney(
-              operator,
-              departure,
-              bestPrice,
-              departureStop,
-              arrivalStop,
-              debugSources.map(s => `${s.price}(${s.source})`),
-              detailUrl,
-              detailSelector,
-              cardIndex
-            );
-          });
-
-          if (!items.length) {
-            const allText = document.body?.innerText || "";
-            const blockCandidates = allText.split(/SATIN AL/i);
-            blockCandidates.forEach((block, blockIndex) => {
-              const times = block.match(/\b([01]\d|2[0-3]):[0-5]\d\b/g) || [];
-              const priceMatch = block.match(/(\d{1,3}(?:\.\d{3})*|\d+)\s*₺/);
-              if (times.length < 1 || !priceMatch) return;
-
-              const lines = block
-                .split("\n")
-                .map((line) => line.trim())
-                .filter(Boolean);
-              const ignored = new Set(["2+1", "2+2", "Adana", "Ankara"]);
-              const operator = lines.find((line) => !ignored.has(line) && !line.includes("Otogarı") && !/^\d{1,2}:\d{2}$/.test(line));
-              addJourney(operator || "Bilinmeyen Firma", times[0], parsePrice(priceMatch[1]), "", "", [], "", "", 999 + blockIndex);
-            });
-          }
-
-          return { items, debugInfo };
-        }, DEBUG_OBILET_PRICE);
-
-        // Extract journeys and log debug info from browser context
-        let journeys = scrapeResult.items || [];
-        if (DEBUG_OBILET_PRICE && scrapeResult.debugInfo && scrapeResult.debugInfo.length > 0) {
-          scrapeResult.debugInfo.forEach(msg => console.log(`[oBilet DEBUG] ${msg}`));
-        }
-
-        const embeddedJourneys = [];
-        if (embeddedPayloads.length > 0) {
-          embeddedPayloads.forEach((payload) => {
-            try {
-              const parsed = JSON.parse(payload);
-              const extracted = extractObiletJourneysFromApiPayload(parsed);
-              if (extracted.length > 0) {
-                embeddedJourneys.push(...extracted);
-              }
-            } catch (error) {
-              // ignore JSON parse errors
-            }
-          });
-        }
-
-        if (DEBUG_OBILET_PRICE && embeddedJourneys.length > 0) {
-          console.log(`[oBilet][DEBUG] Gömülü JSON sefer bulundu: ${embeddedJourneys.length}`);
-        }
-
-        // DISABLED: API fiyatları yanlış olduğu için
-        // DOM sefer taşıyabilirsek (1600 TL) ama API yanlış fiyat verir (2100 TL)
-        // Bundan sonra SADECE DOM fiyatları kullan
-        // if (apiJourneys.length > 0 || embeddedJourneys.length > 0) { ... }
-
-        // Filter: fiyatsız seferleri at
-        if (journeys.length > 0) {
-          journeys = journeys.filter((journey) => journey.price > 0);
-        }
-
-        if (journeys.length > 0) {
-          const listUrl = page.url();
-          
-          // Origin ve Destination ID'lerini butondan al
-          try {
-            // Çeşitli button selector'ları dene
-            const buttonSelectors = [
-              'button[data-origin-id]',
-              'a[data-origin-id]',
-              'button.journey',
-              'button:has-text("KOLTUK")',
-              'button:has-text("SATIN AL")'
-            ];
-            
-            let foundSelector = null;
-            for (const selector of buttonSelectors) {
-              try {
-                await page.waitForSelector(selector, { timeout: 3000 });
-                foundSelector = selector;
-                if (DEBUG_OBILET_PRICE) {
-                  console.log(`[oBilet][DEBUG] Button bulundu: ${selector}`);
-                }
-                break;
-              } catch (e) {
-                // Devam et
-              }
-            }
-            
-            if (!foundSelector) {
-              if (DEBUG_OBILET_PRICE) {
-                console.log(`[oBilet][DEBUG] Hiçbir button selector bulunamadi, detay sayfa atlandi`);
-              }
-              throw new Error("Button not found");
-            }
-
-            const buttonData = await page.evaluate(() => {
-              // data-origin-id ve data-destination-id olan ilk elementi bul
-              const buttons = Array.from(document.querySelectorAll('button, a'));
-              for (const btn of buttons) {
-                const originId = btn.getAttribute('data-origin-id');
-                const destId = btn.getAttribute('data-destination-id');
-                if (originId && destId) {
-                  return { originId, destId };
-                }
-              }
-              return null;
-            }).catch((err) => {
-              if (DEBUG_OBILET_PRICE) {
-                console.log(`[oBilet][DEBUG] Button veri okuma hatasi: ${err.message}`);
-              }
-              return null;
-            });
-
-            if (DEBUG_OBILET_PRICE) {
-              console.log(`[oBilet][DEBUG] Button verileri: ${JSON.stringify(buttonData)}`);
-            }
-
-            if (buttonData && buttonData.originId && buttonData.destId) {
-              // /seferler/ sayfasina direkt git (sefer ID'si olmadan)
-              const seferlerUrl = `https://www.obilet.com/seferler/${buttonData.originId}-${buttonData.destId}/${dateIso}`;
-              if (DEBUG_OBILET_PRICE) {
-                console.log(`[oBilet][DEBUG] Detay sayfasina gidiliyor: ${seferlerUrl}`);
-              }
-
-              // API journey'leri temizle - detay sayfadaki API response'u yakalayacağız
-              apiJourneys.length = 0;
-
-              await page.goto(seferlerUrl, { waitUntil: "networkidle2", timeout: 90000 }).catch(() => {});
-              
-              // Cloudflare challenge kontrolü
-              try {
-                const isChallenge = await page.evaluate(() => {
-                  const title = document.title || "";
-                  const bodyText = document.body?.innerText || "";
-                  return title.includes("Just a moment") || 
-                         bodyText.includes("Checking your browser") ||
-                         bodyText.includes("challenge-platform");
-                });
-                
-                if (isChallenge) {
-                  console.log(`[oBilet] Detay sayfasında Cloudflare challenge, 10 saniye bekleniyor...`);
-                  await new Promise(resolve => setTimeout(resolve, 10000));
-                }
-              } catch (cfErr) {
-                // ignore
-              }
-              
-              // API response'u bekliyoruz (response handler otomatik yakalıyor)
-              await new Promise((resolve) => setTimeout(resolve, 3000));
-
-              if (DEBUG_OBILET_PRICE) {
-                console.log(`[oBilet][DEBUG] API'den ${apiJourneys.length} sefer alindi`);
-              }
-
-              // API'den gelen fiyatları kullan
-              const detailJourneys = { results: apiJourneys, debugInfo: [] };
-
-              if (DEBUG_OBILET_PRICE) {
-                console.log(`[oBilet][DEBUG] Detay sayfasinda ${detailJourneys.results.length} sefer bulundu`);
-                detailJourneys.results.forEach((j, idx) => {
-                  console.log(`[oBilet][DEBUG]   Journey ${idx + 1}: ✓ ${j.operator} ${j.time} ${j.price}TL (API)`);
-                });
-              }
-
-              // USE DETAIL PAGE PRICES (API) - detay sayfası API fiyatları daha doğru
-              if (detailJourneys.results.length > 0) {
-                // Her journey için detay sayfasındaki fiyatı bul ve güncelle
-                journeys.forEach(journey => {
-                  const match = detailJourneys.results.find(
-                    d => toObiletOperatorMatchKey(d.operator) === toObiletOperatorMatchKey(journey.operator) && d.time === journey.time
-                  );
-                  if (match && match.price > 0) {
-                    if (DEBUG_OBILET_PRICE && journey.price !== match.price) {
-                      console.log(`[oBilet][DEBUG] FIYAT GÜNCELLENDİ: ${journey.operator} ${journey.time}: ${journey.price}TL → ${match.price}TL (detay API)`);
-                    }
-                    journey.price = match.price;
-                    if (Array.isArray(journey.debugPrices)) {
-                      journey.debugPrices.push(`${match.price}(detay-api-override)`);
-                    }
-                  }
-                });
-              }
-
-              // Liste sayfasina geri don
-              await page.goto(listUrl, { waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
-            } else {
-              if (DEBUG_OBILET_PRICE) {
-                console.log(`[oBilet][DEBUG] Origin/Dest ID bulunamadi, detay sayfa atlandi`);
-              }
-            }
-          } catch (detailPageError) {
-            if (DEBUG_OBILET_PRICE) {
-              console.log(`[oBilet][DEBUG] Detay sayfa hatasi: ${detailPageError.message}`);
-            }
-          }
-
-          console.log(`[oBilet] Basariyla ${journeys.length} adet sefer yuklendi.`);
-          if (DEBUG_OBILET_PRICE) {
-            journeys.forEach((journey) => {
-              if (Array.isArray(journey.debugPrices) && journey.debugPrices.length > 0) {
-                console.log(
-                  `[oBilet][DEBUG] ${journey.operator} ${journey.time}: ${journey.price}TL | sources: ${journey.debugPrices.join(", ")}`
-                );
-              }
-            });
-          }
-          return journeys;
-        }
-
-        lastError = "Sefer kartlari okunamadi veya fiyat verisi bulunamadi";
-      } catch (urlError) {
-        lastError = `${url} icin hata: ${urlError.message}`;
-      }
+    if (isChallenge) {
+      console.log("[oBilet Puppeteer] Cloudflare, 12s bekleniyor...");
+      await new Promise(r => setTimeout(r, 12000));
     }
 
-    throw new Error(`oBilet verisi alinamadi. ${lastError}`);
-  } catch (error) {
-    console.error(`[oBilet] Kazima hatasi: ${error.message}`);
-    throw error;
+    await new Promise(r => setTimeout(r, 3000));
+
+    if (capturedJourneys.length > 0) {
+      console.log(`[oBilet Puppeteer] ${capturedJourneys.length} sefer yakalandı`);
+      return capturedJourneys;
+    }
+
+    // Son çare: DOM parse
+    const domJourneys = await page.evaluate(() => {
+      const results = [];
+      const seen = new Set();
+      const parsePrice = (raw) => {
+        const n = parseFloat(String(raw || "").replace(/\./g, "").replace(",", ".").replace(/[^0-9.]/g, ""));
+        return Number.isFinite(n) ? Math.round(n) : 0;
+      };
+
+      for (const card of document.querySelectorAll("li[itemprop='busTrip'], .journeys li")) {
+        const op = card.querySelector("[itemprop='provider'] meta[itemprop='name']")?.getAttribute("content") ||
+          card.querySelector("img[alt]")?.getAttribute("alt") || "";
+        const timeText = card.querySelector("[itemprop='departureTime'], .departure-time")?.textContent || "";
+        const tm = timeText.match(/([01]\d|2[0-3]):[0-5]\d/);
+        if (!op || !tm) continue;
+
+        const prices = [...(card.textContent || "").matchAll(/(\d{1,3}(?:\.\d{3})*|\d+)\s*(?:TL|₺)/gi)]
+          .map(m => parsePrice(m[1])).filter(p => p >= 100 && p <= 10000);
+        if (!prices.length) continue;
+        const price = Math.min(...prices);
+
+        const depStop = card.querySelector("[itemprop='departureBusStop'] [itemprop='name']")?.textContent?.trim() || "";
+        const arrStop = card.querySelector("[itemprop='arrivalBusStop'] [itemprop='name']")?.textContent?.trim() || "";
+
+        const key = `${op}|${tm[0]}|${price}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        results.push({ operator: op, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop });
+      }
+      return results;
+    }).catch(() => []);
+
+    if (domJourneys.length > 0) {
+      console.log(`[oBilet Puppeteer] DOM'dan ${domJourneys.length} sefer`);
+      return domJourneys;
+    }
+
+    console.log(`[oBilet Puppeteer] Hiç sefer bulunamadı: ${origin}→${destination} ${dateIso}`);
+    return [];
+
+  } catch (e) {
+    console.error(`[oBilet Puppeteer] Hata: ${e.message}`);
+    return [];
   } finally {
-    // Browser'ı kapatma, sadece page'i kapat (browser reuse için)
-    if (page) {
-      try {
-        await page.close();
-      } catch (closeErr) {
-        console.error(`[oBilet] Page kapatma hatasi: ${closeErr.message}`);
-      }
-    }
+    if (page) await page.close().catch(() => {});
   }
 }
 
@@ -5209,39 +4682,25 @@ async function processObiletTarget(target) {
 
     let mailWarning = "";
     if (emails.length > 0) {
-      let shouldSendEmail = false;
-      
-      if (OBILET_EMAIL_MODE === "changes") {
-        // Default mode: Sadece fiyat değişimi olunca mail gönder
-        shouldSendEmail = changes.length > 0;
-        if (!shouldSendEmail) {
-          console.log("[Takip Görevi] Fiyat değişikliği yok, mail gönderilmiyor.");
-        }
-      } else if (OBILET_EMAIL_MODE === "always") {
-        // Always mod: Her zaman gönder (spam olur, önerilmez)
-        shouldSendEmail = true;
+      const hasChanges = changes.length > 0;
+      const shouldSendEmail = hasChanges || OBILET_EMAIL_MODE === "always";
+
+      if (!shouldSendEmail) {
+        console.log(`[Takip Görevi] Degisiklik yok, mail atlanıyor (mod: ${OBILET_EMAIL_MODE})`);
       } else {
-        // Smart mod (DISABLED): Eski kod, deprecated
-        // Değişiklik olmayınca mail göndermemeliyiz - email spam yaratır
-        shouldSendEmail = changes.length > 0;
-      }
-      
-      if (shouldSendEmail) {
-        console.log("[Takip Görevi] E-posta raporu gonderiliyor...");
+        console.log(`[Takip Görevi] Mail gonderiliyor (degisiklik:${changes.length}, mod:${OBILET_EMAIL_MODE})`);
         try {
           await sendObiletCycleStatusEmail(emails, target, trackedJourneys, changes);
-          // Mail gönderim zamanını kaydet
-          db.prepare("UPDATE obilet_targets SET last_email_sent_at = ? WHERE id = ?")
-            .run(now, target.id);
+          db.prepare("UPDATE obilet_targets SET last_email_sent_at = ? WHERE id = ?").run(now, target.id);
+          console.log(`[Takip Görevi] Mail gonderildi: ${emails.join(", ")}`);
         } catch (mailError) {
-          mailWarning = ` E-posta gonderilemedi: ${mailError.message}`;
-          console.error(`[Takip Görevi] E-posta gonderim hatasi (${target.origin} -> ${target.destination}): ${mailError.message}`);
-          addPricingNotification(
-            "oBilet Fiyat Takip",
-            `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} icin rapor e-postasi gonderilemedi: ${mailError.message}`
-          );
+          mailWarning = " E-posta gonderilemedi: " + mailError.message;
+          console.error(`[Takip Görevi] Mail hatasi (${target.origin} -> ${target.destination}): ${mailError.message}`);
+          addPricingNotification("oBilet Fiyat Takip", `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} rapor maili gonderilemedi: ${mailError.message}`);
         }
       }
+    } else {
+      console.log(`[Takip Görevi] Mail adresi tanimli degil: ${target.origin} -> ${target.destination}`);
     }
 
     if (trackedJourneys.length > 0) {
