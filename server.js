@@ -3616,129 +3616,6 @@ function buildJourneyIdentityKey(operator, departureTime, departureStop = "", pr
   return parts.join("|");
 }
 
-function extractObiletJourneysFromApiPayload(payload) {
-  const results = [];
-  const seen = new Set();
-
-  const readPrice = (value) => {
-    const parsed = parsePriceNumber(value);
-    if (!Number.isFinite(parsed)) {
-      return null;
-    }
-    return Math.round(parsed);
-  };
-
-  const normalizeTime = (value) => {
-    if (value == null) return "";
-    const text = String(value).trim();
-    const match = text.match(/([01]\d|2[0-3]):[0-5]\d/);
-    return match ? match[0] : text;
-  };
-
-  const pickPrice = (obj) => {
-    const primaryCandidates = [];
-    const secondaryCandidates = [];
-
-    ["price", "amount", "totalPrice", "fare"].forEach((key) => {
-      if (obj && Object.prototype.hasOwnProperty.call(obj, key)) {
-        const parsed = readPrice(obj[key]);
-        if (parsed != null) primaryCandidates.push(parsed);
-      }
-    });
-
-    ["salePrice", "discountedPrice", "campaignPrice", "lowestPrice"].forEach((key) => {
-      if (obj && Object.prototype.hasOwnProperty.call(obj, key)) {
-        const parsed = readPrice(obj[key]);
-        if (parsed != null) secondaryCandidates.push(parsed);
-      }
-    });
-
-    if (Array.isArray(obj?.prices)) {
-      obj.prices.forEach((item) => {
-        const parsed = readPrice(item?.amount ?? item?.price ?? item);
-        if (parsed != null) primaryCandidates.push(parsed);
-      });
-    }
-
-    const cleanedPrimary = primaryCandidates.filter((value) => Number.isFinite(value) && value > 0);
-    if (cleanedPrimary.length) {
-      return cleanedPrimary[0];
-    }
-    const cleanedSecondary = secondaryCandidates.filter((value) => Number.isFinite(value) && value > 0);
-    return cleanedSecondary.length ? cleanedSecondary[0] : null;
-  };
-
-  const pushJourney = (operator, time, price, departureStop = "", arrivalStop = "") => {
-    if (!operator || !time || !price) return;
-    const key = `${toObiletOperatorMatchKey(operator)}|${String(time || "").trim()}|${price}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    results.push({
-      operator: toTurkishTitleCase(operator),
-      time: String(time || "").trim(),
-      price,
-      departureStop: String(departureStop || "").trim(),
-      arrivalStop: String(arrivalStop || "").trim(),
-    });
-  };
-
-  const walk = (value) => {
-    if (!value) return;
-    if (Array.isArray(value)) {
-      value.forEach(walk);
-      return;
-    }
-    if (typeof value !== "object") return;
-
-    const operator =
-      value.operatorName ||
-      value.operator ||
-      value.companyName ||
-      value.providerName ||
-      value.provider?.name ||
-      value.company?.name ||
-      value.partner?.name ||
-      value.carrier?.name ||
-      value.serviceProvider?.name ||
-      "";
-
-    const time = normalizeTime(
-      value.departureTime ||
-        value.departure_time ||
-        value.time ||
-        value.hour ||
-        value.departure?.time ||
-        value.departure?.timeText ||
-        value.journey?.departureTime ||
-        ""
-    );
-
-    const departureStop =
-      value.departureStop ||
-      value.departure?.name ||
-      value.origin?.name ||
-      value.from?.name ||
-      "";
-
-    const arrivalStop =
-      value.arrivalStop ||
-      value.arrival?.name ||
-      value.destination?.name ||
-      value.to?.name ||
-      "";
-
-    const price = pickPrice(value);
-    if (operator && time && price) {
-      pushJourney(operator, time, price, departureStop, arrivalStop);
-    }
-
-    Object.values(value).forEach(walk);
-  };
-
-  walk(payload);
-  return results;
-}
-
 // oBilet İstasyon ID Önbelleği
 // ============================================================
 // oBiLET GERÇEK API ENTEGRASYonu
@@ -3921,16 +3798,16 @@ async function fetchObiletJourneysViaApi(origin, destination, dateIso) {
       if (!timeMatch) continue;
       const depTime = timeMatch[0];
 
-      // Gerçek internet fiyatı - önce internet_price, sonra diğerleri
-      const price = Math.round(Number(
-        item?.internet_price ??
+      // KRITIK: oBilet'in sayfada gosterdigi satis fiyati = internet-price.
+      // original-price firmanin yayinladigi yuksek fiyat — ASLA fallback olarak kullanma.
+      // Bu sira degisirse "1100 yerine 1200" hatasi geri gelir.
+      const priceRaw =
         item?.["internet-price"] ??
+        item?.internet_price ??
         item?.internetPrice ??
-        item?.original_price ??
-        item?.["original-price"] ??
         item?.price ??
-        0
-      ));
+        0;
+      const price = Math.round(Number(priceRaw));
 
       const depStop = String(
         item?.origin_location ||
