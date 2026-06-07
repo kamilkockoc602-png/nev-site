@@ -3902,67 +3902,151 @@ async function gotoAndHandleCloudflare(page, url) {
   }
 }
 
-// Bir Kadirli<->Ankara hatti icin route ID'sini (ornek: "595-356") kesfet.
-// Landing sayfasinda "Otobus Ara" butonuna basip /seferler/ID-ID/DATE yonlenmesini bekleriz.
-async function discoverObiletRouteId(browser, origin, destination, dateIso) {
+// Browser context icinden oBilet API'sine fetch at.
+// Railway konteynerinden Node.js fetch'i api.obilet.com'a cikamiyor (DNS/egress engeli).
+// Ama Puppeteer browser'i kendi network stack'ini kullaniyor + Cloudflare cookie'lerine sahip,
+// bu yuzden ayni endpoint'ler sayfa context'inden cagrildiginda calisir.
+async function fetchObiletJourneysViaBrowser(browser, origin, destination, dateIso) {
   const originSlug = slugTr(origin).replace(/\s+/g, "-");
   const destSlug = slugTr(destination).replace(/\s+/g, "-");
+  // Once www.obilet.com'da herhangi bir sayfa ac ki Cloudflare cookie'leri otursun.
   const landingUrl = `https://www.obilet.com/otobus-bileti/${originSlug}-${destSlug}?date=${dateIso}`;
 
-  console.log(`[oBilet] Route ID kesfediliyor: ${origin}->${destination}`);
+  console.log(`[oBilet Browser-API] Baslatiliyor: ${origin}->${destination} ${dateIso}`);
   const page = await setupObiletPage(browser);
 
   try {
     await gotoAndHandleCloudflare(page, landingUrl);
 
-    // 1. Yol: HTML'deki form'dan veya linklerden /seferler/X-Y/ paterni bul
-    let routeId = await page.evaluate(() => {
-      const html = document.documentElement.outerHTML;
-      const m = html.match(/\/seferler\/(\d+)-(\d+)\//);
-      return m ? `${m[1]}-${m[2]}` : null;
-    }).catch(() => null);
+    const dateParts = dateIso.split("-");
+    const dateFormatted = `${dateParts[2]}.${dateParts[1]}.${dateParts[0]}`; // DD.MM.YYYY
 
-    if (routeId) {
-      console.log(`[oBilet] Route ID bulundu (HTML): ${origin}->${destination} = ${routeId}`);
-      return routeId;
-    }
+    // Sayfa context'inde tum API akisini tek seferde calistir
+    const result = await page.evaluate(async (originName, destName, dateFmt) => {
+      const AUTH = "Basic T25seUFQSTo3OEI0QzZFMy1BNDI1LTRFQUQtQTZFOS04QzA0OUZGNzBCMDY=";
+      const slugTr = (s) => String(s || "").toLocaleLowerCase("tr-TR")
+        .replace(/ı/g, "i").replace(/ğ/g, "g").replace(/ü/g, "u")
+        .replace(/ş/g, "s").replace(/ö/g, "o").replace(/ç/g, "c")
+        .replace(/[^a-z0-9]/g, "").trim();
 
-    // 2. Yol: "Otobus Ara" butonuna bas, yonlenmeyi bekle
-    const clicked = await page.evaluate(() => {
-      const isMatch = (text) => {
-        const n = String(text || "").toLocaleLowerCase("tr-TR").replace(/\s+/g, " ").trim();
-        return n === "otobüs ara" || n === "otobus ara" || n === "bilet ara" || n === "ara" || n.includes("otobüs ara") || n.includes("otobus ara");
-      };
-      const candidates = Array.from(document.querySelectorAll('button, a, input[type="submit"], [role="button"]'));
-      for (const el of candidates) {
-        if (isMatch(el.textContent || el.value)) {
-          try { el.click(); return true; } catch {}
-        }
-      }
-      return false;
-    }).catch(() => false);
-
-    if (clicked) {
       try {
-        await page.waitForFunction(
-          () => /\/seferler\/\d+-\d+\//.test(location.pathname),
-          { timeout: 20000 }
-        );
-        const url = page.url();
-        const m = url.match(/\/seferler\/(\d+)-(\d+)\//);
-        if (m) {
-          routeId = `${m[1]}-${m[2]}`;
-          console.log(`[oBilet] Route ID bulundu (click yonlenme): ${origin}->${destination} = ${routeId}`);
-          return routeId;
+        // 1) Session
+        const sessionRes = await fetch("https://api.obilet.com/api/client/getsession", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": AUTH },
+          body: JSON.stringify({
+            type: 4,
+            connection: { "ip-address": "1.1.1.1", port: "5000" },
+            browser: { name: "Chrome", version: "124" }
+          })
+        });
+        if (!sessionRes.ok) return { error: `session HTTP ${sessionRes.status}` };
+        const sessionData = await sessionRes.json();
+        const session = sessionData?.data;
+        if (!session?.["session-id"]) return { error: "session-id yok" };
+
+        // 2) Station ID lookup
+        const findStation = async (cityName) => {
+          const res = await fetch("https://api.obilet.com/api/location/getbuslocations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": AUTH },
+            body: JSON.stringify({
+              data: cityName,
+              "device-session": session,
+              date: new Date().toISOString(),
+              language: "tr-TR"
+            })
+          });
+          if (!res.ok) return null;
+          const data = await res.json();
+          const list = Array.isArray(data?.data) ? data.data : [];
+          const target = slugTr(cityName);
+          // Tam eslesme onceligi
+          let m = list.find(loc => slugTr(loc?.name) === target);
+          if (!m) m = list.find(loc => slugTr(loc?.name).includes(target) || target.includes(slugTr(loc?.name)));
+          return m?.id ?? null;
+        };
+
+        const [originId, destId] = await Promise.all([findStation(originName), findStation(destName)]);
+        if (!originId || !destId) {
+          return { error: `Istasyon ID bulunamadi: ${originName}=${originId} ${destName}=${destId}` };
         }
-      } catch {
-        console.log(`[oBilet] Click sonrasi /seferler/ yonlenmesi gelmedi.`);
+
+        // 3) Seferleri al
+        const journeyRes = await fetch("https://api.obilet.com/api/journey/getbusjourneys", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": AUTH },
+          body: JSON.stringify({
+            data: {
+              "origin-id": originId,
+              "destination-id": destId,
+              "departure-date": dateFmt,
+              currency: "TRY"
+            },
+            "device-session": session,
+            date: new Date().toISOString(),
+            language: "tr-TR"
+          })
+        });
+        if (!journeyRes.ok) return { error: `journey HTTP ${journeyRes.status}` };
+        const journeyData = await journeyRes.json();
+        return {
+          originId,
+          destId,
+          items: Array.isArray(journeyData?.data) ? journeyData.data : []
+        };
+      } catch (e) {
+        return { error: e.message };
       }
-    } else {
-      console.log(`[oBilet] "Otobus Ara" butonu bulunamadi.`);
+    }, origin, destination, dateFormatted);
+
+    if (result?.error) {
+      console.log(`[oBilet Browser-API] Hata: ${result.error}`);
+      return [];
     }
 
-    return null;
+    const items = result?.items || [];
+    console.log(`[oBilet Browser-API] ${origin}->${destination} ${dateIso}: ${items.length} ham sefer`);
+
+    if (DEBUG_OBILET_API && items[0]) {
+      console.log(`[oBilet Browser-API DEBUG] Ornek alanlar: ${Object.keys(items[0]).join(", ")}`);
+    }
+
+    const journeys = [];
+    const seen = new Set();
+    for (const item of items) {
+      const operator = toTurkishTitleCase(String(
+        item?.["partner-name"] || item?.partner_name || item?.partnerName ||
+        item?.busCompany?.name || item?.bus_company?.name || ""
+      ).trim());
+      const rawTime = String(item?.["departure-time"] || item?.departure_time || item?.departureTime || "");
+      const tm = rawTime.match(/([01]\d|2[0-3]):[0-5]\d/);
+      if (!tm) continue;
+
+      // KRITIK: Sadece internet-price (oBilet satis fiyati). original-price'a ASLA dusme.
+      const price = Math.round(Number(
+        item?.["internet-price"] ?? item?.internet_price ?? item?.internetPrice ?? item?.price ?? 0
+      ));
+      if (!operator || price < 50) continue;
+
+      const depStop = String(item?.["origin-location"] || item?.origin_location || "").trim();
+      const arrStop = String(item?.["destination-location"] || item?.destination_location || "").trim();
+      const key = `${toObiletOperatorMatchKey(operator)}|${tm[0]}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      journeys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop });
+    }
+
+    console.log(`[oBilet Browser-API] ${journeys.length} sefer parse edildi`);
+    if (DEBUG_OBILET_PRICE) {
+      journeys.slice(0, 8).forEach(j =>
+        console.log(`  -> ${j.operator} ${j.time}: ${j.price} TL`)
+      );
+    }
+    return journeys;
+  } catch (e) {
+    console.error(`[oBilet Browser-API] Beklenmeyen hata: ${e.message}`);
+    return [];
   } finally {
     await page.close().catch(() => {});
   }
@@ -4129,30 +4213,32 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
   }
 }
 
-// oBilet Puppeteer Scraper (yedek - API çalışmazsa)
-// AKIS: Landing /otobus-bileti/... tanitim sayfasi yerine /seferler/X-Y/DATE gercek arama sayfasini kazi.
+// oBilet Puppeteer Scraper (Node.js fetch'i api.obilet.com'a cikamadiginda kullanilir).
+// Akis:
+//  1. Browser context'inden direkt oBilet API'sini cagir (en kesin/hizli yol — Cloudflare bypass cookies ile).
+//  2. Olmazsa /seferler/{routeId}/{date} sayfasini kazi (DOM'dan internet-price oku).
 async function scrapeObiletViaPuppeteer(origin, destination, dateIso) {
-  const cacheKey = `${slugTr(origin)}|${slugTr(destination)}`;
   const browser = await getBrowserInstance();
 
+  // BIRINCIL: Browser context-icinden API
+  const apiJourneys = await fetchObiletJourneysViaBrowser(browser, origin, destination, dateIso);
+  if (apiJourneys.length > 0) return apiJourneys;
+
+  // IKINCIL: /seferler/ sayfasi kazima (route ID cache'le)
+  const cacheKey = `${slugTr(origin)}|${slugTr(destination)}`;
   let routeId = obiletRouteIdCache.get(cacheKey);
-  if (!routeId) {
-    routeId = await discoverObiletRouteId(browser, origin, destination, dateIso);
-    if (routeId) {
-      obiletRouteIdCache.set(cacheKey, routeId);
-    } else {
-      console.log(`[oBilet Puppeteer] Route ID kesfedilemedi, fallback ile devam.`);
-    }
-  }
+
+  // Browser API'den originId-destId ogrendiysek route ID'sini ondan kur
+  // (fetchObiletJourneysViaBrowser hata dondururken bile bazen ID'leri bulmus olabilir,
+  // ama mevcut akista geri donmuyor — yeni implementasyona donus icin acik birak)
 
   if (!routeId) {
-    console.log(`[oBilet Puppeteer] Route ID kesfedilemedi. Veri yok dondurulecek (yanlis fiyat yazmamak icin).`);
+    console.log(`[oBilet Puppeteer] Browser API basarisiz ve route ID cache'de yok — veri yok.`);
     return [];
   }
 
   const journeys = await scrapeObiletSeferlerPage(browser, routeId, dateIso);
   if (journeys.length === 0) {
-    // /seferler/ sayfasi calismadi: route ID belki gecersiz hale geldi, cache'den dus.
     obiletRouteIdCache.delete(cacheKey);
   }
   return journeys;
