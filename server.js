@@ -3873,8 +3873,10 @@ async function scrapeObilet(origin, destination, dateIso, routeId = null) {
   const cleanRouteId = routeId && /^\d+-\d+$/.test(String(routeId).trim()) ? String(routeId).trim() : null;
 
   const tryScrapeSeferler = async (rid) => {
-    // Transient Puppeteer hatalari icin tek bir retry hakki ver.
-    // Frame detach / target crash gibi durumlar genelde anlik — ikinci denemede gecer.
+    // Transient Puppeteer hatalari icin tek retry. ONEMLI: browser instance'i KAPATMIYORUZ —
+    // browser kapanirsa Cloudflare cookie'leri kaybolur, sonraki istekler her seferinde challenge
+    // alir. Sadece newPage yeniden denenir; gercek crash olursa setupObiletPage zaten icinde
+    // browser'i yeniden baslatir.
     const isRetriable = (msg) =>
       /detached Frame|Target\.createTarget|Session with given id not found|Protocol error|disconnected|Navigation timeout|frame got detached/i.test(msg);
 
@@ -3885,10 +3887,8 @@ async function scrapeObilet(origin, destination, dateIso, routeId = null) {
       } catch (err) {
         const msg = String(err?.message || "").substring(0, 200);
         if (attempt === 1 && isRetriable(msg)) {
-          console.warn(`[oBilet] /seferler/${rid} gecici hata, 2s sonra retry: ${msg}`);
-          // Browser kapaniyor olabilir — yeniden baslatma sansi tani
-          try { await closeBrowserInstance(); } catch {}
-          await new Promise(r => setTimeout(r, 2000));
+          console.warn(`[oBilet] /seferler/${rid} gecici hata, 3s sonra retry: ${msg}`);
+          await new Promise(r => setTimeout(r, 3000));
           continue;
         }
         console.warn(`[oBilet] /seferler/${rid} hatasi (yutuldu): ${msg}`);
@@ -4749,7 +4749,12 @@ async function processObiletTarget(target) {
     const scrapedOperators = new Set();
 
     const targetRouteId = String(target.route_id || "").trim();
-    for (const journeyDate of dateList) {
+    for (let dayIdx = 0; dayIdx < dateList.length; dayIdx++) {
+        const journeyDate = dateList[dayIdx];
+        // Ayni hatta ardisik tarihler arasinda kucuk bir bekleme — Cloudflare burst tespitini onler.
+        if (dayIdx > 0) {
+          await new Promise(r => setTimeout(r, 3000));
+        }
         let journeys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate, targetRouteId);
         if (departureStopFilter && !journeys.length) {
           // Durak bazli sorgu bos donerse sehir bazli rotaya geri dus.
@@ -4958,11 +4963,12 @@ async function refreshObiletPricesTask() {
     for (let i = 0; i < targets.length; i++) {
       const target = targets[i];
       await processObiletTarget(target);
-      
-      // Cloudflare bot korumasını önlemek için hatlar arası 8 saniye bekle (son hat hariç)
+
+      // Cloudflare bot korumasını önlemek için hatlar arası bekleme. 8s yetmiyor — 20s ile
+      // istek sıklığını dustrebiliriz, IP rate-limit yemekten daha guvenli.
       if (i < targets.length - 1) {
-        console.log(`[Takip Görevi] Cloudflare koruması için 8 saniye bekleniyor...`);
-        await new Promise(resolve => setTimeout(resolve, 8000));
+        console.log(`[Takip Görevi] Cloudflare koruması için 20 saniye bekleniyor...`);
+        await new Promise(resolve => setTimeout(resolve, 20000));
       }
     }
     
