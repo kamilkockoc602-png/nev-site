@@ -3658,27 +3658,32 @@ function renderObiletTargetCards(listEl) {
         btn.textContent = "⏳";
         const result = await apiFetch(`/api/obilet/targets/${id}/refresh`, { method: "POST" });
         btn.textContent = "✅";
-        
-        // 2 saniye sonra simgeyi geri döndür
+
         setTimeout(() => {
           btn.textContent = originalText;
           btn.disabled = false;
         }, 2000);
-        
-        // Durum mesajını göster
+
+        // Backend mesajı: "İşleminiz sıraya alındı..." gibi açıklayıcı
         alert(result.message || `${target.origin} - ${target.destination} güncelleniyor...`);
-        
-        // 9 saniye sonra listeyi yenile (8 saniye delay + işlem süresi)
-        setTimeout(async () => {
-          await renderObiletTargets();
-        }, 9000);
+
+        // Periyodik liste yenileme: kuyrukta beklediği için kesin süre yok,
+        // 15s sonra bir kere dene, 30s sonra tekrar dene (status güncellenmiş olur).
+        setTimeout(() => renderObiletTargets().catch(() => null), 15000);
+        setTimeout(() => renderObiletTargets().catch(() => null), 30000);
       } catch (err) {
-        btn.textContent = "❌";
+        // 409 = "zaten kuyrukta" uyarisi (hata degil, bilgilendirme)
+        const isQueueWarning = err.payload?.queued === false;
+        btn.textContent = isQueueWarning ? "⏸" : "❌";
         setTimeout(() => {
           btn.textContent = originalText;
           btn.disabled = false;
         }, 2000);
-        alert("Güncelleme hatası: " + err.message);
+        if (isQueueWarning) {
+          alert(err.message);
+        } else {
+          alert("Güncelleme hatasi: " + err.message);
+        }
       }
     });
   });

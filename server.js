@@ -4360,17 +4360,25 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
   });
 
   try {
+    // ONCE ANA SAYFA: Cloudflare cookie'lerini insan benzeri akisla otur. Direkt /seferler/'e gitmek
+    // bot pattern'i — kullanici tarayicida her zaman once ana sayfayi acar.
+    await gotoAndHandleCloudflare(page, "https://www.obilet.com/");
+    // Kullanici davranisi simulasyonu: kucuk bir bekleme (insan ana sayfayi inceler)
+    await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
+
+    // Asil hedef sayfaya navigate et — ayni page, dolayisiyla cookie/session devam ediyor
     await gotoAndHandleCloudflare(page, url);
 
-    // Fiyat etiketinin (Schema.org veya text) gelmesini bekle
+    // Fiyat etiketinin (Schema.org veya text) gelmesini bekle — daha uzun timeout
     await page.waitForFunction(
       () => /\d+\s*(TL|₺)/i.test(document.body?.innerText || ""),
-      { timeout: 25000 }
+      { timeout: 40000 }
     ).catch(() => {
       console.log("[oBilet Puppeteer] /seferler/ fiyat beklemesi zaman asti.");
     });
 
-    await new Promise(r => setTimeout(r, 1500));
+    // XHR'larin tamamlanmasi icin ekstra bekleme (JS challenge bazen geride kaliyor)
+    await new Promise(r => setTimeout(r, 3000));
 
     if (capturedJourneys.length > 0) {
       console.log(`[oBilet Puppeteer] ${capturedJourneys.length} sefer (XHR)`);
@@ -4939,8 +4947,26 @@ async function processObiletTarget(target) {
   }
 }
 
-// Job lock değişkeni (aynı anda birden fazla task çalışmasını engeller)
+// Job lock değişkeni (aynı anda birden fazla task çalışmasını engeller).
+// Plus manuel istek kuyrugu: kullanicilar ayni hattı tekrar tekrar tetiklerse veya
+// auto task surerken manuel basarsa kuyrukta beklerler.
 let obiletTaskRunning = false;
+const obiletPendingManualTargets = new Set(); // target.id'leri — ayni hatta duplicate basmayi engeller
+let obiletPendingFullRefresh = false;          // "tum hatlari yenile" tek bir kuyrukta tutulur
+
+// Acquire / release helpers: lock'u atomic almak icin.
+async function acquireObiletLock(timeoutMs = 120000) {
+  const start = Date.now();
+  while (obiletTaskRunning) {
+    if (Date.now() - start > timeoutMs) return false;
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  obiletTaskRunning = true;
+  return true;
+}
+function releaseObiletLock() {
+  obiletTaskRunning = false;
+}
 
 // oBilet Fiyat Senkronizasyonu Arka Plan Görevi (Tüm Hatlar)
 async function refreshObiletPricesTask() {
@@ -5121,18 +5147,55 @@ app.get("/api/obilet/prices/:targetId", requireAuth, (req, res) => {
   }
 });
 
-// API: Manuel Yenileme Tetikle
+// API: Tüm hatlar için manuel yenileme (kuyruga al, duplicate engelle)
 app.post("/api/obilet/refresh", requireAuth, async (req, res) => {
   try {
-    // Senkronizasyonu arka planda başlat ama hemen yanıt dön (zaman aşımı olmaması için)
-    refreshObiletPricesTask().catch(e => console.error("[Manuel Yenileme] Hata:", e.message));
-    res.json({ ok: true, message: "Yenileme islemi arka planda baslatildi. Tamamlanmasi 1-2 dakika surebilir." });
+    if (obiletPendingFullRefresh) {
+      return res.status(409).json({
+        ok: false,
+        queued: false,
+        message: "Tum hatlar icin yenileme zaten kuyrukta. Lutfen tamamlanmasini bekleyin."
+      });
+    }
+
+    obiletPendingFullRefresh = true;
+    (async () => {
+      try {
+        const acquired = await acquireObiletLock(180000); // max 3 dk lock bekle
+        if (!acquired) {
+          console.warn("[Manuel Yenileme] Lock alinamadi (3 dk timeout). Iptal.");
+          return;
+        }
+        try {
+          // refreshObiletPricesTask kendi icinde de lock kontrolu yapıyor — direkt processObiletTarget'leri cagıralım
+          const targets = db.prepare("SELECT * FROM obilet_targets WHERE is_active = 1").all();
+          for (let i = 0; i < targets.length; i++) {
+            await processObiletTarget(targets[i]);
+            if (i < targets.length - 1) {
+              await new Promise(r => setTimeout(r, 20000)); // Cloudflare cooldown
+            }
+          }
+        } finally {
+          releaseObiletLock();
+        }
+      } catch (error) {
+        console.error("[Manuel Yenileme] Hata:", error.message);
+      } finally {
+        obiletPendingFullRefresh = false;
+      }
+    })();
+
+    res.json({
+      ok: true,
+      queued: true,
+      message: "İşleminiz sıraya alındı. Auto-task çalışıyorsa bitince işlenecek. Bütün hatlar 1-3 dakikada tamamlanır."
+    });
   } catch (error) {
     res.status(500).json({ message: error.message || "Manuel yenileme tetiklenemedi." });
   }
 });
 
-// API: Tek Hat Manuel Güncelleme
+// API: Tek Hat Manuel Güncelleme (kuyruga al, ayni hatta duplicate engelle)
 app.post("/api/obilet/targets/:id/refresh", requireAuth, async (req, res) => {
   try {
     const targetId = parseInt(req.params.id, 10);
@@ -5145,34 +5208,50 @@ app.post("/api/obilet/targets/:id/refresh", requireAuth, async (req, res) => {
       return res.status(404).json({ message: "Hat bulunamadi." });
     }
 
-    // 8 saniye delay ekle (Cloudflare bot korumasını önlemek için)
-    const delayMs = 8000;
+    // Bu hat icin zaten kuyrukta bekleyen istek varsa, yenisini ekleme.
+    if (obiletPendingManualTargets.has(targetId)) {
+      return res.status(409).json({
+        ok: false,
+        queued: false,
+        message: `${target.origin} - ${target.destination} hatti zaten kuyrukta. Lutfen tamamlanmasini bekleyin.`
+      });
+    }
+    obiletPendingManualTargets.add(targetId);
 
-    // Arka planda işle ve hemen yanıt dön — auto task ile cakismayi onle (obiletTaskRunning lock).
+    // Kullaniciya hemen "siraya alindi" cevabi don, arka planda lock al ve isle.
     (async () => {
       try {
-        // Auto task aktifse bitmesini bekle (max 60s)
-        for (let i = 0; i < 30 && obiletTaskRunning; i++) {
-          await new Promise(r => setTimeout(r, 2000));
+        // Auto task veya baska bir tarama aktifse bitmesini bekle (max 3 dk).
+        const acquired = await acquireObiletLock(180000);
+        if (!acquired) {
+          console.warn(`[Manuel Güncelleme] ${target.origin} -> ${target.destination}: lock 3 dk'da alinamadi, iptal.`);
+          setObiletTargetSyncStatus(target.id, "Sira bekleme suresi doldu, lutfen tekrar deneyin.");
+          return;
         }
-        console.log(`[Manuel Güncelleme] ${target.origin} -> ${target.destination} için 8 saniye bekleniyor...`);
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-        obiletTaskRunning = true;
+
         try {
+          console.log(`[Manuel Güncelleme] ${target.origin} -> ${target.destination} basliyor...`);
+          // 4 saniye nazik bekleme (Cloudflare burst tespitini onlemek icin)
+          await new Promise(r => setTimeout(r, 4000));
           await processObiletTarget(target);
+          console.log(`[Manuel Güncelleme] ${target.origin} -> ${target.destination} tamamlandı.`);
         } finally {
-          obiletTaskRunning = false;
+          releaseObiletLock();
         }
-        console.log(`[Manuel Güncelleme] ${target.origin} -> ${target.destination} tamamlandı.`);
       } catch (error) {
-        obiletTaskRunning = false;
         console.error(`[Manuel Güncelleme] Hata: ${error.message}`);
+      } finally {
+        obiletPendingManualTargets.delete(targetId);
       }
     })();
 
+    const waitingInfo = obiletTaskRunning
+      ? " Şu anda otomatik tarama çalışıyor, bitince işleyecek."
+      : "";
     res.json({
       ok: true,
-      message: `${target.origin} - ${target.destination} hattı 8 saniye sonra güncellenecek.`
+      queued: true,
+      message: `İşleminiz sıraya alındı.${waitingInfo} Birkaç dakika içinde sonuç görünecek.`
     });
   } catch (error) {
     res.status(500).json({ message: error.message || "Manuel güncelleme tetiklenemedi." });
