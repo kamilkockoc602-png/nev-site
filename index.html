@@ -396,6 +396,27 @@
               <div class="obilet-empty">Takip listesi yukleniyor...</div>
             </div>
           </section>
+
+          <section class="obilet-station-ids-section">
+            <details>
+              <summary><h5 style="display:inline">oBilet Sehir Kodlari</h5></summary>
+              <p class="subtle">
+                Her sehrin oBilet ID'si vardir (ornek: Ankara=356, Adana=348, Kadirli=595).
+                Yeni hat eklerken iki ucun da ID'si biliniyorsa sistem URL'yi otomatik kurar.
+                ID'ler oBilet sitesinde arama yapinca URL'deki <code>/seferler/X-Y/...</code> kisminda gozukur.
+                Sistem ayrica her basarili taramadan ID'leri otomatik ogrenip kaydeder.
+              </p>
+              <form id="obiletStationAddForm" class="obilet-station-add">
+                <input type="text" id="obiletStationCity" placeholder="Sehir adi (orn: Adana)" />
+                <input type="number" id="obiletStationId" placeholder="ID (orn: 348)" min="1" />
+                <button type="submit" class="btn btn-primary btn-sm">Kaydet</button>
+              </form>
+              <p id="obiletStationMsg" class="message" style="margin-top:8px;"></p>
+              <div id="obiletStationList" class="obilet-station-list">
+                <div class="obilet-empty">Liste yukleniyor...</div>
+              </div>
+            </details>
+          </section>
         </div>
 
         <div id="panelOcr" class="panel-block hidden" data-menu="ocr">

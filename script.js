@@ -3539,6 +3539,79 @@ function setupObiletOperatorPicker(root) {
 async function initObiletPanel() {
   await renderObiletTargets();
   setupObiletForm();
+  setupObiletStationIds();
+  renderObiletStationIds();
+}
+
+async function renderObiletStationIds() {
+  const listEl = document.getElementById("obiletStationList");
+  if (!listEl) return;
+  try {
+    const res = await fetch("/api/obilet/station-ids", { credentials: "same-origin" });
+    if (!res.ok) throw new Error("Liste alinamadi");
+    const { list } = await res.json();
+    if (!list || !list.length) {
+      listEl.innerHTML = '<div class="obilet-empty">Henuz sehir kodu yok.</div>';
+      return;
+    }
+    listEl.innerHTML = list.map(row => `
+      <div class="obilet-station-row" data-key="${row.city_key}">
+        <span class="obilet-station-name">${row.city_name}</span>
+        <span class="obilet-station-id-badge">${row.station_id}</span>
+        <span class="obilet-station-source">${row.source === "seed" ? "(koddan)" : `${row.hits} tarama`}</span>
+        ${row.source !== "seed" ? `<button type="button" class="btn btn-sm btn-ghost obilet-station-del" data-key="${row.city_key}">Sil</button>` : ""}
+      </div>
+    `).join("");
+
+    listEl.querySelectorAll(".obilet-station-del").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const key = btn.dataset.key;
+        if (!confirm(`${key} silinsin mi?`)) return;
+        try {
+          const r = await fetch(`/api/obilet/station-ids/${encodeURIComponent(key)}`, {
+            method: "DELETE", credentials: "same-origin"
+          });
+          if (!r.ok) throw new Error("Silinemedi");
+          renderObiletStationIds();
+        } catch (e) { alert(e.message); }
+      });
+    });
+  } catch (e) {
+    listEl.innerHTML = `<div class="obilet-empty">${e.message}</div>`;
+  }
+}
+
+function setupObiletStationIds() {
+  const form = document.getElementById("obiletStationAddForm");
+  const msgEl = document.getElementById("obiletStationMsg");
+  if (!form) return;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const cityName = document.getElementById("obiletStationCity")?.value.trim() || "";
+    const stationId = parseInt(document.getElementById("obiletStationId")?.value || "0", 10);
+    if (!cityName || !stationId || stationId <= 0) {
+      msgEl.style.color = "#d64545";
+      msgEl.textContent = "Sehir adi ve gecerli bir ID girin.";
+      return;
+    }
+    try {
+      const r = await fetch("/api/obilet/station-ids", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ cityName, stationId })
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data?.message || "Kayit basarisiz");
+      msgEl.style.color = "#27ae60";
+      msgEl.textContent = `Kaydedildi: ${cityName} = ${stationId}`;
+      form.reset();
+      renderObiletStationIds();
+    } catch (e) {
+      msgEl.style.color = "#d64545";
+      msgEl.textContent = e.message;
+    }
+  });
 }
 
 // CSV formatına çevir (Excel'de açılabilir - Türkiye için noktalı virgül delimiter)

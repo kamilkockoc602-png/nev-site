@@ -3890,11 +3890,13 @@ async function scrapeObilet(origin, destination, dateIso, routeId = null) {
   return scrapeObiletViaPuppeteer(origin, destination, dateIso);
 }
 
-// oBilet station ID seed tablosu — sadece KESIN bilinen, kullanıcı tarafından dogrulanmis ID'ler.
-// Sistem her basarili taramadan ek ID'leri otomatik DB'ye ogrenir (obilet_station_ids tablosu).
+// oBilet station ID seed tablosu — kullanici tarafindan dogrulanmis ID'ler.
+// Yeni ID eklemek icin: panelden "oBilet Sehir Kodlari" bolumunden ekleyin (kalici DB'ye gider),
+// veya direkt buraya gomun.
 const OBILET_STATION_IDS_SEED = {
   "kadirli": 595,
   "ankara": 356,
+  "adana": 348,
 };
 
 function cityKey(cityName) {
@@ -5183,6 +5185,56 @@ app.post("/api/obilet/targets/:id/refresh", requireAuth, async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ message: error.message || "Manuel güncelleme tetiklenemedi." });
+  }
+});
+
+// API: oBilet sehir kodlari — listele (seed + ogrenilmiş hepsi tek listede)
+app.get("/api/obilet/station-ids", requireAuth, (req, res) => {
+  try {
+    const learned = db.prepare("SELECT city_key, city_name, station_id, hits, last_seen FROM obilet_station_ids ORDER BY city_name ASC").all();
+    const learnedKeys = new Set(learned.map(r => r.city_key));
+    const seed = Object.entries(OBILET_STATION_IDS_SEED)
+      .filter(([k]) => !learnedKeys.has(k))
+      .map(([k, id]) => ({
+        city_key: k,
+        city_name: k.charAt(0).toUpperCase() + k.slice(1),
+        station_id: id,
+        hits: 0,
+        last_seen: "",
+        source: "seed",
+      }));
+    const learnedFmt = learned.map(r => ({ ...r, source: "ogrenilmis" }));
+    const list = [...learnedFmt, ...seed].sort((a, b) => a.city_name.localeCompare(b.city_name, "tr-TR"));
+    res.json({ ok: true, list });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Liste alinamadi." });
+  }
+});
+
+// API: oBilet sehir kodu ekle veya guncelle
+app.post("/api/obilet/station-ids", requireAuth, (req, res) => {
+  const cityName = String(req.body.cityName || "").trim();
+  const stationId = parseInt(req.body.stationId, 10);
+  if (!cityName || !Number.isFinite(stationId) || stationId <= 0) {
+    return res.status(400).json({ message: "Sehir adi ve gecerli bir station ID girin." });
+  }
+  try {
+    learnObiletStationId(cityName, stationId);
+    res.json({ ok: true, cityKey: cityKey(cityName), cityName, stationId });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Kayit basarisiz." });
+  }
+});
+
+// API: oBilet sehir kodunu sil
+app.delete("/api/obilet/station-ids/:cityKey", requireAuth, (req, res) => {
+  const key = String(req.params.cityKey || "").trim().toLowerCase();
+  if (!key) return res.status(400).json({ message: "Gecersiz sehir anahtari." });
+  try {
+    const result = db.prepare("DELETE FROM obilet_station_ids WHERE city_key = ?").run(key);
+    res.json({ ok: true, deleted: result.changes });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Silme basarisiz." });
   }
 });
 
