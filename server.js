@@ -3873,13 +3873,29 @@ async function scrapeObilet(origin, destination, dateIso, routeId = null) {
   const cleanRouteId = routeId && /^\d+-\d+$/.test(String(routeId).trim()) ? String(routeId).trim() : null;
 
   const tryScrapeSeferler = async (rid) => {
-    try {
-      const browser = await getBrowserInstance();
-      return await scrapeObiletSeferlerPage(browser, rid, dateIso);
-    } catch (err) {
-      console.warn(`[oBilet] /seferler/${rid} hatasi (yutuldu): ${String(err?.message || "").substring(0, 200)}`);
-      return [];
+    // Transient Puppeteer hatalari icin tek bir retry hakki ver.
+    // Frame detach / target crash gibi durumlar genelde anlik — ikinci denemede gecer.
+    const isRetriable = (msg) =>
+      /detached Frame|Target\.createTarget|Session with given id not found|Protocol error|disconnected|Navigation timeout|frame got detached/i.test(msg);
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const browser = await getBrowserInstance();
+        return await scrapeObiletSeferlerPage(browser, rid, dateIso);
+      } catch (err) {
+        const msg = String(err?.message || "").substring(0, 200);
+        if (attempt === 1 && isRetriable(msg)) {
+          console.warn(`[oBilet] /seferler/${rid} gecici hata, 2s sonra retry: ${msg}`);
+          // Browser kapaniyor olabilir — yeniden baslatma sansi tani
+          try { await closeBrowserInstance(); } catch {}
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
+        console.warn(`[oBilet] /seferler/${rid} hatasi (yutuldu): ${msg}`);
+        return [];
+      }
     }
+    return [];
   };
 
   // 1) Elde route_id varsa direkt /seferler/ sayfasini kazi — en saglam yol
@@ -4033,8 +4049,8 @@ async function setupObiletPage(browser) {
     return await buildPage(browser);
   } catch (err) {
     const msg = String(err?.message || "");
-    // Target.createTarget veya session-not-found gibi sinyaller browser'in coktugunu gosterir.
-    const isCrash = /Target\.createTarget|Session with given id not found|Protocol error|disconnected/i.test(msg);
+    // Browser cokmesi sinyalleri.
+    const isCrash = /Target\.createTarget|Session with given id not found|Protocol error|disconnected|detached Frame|frame got detached/i.test(msg);
     if (!isCrash) throw err;
 
     console.warn(`[Browser Pool] newPage hatasi (${msg.substring(0, 120)}). Browser yeniden baslatiliyor...`);
@@ -4044,16 +4060,36 @@ async function setupObiletPage(browser) {
   }
 }
 
-// Landing sayfasini ac, Cloudflare'i bekle.
+// Landing sayfasini ac, Cloudflare challenge gercekten gecene kadar bekle.
+// Sabit 12s bekleme yerine waitForFunction ile koşulu sorgular — bu daha guvenli
+// (gercek bekleme suresi 2-30 sn arasi degisiyor, sabit 12s bazen yetmiyor).
 async function gotoAndHandleCloudflare(page, url) {
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60000 }).catch(() => {});
-  const isChallenge = await page.evaluate(() =>
-    document.title.includes("Just a moment") ||
-    (document.body?.innerText || "").includes("Checking your browser")
-  ).catch(() => false);
-  if (isChallenge) {
-    console.log("[oBilet Puppeteer] Cloudflare, 12s bekleniyor...");
-    await new Promise(r => setTimeout(r, 12000));
+
+  const isStillChallenge = async () => {
+    try {
+      return await page.evaluate(() =>
+        document.title.includes("Just a moment") ||
+        (document.body?.innerText || "").includes("Checking your browser") ||
+        (document.body?.innerText || "").includes("challenge-platform") ||
+        !!document.querySelector("#challenge-running")
+      );
+    } catch { return false; }
+  };
+
+  if (!(await isStillChallenge())) return;
+
+  console.log("[oBilet Puppeteer] Cloudflare challenge, gecmesi bekleniyor (en fazla 30s)...");
+  try {
+    await page.waitForFunction(
+      () => !document.title.includes("Just a moment") &&
+            !(document.body?.innerText || "").includes("Checking your browser") &&
+            !document.querySelector("#challenge-running"),
+      { timeout: 30000, polling: 1000 }
+    );
+    console.log("[oBilet Puppeteer] Cloudflare gecildi.");
+  } catch {
+    console.log("[oBilet Puppeteer] Cloudflare 30s'de gecilemedi, mevcut DOM ile devam edilir.");
   }
 }
 
