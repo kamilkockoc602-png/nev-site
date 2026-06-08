@@ -3371,13 +3371,18 @@ async function getBrowserInstance() {
       console.log("[Browser Pool] Yeni browser instance oluşturuluyor...");
       sharedBrowser = await puppeteer.launch({
         headless: "new",
-        // NOT: --single-process ve --no-zygote bilinen "detached frame" hatalarinin sebebi.
-        // Bir sayfa kapatildiginda tum browser dusebiliyor. Bunlar olmadan da yeterince hafif.
+        // NOT: Railway gibi sinirli RAM ortamlarda --single-process + --no-zygote ZORUNLU.
+        // Aksi halde Chromium birden fazla renderer process acar, RAM patlar, browser coker
+        // ("Protocol error (Target.createTarget): Session with given id not found").
+        // Eskiden "detached frame" hatasi vardi cunku concurrent page acmalari vardi —
+        // simdi obiletTaskRunning lock'u sequential calismayi garantiliyor, race kalmadi.
         args: [
           "--no-sandbox",
           "--disable-setuid-sandbox",
           "--disable-dev-shm-usage",
           "--disable-blink-features=AutomationControlled",
+          "--single-process",
+          "--no-zygote",
           "--disable-gpu",
           "--disable-software-rasterizer",
           "--disable-extensions",
@@ -3862,19 +3867,28 @@ async function fetchObiletJourneysViaApi(origin, destination, dateIso) {
 // oBilet Ana Scraper
 // Onceligi: target'in elindeki route_id -> statik tablo -> Node API -> Puppeteer.
 // Onemli: Ayni route ID iki kez denenmesin — verilen ID ile statik tablo aynisi olabilir.
+// Browser/protocol hatalarini icerde yakalar, isleyen hatti devirmemek icin [] dondurur.
 async function scrapeObilet(origin, destination, dateIso, routeId = null) {
   const triedRouteIds = new Set();
   const cleanRouteId = routeId && /^\d+-\d+$/.test(String(routeId).trim()) ? String(routeId).trim() : null;
-  const browser = await getBrowserInstance();
+
+  const tryScrapeSeferler = async (rid) => {
+    try {
+      const browser = await getBrowserInstance();
+      return await scrapeObiletSeferlerPage(browser, rid, dateIso);
+    } catch (err) {
+      console.warn(`[oBilet] /seferler/${rid} hatasi (yutuldu): ${String(err?.message || "").substring(0, 200)}`);
+      return [];
+    }
+  };
 
   // 1) Elde route_id varsa direkt /seferler/ sayfasini kazi — en saglam yol
   if (cleanRouteId) {
     console.log(`[oBilet] Route ID kullanilarak direkt cekiliyor: ${cleanRouteId}`);
     triedRouteIds.add(cleanRouteId);
-    const journeys = await scrapeObiletSeferlerPage(browser, cleanRouteId, dateIso);
+    const journeys = await tryScrapeSeferler(cleanRouteId);
     if (journeys.length > 0) return journeys;
     console.log(`[oBilet] Verilen route_id (${cleanRouteId}) sonuc dondurmedi. Yedek yontemler atlanir.`);
-    // route_id verildiyse ve calismadiysa: o gun gercekten sefer yok. Bos don, fallback'leri tetikleme.
     return [];
   }
 
@@ -3883,12 +3897,12 @@ async function scrapeObilet(origin, destination, dateIso, routeId = null) {
   if (localRouteId && !triedRouteIds.has(localRouteId)) {
     console.log(`[oBilet] Yerel station tablosundan route_id: ${origin}->${destination} = ${localRouteId}`);
     triedRouteIds.add(localRouteId);
-    const journeys = await scrapeObiletSeferlerPage(browser, localRouteId, dateIso);
+    const journeys = await tryScrapeSeferler(localRouteId);
     if (journeys.length > 0) return journeys;
   }
 
   // 3) Resmi API dene (Node.js'den) — Railway egress engellerse fail eder
-  const apiResult = await fetchObiletJourneysViaApi(origin, destination, dateIso);
+  const apiResult = await fetchObiletJourneysViaApi(origin, destination, dateIso).catch(() => []);
   if (apiResult.length > 0) return apiResult;
 
   // 4) Puppeteer fallback (browser-API + route discovery)
@@ -3991,30 +4005,43 @@ function learnObiletStationId(cityName, stationId) {
 const obiletRouteIdCache = new Map();
 
 // Puppeteer ile bir sayfa hazirla — Cloudflare bypass + reklam blok.
+// Browser cokmusse (Target.createTarget hatasi) bir kez yeniden baslat ve tekrar dene.
 async function setupObiletPage(browser) {
-  const page = await browser.newPage();
+  const buildPage = async (b) => {
+    const page = await b.newPage();
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+      Object.defineProperty(navigator, "languages", { get: () => ["tr-TR", "tr"] });
+      window.chrome = { runtime: {} };
+    });
+    await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
+    await page.setViewport({ width: 1366, height: 768 });
+    await page.setExtraHTTPHeaders({ "Accept-Language": "tr-TR,tr;q=0.9" });
+    await page.setCacheEnabled(false);
+    await page.setRequestInterception(true);
+    page.on("request", (req) => {
+      const reqUrl = req.url();
+      if (/(doubleclick|googleads|googletagmanager|google-analytics|facebook\.com|fbcdn|hotjar|tiktok|yandex|criteo|taboola|outbrain|clarity|useinsider)/i.test(reqUrl)) {
+        return req.abort();
+      }
+      return req.continue();
+    });
+    return page;
+  };
 
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-    Object.defineProperty(navigator, "languages", { get: () => ["tr-TR", "tr"] });
-    window.chrome = { runtime: {} };
-  });
+  try {
+    return await buildPage(browser);
+  } catch (err) {
+    const msg = String(err?.message || "");
+    // Target.createTarget veya session-not-found gibi sinyaller browser'in coktugunu gosterir.
+    const isCrash = /Target\.createTarget|Session with given id not found|Protocol error|disconnected/i.test(msg);
+    if (!isCrash) throw err;
 
-  await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
-  await page.setViewport({ width: 1366, height: 768 });
-  await page.setExtraHTTPHeaders({ "Accept-Language": "tr-TR,tr;q=0.9" });
-  await page.setCacheEnabled(false);
-
-  await page.setRequestInterception(true);
-  page.on("request", (req) => {
-    const reqUrl = req.url();
-    if (/(doubleclick|googleads|googletagmanager|google-analytics|facebook\.com|fbcdn|hotjar|tiktok|yandex|criteo|taboola|outbrain|clarity|useinsider)/i.test(reqUrl)) {
-      return req.abort();
-    }
-    return req.continue();
-  });
-
-  return page;
+    console.warn(`[Browser Pool] newPage hatasi (${msg.substring(0, 120)}). Browser yeniden baslatiliyor...`);
+    try { await closeBrowserInstance(); } catch {}
+    const fresh = await getBrowserInstance();
+    return await buildPage(fresh);
+  }
 }
 
 // Landing sayfasini ac, Cloudflare'i bekle.
