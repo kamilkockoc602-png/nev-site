@@ -505,6 +505,17 @@ try { db.exec("ALTER TABLE obilet_prices ADD COLUMN arrival_stop TEXT NOT NULL D
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN pending_price INTEGER"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN pending_seen_count INTEGER NOT NULL DEFAULT 0"); } catch(e) {}
 
+// Sehir adi -> oBilet station ID eslemesi (otomatik ogrenilen). Her basarili taramada doldurulur.
+db.exec(`
+CREATE TABLE IF NOT EXISTS obilet_station_ids (
+  city_key TEXT PRIMARY KEY,
+  city_name TEXT NOT NULL,
+  station_id INTEGER NOT NULL,
+  hits INTEGER NOT NULL DEFAULT 1,
+  last_seen TEXT NOT NULL DEFAULT ''
+);
+`);
+
 const pricingItemColumns = db.prepare("PRAGMA table_info(pricing_upload_items)").all();
 const hasRowDirectionColumn = pricingItemColumns.some((col) => col.name === "row_direction");
 if (!hasRowDirectionColumn) {
@@ -3879,41 +3890,46 @@ async function scrapeObilet(origin, destination, dateIso, routeId = null) {
   return scrapeObiletViaPuppeteer(origin, destination, dateIso);
 }
 
-// oBilet station ID katalogu (kalıcı, koddan).
-// /seferler/{originId}-{destId}/{date} URL'sini kurabilmek icin gereklidir.
-// Yeni sehir eklemek icin: oBilet sitesinde sehirleri secip Otobus Ara'ya basin, acilan
-// URL'den ID'yi alin (ornek: /seferler/595-356/... ise Kadirli=595, Ankara=356).
-const OBILET_STATION_IDS = {
-  // Kullanicidan dogrulanmis ID'ler
+// oBilet station ID seed tablosu — sadece KESIN bilinen, kullanıcı tarafından dogrulanmis ID'ler.
+// Sistem her basarili taramadan ek ID'leri otomatik DB'ye ogrenir (obilet_station_ids tablosu).
+const OBILET_STATION_IDS_SEED = {
   "kadirli": 595,
   "ankara": 356,
-  // Yaygın il merkezleri (oBilet'in standart listesi — kullanıcı doğrulamayınca yedek olarak şüpheli kabul edin)
-  "adana": 354,
-  "istanbul": 350,
-  "izmir": 351,
-  "bursa": 357,
-  "antalya": 363,
-  "konya": 362,
-  "gaziantep": 366,
-  "kayseri": 360,
-  "mersin": 369,
-  "samsun": 364,
-  "diyarbakir": 371,
-  "trabzon": 376,
-  "eskisehir": 359,
-  "sanliurfa": 365,
-  "malatya": 367,
 };
 
+function cityKey(cityName) {
+  return slugTr(cityName).replace(/\s+/g, "");
+}
+
+// Sehir -> station ID lookup. Once DB'deki ogrenilen ID'lere, sonra seed tablosuna bakar.
 function findObiletStationIdLocal(cityName) {
-  const key = slugTr(cityName).replace(/\s+/g, "");
-  if (Object.prototype.hasOwnProperty.call(OBILET_STATION_IDS, key)) {
-    return OBILET_STATION_IDS[key];
+  const key = cityKey(cityName);
+  if (!key) return null;
+
+  // 1) Tam eslesme: DB
+  try {
+    const row = db.prepare("SELECT station_id FROM obilet_station_ids WHERE city_key = ?").get(key);
+    if (row?.station_id) return row.station_id;
+  } catch (e) { /* DB henuz hazir degilse seed'e dus */ }
+
+  // 2) Tam eslesme: seed
+  if (Object.prototype.hasOwnProperty.call(OBILET_STATION_IDS_SEED, key)) {
+    return OBILET_STATION_IDS_SEED[key];
   }
-  // Kismi eslesme (kadirli-otogari -> kadirli)
-  for (const known of Object.keys(OBILET_STATION_IDS)) {
-    if (key.includes(known) || known.includes(key)) return OBILET_STATION_IDS[known];
+
+  // 3) Kismi eslesme: DB (orn. "kadirli otogari" -> "kadirli")
+  try {
+    const all = db.prepare("SELECT city_key, station_id FROM obilet_station_ids").all();
+    for (const row of all) {
+      if (key.includes(row.city_key) || row.city_key.includes(key)) return row.station_id;
+    }
+  } catch (e) {}
+
+  // 4) Kismi eslesme: seed
+  for (const known of Object.keys(OBILET_STATION_IDS_SEED)) {
+    if (key.includes(known) || known.includes(key)) return OBILET_STATION_IDS_SEED[known];
   }
+
   return null;
 }
 
@@ -3922,6 +3938,26 @@ function buildObiletRouteIdLocal(origin, destination) {
   const d = findObiletStationIdLocal(destination);
   if (o && d) return `${o}-${d}`;
   return null;
+}
+
+// XHR'den gelen item'lardan sehir->ID eslemesini ogren ve DB'ye yaz.
+const learnStationStmt = db.prepare(`
+  INSERT INTO obilet_station_ids (city_key, city_name, station_id, hits, last_seen)
+  VALUES (?, ?, ?, 1, ?)
+  ON CONFLICT(city_key) DO UPDATE SET
+    station_id = excluded.station_id,
+    city_name = excluded.city_name,
+    hits = hits + 1,
+    last_seen = excluded.last_seen
+`);
+
+function learnObiletStationId(cityName, stationId) {
+  if (!cityName || !stationId) return;
+  const key = cityKey(cityName);
+  if (!key) return;
+  try {
+    learnStationStmt.run(key, String(cityName).trim(), Number(stationId), nowStamp());
+  } catch (e) { /* sessizce gec */ }
 }
 
 // oBilet route ID cache: "kadirli|ankara" -> "595-356"
@@ -4205,6 +4241,16 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
         if (!operator) { skipped_op++; continue; }
         if (!tm) { skipped_time++; continue; }
         if (price < 50) { skipped_price++; continue; }
+
+        // OGREN: API yanitinda her item sehir<->station-id eslemesini tasiyor.
+        // Bunlari DB'ye kaydet ki yeni hatlar elle ID girmeden eklenebilsin.
+        const oLoc = item?.["origin-location"];
+        const oLocId = item?.["origin-location-id"];
+        const dLoc = item?.["destination-location"];
+        const dLocId = item?.["destination-location-id"];
+        if (oLoc && oLocId) learnObiletStationId(oLoc, oLocId);
+        if (dLoc && dLocId) learnObiletStationId(dLoc, dLocId);
+
         const key = `${toObiletOperatorMatchKey(operator)}|${tm[0]}`;
         if (seenKeys.has(key)) continue;
         seenKeys.add(key);
