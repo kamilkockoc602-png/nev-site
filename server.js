@@ -4833,17 +4833,25 @@ async function processObiletTarget(target) {
     }
 
     if (trackedJourneys.length === 0) {
-      const scrapedSample = Array.from(scrapedOperators).slice(0, 8).join(", ");
-      const detail = scrapedSample ? ` Bulunan firmalar: ${scrapedSample}.` : "";
-      const stopDetail = departureStopFilter ? ` Kalkis duragi filtresi: ${departureStopFilter}.` : "";
-      setObiletTargetSyncStatus(
-        target.id,
-        `Secilen firmalarda sefer bulunamadi.${stopDetail}${detail}`
-      );
-      addPricingNotification(
-        "oBilet Fiyat Takip",
-        `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} icin secilen firmalarda sefer verisi bulunamadi.${stopDetail}${detail}`
-      );
+      // Iki farkli durum: (a) scraper hic sefer cekemedi (sayfa acilmadi/Cloudflare/yanlis ID),
+      // (b) cekti ama secilen firmalar arasinda yok. Mesajlari ayri tutalim ki kullanici neyi
+      // duzeltecegini bilsin.
+      const stopDetail = departureStopFilter ? ` (Kalkis duragi filtresi: ${departureStopFilter})` : "";
+      let statusMsg;
+      let notifMsg;
+      if (scrapedOperators.size === 0) {
+        // (a) Hic veri gelmedi.
+        statusMsg = `oBilet sayfasindan sefer cekilemedi. Olasi nedenler: yanlis sehir ID, Cloudflare engeli, tarihte sefer yok${stopDetail}.`;
+        notifMsg = `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} icin oBilet'ten sefer cekilemedi.`;
+      } else {
+        // (b) Veri var ama filtre tutmadi.
+        const scrapedSample = Array.from(scrapedOperators).slice(0, 12).join(", ");
+        const selectedSample = acceptAllOperators ? "tum firmalar" : targetOperators.join(", ");
+        statusMsg = `Secilen firmalar bu hatta sefer islemiyor olabilir.${stopDetail} Secili firmalar: ${selectedSample}. Bu hatta bulunan firmalar: ${scrapedSample}${scrapedOperators.size > 12 ? "..." : ""}.`;
+        notifMsg = `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()}: Secili firmalar bulunamadi. Hatta gozuken: ${scrapedSample}.`;
+      }
+      setObiletTargetSyncStatus(target.id, statusMsg);
+      addPricingNotification("oBilet Fiyat Takip", notifMsg);
     }
     
     if (changes.length > 0) {
