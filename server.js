@@ -4802,6 +4802,11 @@ async function processObiletTarget(target) {
           .prepare("SELECT id, operator, departure_time, journey_date, departure_stop, arrival_stop, price FROM obilet_prices WHERE target_id = ? AND journey_date = ?")
           .all(target.id, journeyDate);
 
+        // Bu gun icin DB'de hic kayit yoksa: o gunun ILK basarili taramasidir, "yeni sefer" olarak
+        // raporlamayalim — sadece baseline kuruyoruz. Sonraki turdan itibaren gercek yeni/iptal'leri yakalariz.
+        const isFirstScrapeForDay = existingRows.length === 0;
+        const isBaselineDay = isFirstMailForTarget || isFirstScrapeForDay;
+
         for (const row of existingRows) {
           // Geçmiş kalkış: sessizce sil, iptal sayma.
           if (!isJourneyInFuture(row.journey_date, row.departure_time)) {
@@ -4819,8 +4824,8 @@ async function processObiletTarget(target) {
           const rowKey = buildJourneyIdentityKey(row.operator, row.departure_time, row.departure_stop);
           if (!currentKeys.has(rowKey)) {
             // Bu sefer bu turda yok = firma iptal etmiş veya gözden kaybolmuş.
-            // Ilk mail durumunda iptal raporlamayalim (henuz baseline yok).
-            if (!isFirstMailForTarget) {
+            // Baseline durumunda (ilk mail veya gunun ilk taramasi) iptal raporlamayalim.
+            if (!isBaselineDay) {
               removals.push({
                 journey_date: row.journey_date,
                 operator: row.operator,
@@ -4851,12 +4856,13 @@ async function processObiletTarget(target) {
           );
 
           if (!previous) {
-            // YENİ SEFER: ilk mail değilse "yeni eklendi" olarak raporla.
+            // YENİ SEFER: sadece baseline kurulu degilse "yeni eklendi" olarak raporla.
+            // Baseline = (target icin ilk mail) VEYA (bu gun icin DB'de hic kayit yoktu = ilk tarama).
             db.prepare(
               "INSERT INTO obilet_prices (target_id, journey_date, operator, departure_time, departure_stop, arrival_stop, price, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
             ).run(target.id, journey.journey_date, normalizedOperator, journey.time, journey.departureStop || "", journey.arrivalStop || "", journey.price, now);
 
-            if (!isFirstMailForTarget) {
+            if (!isBaselineDay) {
               additions.push({
                 journey_date: journey.journey_date,
                 operator: normalizedOperator,
