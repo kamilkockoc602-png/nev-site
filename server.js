@@ -3860,28 +3860,34 @@ async function fetchObiletJourneysViaApi(origin, destination, dateIso) {
 }
 
 // oBilet Ana Scraper
-// Onceligi: target'in elindeki route_id varsa direkt /seferler/{routeId}/{date} kazi.
-// Yoksa: Node.js API -> Puppeteer (browser-API + /seferler/ fallback).
+// Onceligi: target'in elindeki route_id -> statik tablo -> Node API -> Puppeteer.
+// Onemli: Ayni route ID iki kez denenmesin — verilen ID ile statik tablo aynisi olabilir.
 async function scrapeObilet(origin, destination, dateIso, routeId = null) {
+  const triedRouteIds = new Set();
+  const cleanRouteId = routeId && /^\d+-\d+$/.test(String(routeId).trim()) ? String(routeId).trim() : null;
+  const browser = await getBrowserInstance();
+
   // 1) Elde route_id varsa direkt /seferler/ sayfasini kazi — en saglam yol
-  if (routeId && /^\d+-\d+$/.test(routeId)) {
-    console.log(`[oBilet] Route ID kullanilarak direkt cekiliyor: ${routeId}`);
-    const browser = await getBrowserInstance();
-    const journeys = await scrapeObiletSeferlerPage(browser, routeId, dateIso);
+  if (cleanRouteId) {
+    console.log(`[oBilet] Route ID kullanilarak direkt cekiliyor: ${cleanRouteId}`);
+    triedRouteIds.add(cleanRouteId);
+    const journeys = await scrapeObiletSeferlerPage(browser, cleanRouteId, dateIso);
     if (journeys.length > 0) return journeys;
-    console.log(`[oBilet] Verilen route_id (${routeId}) sonuc dondurmedi.`);
+    console.log(`[oBilet] Verilen route_id (${cleanRouteId}) sonuc dondurmedi. Yedek yontemler atlanir.`);
+    // route_id verildiyse ve calismadiysa: o gun gercekten sefer yok. Bos don, fallback'leri tetikleme.
+    return [];
   }
 
   // 2) Statik tablodan route_id cikar (Kadirli=595, Ankara=356 gibi bilinenler)
   const localRouteId = buildObiletRouteIdLocal(origin, destination);
-  if (localRouteId) {
+  if (localRouteId && !triedRouteIds.has(localRouteId)) {
     console.log(`[oBilet] Yerel station tablosundan route_id: ${origin}->${destination} = ${localRouteId}`);
-    const browser = await getBrowserInstance();
+    triedRouteIds.add(localRouteId);
     const journeys = await scrapeObiletSeferlerPage(browser, localRouteId, dateIso);
     if (journeys.length > 0) return journeys;
   }
 
-  // 3) Resmi API dene (Node.js'den)
+  // 3) Resmi API dene (Node.js'den) — Railway egress engellerse fail eder
   const apiResult = await fetchObiletJourneysViaApi(origin, destination, dateIso);
   if (apiResult.length > 0) return apiResult;
 
@@ -4521,7 +4527,7 @@ async function sendPriceChangeEmail(emailList, target, changes) {
   return info;
 }
 
-async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, changes) {
+async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, changes = [], additions = [], removals = [], isFirstReport = false) {
   const { smtpUser } = createSmtpTransportsWithFallback();
 
   const smtpFrom = process.env.SMTP_FROM || `"oBilet Fiyat Takip" <${smtpUser}>`;
@@ -4532,74 +4538,109 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
     ? `${formattedDate} - ${formattedEndDate}`
     : formattedDate;
   const checkedAt = nowStamp();
-  const hasChanges = changes.length > 0;
+  const totalUpdates = changes.length + additions.length + removals.length;
+  const hasUpdates = totalUpdates > 0;
 
-  const currentPriceRows = trackedJourneys
-    .map(
-      (item) => `
-      <tr style="background:#ffffff;">
-        <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${toDotDate(item.journey_date) || "-"}</td>
-        <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${item.operator}</td>
-        <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:center;color:#333333;">${item.time}</td>
-        <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#1a73e8;font-weight:600;font-size:14px;">${item.price} TL</td>
-      </tr>`
-    )
-    .join("");
+  const headerColor = isFirstReport ? "#27ae60" : (hasUpdates ? "#c0392b" : "#1a73e8");
+  const headerTitle = isFirstReport ? "Yeni Hat Takibe Alındı" : "oBilet Fiyat Raporu";
 
-  const changesRows = changes
-    .map(
-      (c) => `
-      <tr style="background:#fff8f8;">
-        <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${toDotDate(c.journey_date) || "-"}</td>
-        <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${c.operator}</td>
-        <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:center;color:#333333;">${c.departure_time}</td>
-        <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#999999;text-decoration:line-through;">${c.oldPrice} TL</td>
-        <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#d32f2f;font-weight:700;font-size:14px;">${c.newPrice} TL</td>
-      </tr>`
-    )
-    .join("");
+  const buildPriceRow = (item) => `
+    <tr style="background:#ffffff;">
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${toDotDate(item.journey_date) || "-"}</td>
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${item.operator}</td>
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:center;color:#333333;">${item.time}</td>
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#1a73e8;font-weight:600;font-size:14px;">${item.price} TL</td>
+    </tr>`;
+
+  const currentPriceRows = trackedJourneys.map(buildPriceRow).join("");
+
+  const changesRows = changes.map(c => `
+    <tr style="background:#fff8f8;">
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${toDotDate(c.journey_date) || "-"}</td>
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${c.operator}</td>
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:center;color:#333333;">${c.departure_time}</td>
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#999999;text-decoration:line-through;">${c.oldPrice} TL</td>
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#d32f2f;font-weight:700;font-size:14px;">${c.newPrice} TL</td>
+    </tr>`).join("");
+
+  const additionsRows = additions.map(a => `
+    <tr style="background:#f4fbf5;">
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${toDotDate(a.journey_date) || "-"}</td>
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${a.operator}</td>
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:center;color:#333333;">${a.departure_time}</td>
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${a.departureStop || "-"}</td>
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#27ae60;font-weight:700;font-size:14px;">${a.price} TL</td>
+    </tr>`).join("");
+
+  const removalsRows = removals.map(r => `
+    <tr style="background:#fff5f5;">
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${toDotDate(r.journey_date) || "-"}</td>
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${r.operator}</td>
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:center;color:#333333;">${r.departure_time}</td>
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${r.departureStop || "-"}</td>
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#999999;text-decoration:line-through;font-weight:600;">${r.price} TL</td>
+    </tr>`).join("");
+
+  const tableHead = (cols) => `
+    <thead><tr style="background:#f8f9fa;">${cols.map(c => `
+      <th style="padding:10px;text-align:${c.align || "left"};color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">${c.label}</th>`).join("")}
+    </tr></thead>`;
+
+  const summaryLines = [];
+  if (isFirstReport) {
+    summaryLines.push(`<p style="margin:0 0 12px 0;padding:12px;background:#e8f5e9;color:#1b5e20;border-left:4px solid #27ae60;border-radius:4px;">
+      Bu hat takibe alındı. Aşağıdaki <strong>${trackedJourneys.length}</strong> sefer izlenmeye başladı. Bir sonraki turdan itibaren değişiklikler bu adrese mail olarak iletilecek.
+    </p>`);
+  } else {
+    const parts = [];
+    if (changes.length) parts.push(`<strong style="color:#c0392b;">${changes.length}</strong> fiyat değişikliği`);
+    if (additions.length) parts.push(`<strong style="color:#27ae60;">${additions.length}</strong> yeni sefer`);
+    if (removals.length) parts.push(`<strong style="color:#999999;">${removals.length}</strong> iptal/kaldırılan sefer`);
+    if (parts.length) {
+      summaryLines.push(`<p style="margin:0 0 12px 0;color:#333333;"><strong>Durum:</strong> ${parts.join(", ")}.</p>`);
+    } else {
+      summaryLines.push(`<p style="margin:0 0 12px 0;color:#333333;"><strong>Durum:</strong> <span style="color:#27ae60;font-weight:600;">Değişiklik yok</span></p>`);
+    }
+  }
 
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;background:#ffffff;">
-      <div style="padding:20px;background:#1a73e8;color:#ffffff;text-align:center;">
-        <h2 style="margin:0;font-size:20px;font-weight:600;">oBilet Fiyat Raporu</h2>
+      <div style="padding:20px;background:${headerColor};color:#ffffff;text-align:center;">
+        <h2 style="margin:0;font-size:20px;font-weight:600;">${headerTitle}</h2>
       </div>
       <div style="padding:20px;background:#ffffff;">
         <p style="margin:0 0 12px 0;color:#333333;">Merhaba,</p>
-        <p style="margin:0 0 20px 0;color:#555555;">Fiyat raporu aşağıdaki gibidir.</p>
-        
+
         <p style="margin:0 0 10px 0;color:#333333;"><strong>Hat:</strong> ${target.origin.toUpperCase()} → ${target.destination.toUpperCase()}</p>
-        <p style="margin:0 0 10px 0;color:#333333;"><strong>Tarih:</strong> ${dateLabel}</p>
-        <p style="margin:0 0 16px 0;color:#333333;"><strong>Kontrol Zamanı:</strong> ${checkedAt}</p>
+        <p style="margin:0 0 10px 0;color:#333333;"><strong>Tarih Araligi:</strong> ${dateLabel}</p>
+        <p style="margin:0 0 16px 0;color:#333333;"><strong>Kontrol Zamani:</strong> ${checkedAt}</p>
 
-        <p style="margin:0 0 12px 0;color:#333333;"><strong>Durum:</strong> <span style="color:${hasChanges ? '#c0392b' : '#27ae60'};font-weight:600;">${hasChanges ? "Değişiklik var" : "Değişiklik yok"}</span></p>
+        ${summaryLines.join("")}
 
-        ${hasChanges ? `
-          <h3 style="margin:16px 0 10px 0;font-size:16px;color:#333333;font-weight:600;">Değişen Fiyatlar</h3>
+        ${changes.length ? `
+          <h3 style="margin:20px 0 10px 0;font-size:16px;color:#c0392b;font-weight:600;">📊 Fiyat Değişiklikleri</h3>
           <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e0e0e0;border-radius:4px;">
-            <thead>
-              <tr style="background:#f8f9fa;">
-                <th style="padding:10px;text-align:left;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Tarih</th>
-                <th style="padding:10px;text-align:left;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Firma</th>
-                <th style="padding:10px;text-align:center;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Saat</th>
-                <th style="padding:10px;text-align:right;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Eski</th>
-                <th style="padding:10px;text-align:right;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Yeni</th>
-              </tr>
-            </thead>
+            ${tableHead([{label:"Tarih"},{label:"Firma"},{label:"Saat",align:"center"},{label:"Eski",align:"right"},{label:"Yeni",align:"right"}])}
             <tbody>${changesRows}</tbody>
-          </table>
-        ` : `<p style="margin:12px 0;padding:12px;background:#f0f7ff;color:#1565c0;border-left:4px solid #1a73e8;border-radius:4px;">Takip edilen firmalarda bu turda fiyat değişikliği algılanmadı.</p>`}
+          </table>` : ""}
 
-        <h3 style="margin:20px 0 10px 0;font-size:16px;color:#333333;font-weight:600;">Anlık Fiyatlar</h3>
+        ${additions.length ? `
+          <h3 style="margin:20px 0 10px 0;font-size:16px;color:#27ae60;font-weight:600;">➕ Yeni Eklenen Seferler</h3>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e0e0e0;border-radius:4px;">
+            ${tableHead([{label:"Tarih"},{label:"Firma"},{label:"Saat",align:"center"},{label:"Kalkış"},{label:"Fiyat",align:"right"}])}
+            <tbody>${additionsRows}</tbody>
+          </table>` : ""}
+
+        ${removals.length ? `
+          <h3 style="margin:20px 0 10px 0;font-size:16px;color:#777777;font-weight:600;">➖ İptal / Kaldırılan Seferler</h3>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e0e0e0;border-radius:4px;">
+            ${tableHead([{label:"Tarih"},{label:"Firma"},{label:"Saat",align:"center"},{label:"Kalkış"},{label:"Son Fiyat",align:"right"}])}
+            <tbody>${removalsRows}</tbody>
+          </table>` : ""}
+
+        <h3 style="margin:20px 0 10px 0;font-size:16px;color:#333333;font-weight:600;">📋 Anlık Fiyat Listesi</h3>
         <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e0e0e0;border-radius:4px;">
-          <thead>
-            <tr style="background:#f8f9fa;">
-              <th style="padding:10px;text-align:left;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Tarih</th>
-              <th style="padding:10px;text-align:left;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Firma</th>
-              <th style="padding:10px;text-align:center;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Saat</th>
-              <th style="padding:10px;text-align:right;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Fiyat</th>
-            </tr>
-          </thead>
+          ${tableHead([{label:"Tarih"},{label:"Firma"},{label:"Saat",align:"center"},{label:"Fiyat",align:"right"}])}
           <tbody>${currentPriceRows || '<tr><td colspan="4" style="padding:12px;text-align:center;color:#999999;">Takip edilen firmalar için sefer verisi bulunamadı.</td></tr>'}</tbody>
         </table>
         ${renderEmailSignature()}
@@ -4607,14 +4648,22 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
     </div>
   `;
 
+  // Konu satiri: ilk rapor mu, degisiklik mi, yoksa standart mi
+  let subjectTemplate;
+  if (isFirstReport) {
+    subjectTemplate = "oBilet Takip Baslatildi";
+  } else {
+    subjectTemplate = hasUpdates ? OBILET_SUBJECT_CHANGE : OBILET_SUBJECT_NO_CHANGE;
+  }
+
   const { info, smtpPort } = await sendMailWithSmtpFallback({
     from: smtpFrom,
     to: emailList,
-    subject: buildObiletSubject(hasChanges ? OBILET_SUBJECT_CHANGE : OBILET_SUBJECT_NO_CHANGE, target, dateLabel),
+    subject: buildObiletSubject(subjectTemplate, target, dateLabel),
     html,
   });
   console.log(`[E-posta] SMTP portu kullanildi: ${smtpPort}`);
-  console.log(`[E-posta] Periyodik rapor gonderildi: ${info.messageId}`);
+  console.log(`[E-posta] Rapor gonderildi (${isFirstReport ? "ilk" : "periyodik"}): ${info.messageId}`);
   return info;
 }
 
@@ -4682,138 +4731,88 @@ async function processObiletTarget(target) {
     const queryOriginPrimary = departureStopFilter || target.origin;
 
     const trackedJourneys = [];
-    const changes = [];
+    const changes = [];     // [{ journey_date, operator, departure_time, oldPrice, newPrice }]
+    const additions = [];   // [{ journey_date, operator, departure_time, price, departureStop }]
+    const removals = [];    // [{ journey_date, operator, departure_time, price, departureStop }]
     const now = nowStamp();
     const scrapedOperators = new Set();
+    // Bu hat icin ilk mail mi? (target'i ilk ekledikten sonra hic mail atilmamis)
+    const isFirstMailForTarget = !String(target.last_email_sent_at || "").trim();
 
     const targetRouteId = String(target.route_id || "").trim();
     for (const journeyDate of dateList) {
         let journeys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate, targetRouteId);
         if (departureStopFilter && !journeys.length) {
-          // Bazi gunlerde durak bazli URL bos donebilir; sehir bazli rotaya geri dus.
+          // Durak bazli sorgu bos donerse sehir bazli rotaya geri dus.
           journeys = await scrapeObilet(target.origin, target.destination, journeyDate, targetRouteId);
         }
         journeys.forEach((journey) => {
           const normalized = normalizeObiletOperatorName(journey.operator);
-          if (normalized) {
-            scrapedOperators.add(normalized);
-          }
+          if (normalized) scrapedOperators.add(normalized);
         });
 
+        // Filtreler: firma, kalkis duragi, gelecek tarih
         const dayTrackedRaw = journeys
-          .filter((journey) => {
-            if (acceptAllOperators) return true;
-            return targetOperators.some((op) =>
-              isObiletOperatorMatch(op, journey.operator)
-            );
-          })
-          .filter((journey) => {
-            if (!departureStopFilterKey) {
-              return true;
-            }
-            const journeyStopKey = normalizeSearchText(journey.departureStop || "");
-            return journeyStopKey.includes(departureStopFilterKey);
-          })
-          .filter((journey) => {
-            // Exclude journeys with departure time in the past
-            return isJourneyInFuture(journeyDate, journey.time);
-          })
-          .map((journey) => ({ ...journey, journey_date: journeyDate }));
+          .filter((j) => acceptAllOperators || targetOperators.some((op) => isObiletOperatorMatch(op, j.operator)))
+          .filter((j) => !departureStopFilterKey || normalizeSearchText(j.departureStop || "").includes(departureStopFilterKey))
+          .filter((j) => isJourneyInFuture(journeyDate, j.time))
+          .map((j) => ({ ...j, journey_date: journeyDate }));
 
-        // Ayni firma+saat+durak seferinde birden fazla kayit cikarsa tek kayda indir.
+        // Ayni firma+saat+durak seferinde duplicate kayit cikarsa tek kayda indir.
         const dayTrackedMap = new Map();
         for (const journey of dayTrackedRaw) {
           const key = buildJourneyIdentityKey(journey.operator, journey.time, journey.departureStop);
-          const existing = dayTrackedMap.get(key);
-          if (!existing) {
-            dayTrackedMap.set(key, journey);
-          }
+          if (!dayTrackedMap.has(key)) dayTrackedMap.set(key, journey);
         }
         const dayTracked = Array.from(dayTrackedMap.values());
-        let dayRecheckMap = null;
-
-        const getDayRecheckMap = async () => {
-          if (dayRecheckMap) {
-            return dayRecheckMap;
-          }
-
-          let recheckJourneys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate, targetRouteId);
-          if (departureStopFilter && !recheckJourneys.length) {
-            recheckJourneys = await scrapeObilet(target.origin, target.destination, journeyDate, targetRouteId);
-          }
-
-          const recheckTrackedRaw = recheckJourneys
-            .filter((item) => {
-              if (acceptAllOperators) return true;
-              return targetOperators.some((op) => isObiletOperatorMatch(op, item.operator));
-            })
-            .filter((item) => {
-              if (!departureStopFilterKey) {
-                return true;
-              }
-              const stopKey = normalizeSearchText(item.departureStop || "");
-              return stopKey.includes(departureStopFilterKey);
-            })
-            .map((item) => ({ ...item, journey_date: journeyDate }));
-
-          const map = new Map();
-          for (const item of recheckTrackedRaw) {
-            const key = buildJourneyIdentityKey(item.operator, item.time, item.departureStop);
-            if (!map.has(key)) {
-              map.set(key, item);
-            }
-          }
-
-          dayRecheckMap = map;
-          return dayRecheckMap;
-        };
 
         const currentKeys = new Set(
-          dayTracked.map((journey) =>
-            buildJourneyIdentityKey(
-              journey.operator,
-              journey.time,
-              journey.departureStop
-            )
-          )
+          dayTracked.map((j) => buildJourneyIdentityKey(j.operator, j.time, j.departureStop))
         );
 
+        // VAR OLAN DB SATIRLARI: geçmiş saatleri sil, bu turda görülmeyenleri "iptal" olarak işaretle ve sil.
         const existingRows = db
-          .prepare("SELECT id, operator, departure_time, journey_date, departure_stop, arrival_stop FROM obilet_prices WHERE target_id = ? AND journey_date = ?")
+          .prepare("SELECT id, operator, departure_time, journey_date, departure_stop, arrival_stop, price FROM obilet_prices WHERE target_id = ? AND journey_date = ?")
           .all(target.id, journeyDate);
 
         for (const row of existingRows) {
-          // Clean up past departure times from today
+          // Geçmiş kalkış: sessizce sil, iptal sayma.
           if (!isJourneyInFuture(row.journey_date, row.departure_time)) {
             db.prepare("DELETE FROM obilet_prices WHERE id = ?").run(row.id);
             continue;
           }
-
+          // Filtre dışı satırlar (firma/durak): hiç değerlendirme, mail'e dahil etme.
           const operatorMatched = acceptAllOperators || targetOperators.some((op) => isObiletOperatorMatch(op, row.operator));
-          if (!operatorMatched) {
-            continue;
-          }
-
+          if (!operatorMatched) continue;
           if (departureStopFilterKey) {
             const rowStopKey = normalizeSearchText(row.departure_stop || "");
-            if (!rowStopKey.includes(departureStopFilterKey)) {
-              continue;
-            }
+            if (!rowStopKey.includes(departureStopFilterKey)) continue;
           }
 
-          const rowKey = buildJourneyIdentityKey(
-            row.operator,
-            row.departure_time,
-            row.departure_stop
-          );
-
+          const rowKey = buildJourneyIdentityKey(row.operator, row.departure_time, row.departure_stop);
           if (!currentKeys.has(rowKey)) {
+            // Bu sefer bu turda yok = firma iptal etmiş veya gözden kaybolmuş.
+            // Ilk mail durumunda iptal raporlamayalim (henuz baseline yok).
+            if (!isFirstMailForTarget) {
+              removals.push({
+                journey_date: row.journey_date,
+                operator: row.operator,
+                departure_time: row.departure_time,
+                price: row.price,
+                departureStop: row.departure_stop || "",
+              });
+              addPricingNotification(
+                "oBilet Fiyat Takip",
+                `${toDotDate(row.journey_date)} ${row.operator} (${row.departure_time}, ${row.departure_stop || "-"}) seferi iptal/kaldırıldı (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
+              );
+            }
             db.prepare("DELETE FROM obilet_prices WHERE id = ?").run(row.id);
           }
         }
 
         trackedJourneys.push(...dayTracked);
 
+        // YENI/MEVCUT SEFERLER: fiyat değişimi, yeni ekleme tespiti
         for (const journey of dayTracked) {
           const normalizedOperator = normalizeObiletOperatorName(journey.operator) || journey.operator;
           const journeyKey = buildJourneyIdentityKey(normalizedOperator, journey.time, journey.departureStop);
@@ -4824,86 +4823,65 @@ async function processObiletTarget(target) {
             (row) => buildJourneyIdentityKey(row.operator, row.departure_time, row.departure_stop) === journeyKey
           );
 
-          if (previous) {
-            if (previous.price === journey.price) {
-              // Fiyat degismediyse pending durumunu sifirla ve metadata'yi guncel tut.
-              db.prepare(
-                "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = NULL, pending_seen_count = 0 WHERE id = ?"
-              ).run(normalizedOperator, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
-              continue;
-            }
+          if (!previous) {
+            // YENİ SEFER: ilk mail değilse "yeni eklendi" olarak raporla.
+            db.prepare(
+              "INSERT INTO obilet_prices (target_id, journey_date, operator, departure_time, departure_stop, arrival_stop, price, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            ).run(target.id, journey.journey_date, normalizedOperator, journey.time, journey.departureStop || "", journey.arrivalStop || "", journey.price, now);
 
-            // Recheck suspended: pending_seen_count (ardisik tur dogrulama) yeterli.
-            const confirmedObservedPrice = journey.price;
-
-            const previousPendingPrice = Number(previous.pending_price || 0);
-            const previousPendingCount = Number(previous.pending_seen_count || 0);
-            
-            // If price hasn't changed, clear pending and skip
-            if (confirmedObservedPrice === previous.price) {
-              db.prepare(
-                "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = NULL, pending_seen_count = 0 WHERE id = ?"
-              ).run(normalizedOperator, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
-              continue;
-            }
-
-            // Price changed: check if matches pending or is new change
-            let pendingCount;
-            if (previousPendingPrice === confirmedObservedPrice) {
-              // Same as pending, increment counter for multi-run validation
-              pendingCount = previousPendingCount + 1;
-            } else {
-              // New price (different from pending or no pending), start fresh counter
-              pendingCount = 1;
-            }
-
-            if (pendingCount >= OBILET_PRICE_CONFIRM_RUNS) {
-              changes.push({
+            if (!isFirstMailForTarget) {
+              additions.push({
                 journey_date: journey.journey_date,
                 operator: normalizedOperator,
                 departure_time: journey.time,
-                oldPrice: previous.price,
-                newPrice: confirmedObservedPrice
+                price: journey.price,
+                departureStop: journey.departureStop || "",
               });
-
-              db.prepare(
-                "UPDATE obilet_prices SET operator = ?, price = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = NULL, pending_seen_count = 0 WHERE id = ?"
-              ).run(normalizedOperator, confirmedObservedPrice, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
-
               addPricingNotification(
                 "oBilet Fiyat Takip",
-                `${toDotDate(journey.journey_date)} ${normalizedOperator} (${journey.time}, ${journey.departureStop || "-"}) fiyatı değişti: ${previous.price} TL -> ${confirmedObservedPrice} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
-              );
-            } else {
-              const debugLabel = `[oBilet ${target.origin}→${target.destination}] ${journeyKey}`;
-              if (DEBUG_OBILET_PRICE) {
-                console.log(`${debugLabel}: Pending turda ${previousPendingCount}→${pendingCount} (${previous.price}→${confirmedObservedPrice}TL)`);
-              }
-              db.prepare(
-                "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = ?, pending_seen_count = ? WHERE id = ?"
-              ).run(
-                normalizedOperator,
-                journey.departureStop || "",
-                journey.arrivalStop || "",
-                now,
-                pendingCount > 0 ? confirmedObservedPrice : null,
-                pendingCount,
-                previous.id
+                `${toDotDate(journey.journey_date)} ${normalizedOperator} (${journey.time}, ${journey.departureStop || "-"}) YENİ sefer eklendi - ${journey.price} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
               );
             }
-          } else {
+            continue;
+          }
+
+          // Mevcut sefer: fiyat aynı mı?
+          if (previous.price === journey.price) {
+            // Aynı fiyat — pending sıfırla, metadata tazele.
             db.prepare(
-              "INSERT INTO obilet_prices (target_id, journey_date, operator, departure_time, departure_stop, arrival_stop, price, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-            ).run(
-              target.id,
-              journey.journey_date,
-              normalizedOperator,
-              journey.time,
-              journey.departureStop || "",
-              journey.arrivalStop || "",
-              journey.price,
-              now
+              "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = NULL, pending_seen_count = 0 WHERE id = ?"
+            ).run(normalizedOperator, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
+            continue;
+          }
+
+          // Fiyat değişti: pending counter mantığı (ardışık tur doğrulama).
+          const newPrice = journey.price;
+          const previousPendingPrice = Number(previous.pending_price || 0);
+          const previousPendingCount = Number(previous.pending_seen_count || 0);
+          const pendingCount = previousPendingPrice === newPrice ? previousPendingCount + 1 : 1;
+
+          if (pendingCount >= OBILET_PRICE_CONFIRM_RUNS) {
+            changes.push({
+              journey_date: journey.journey_date,
+              operator: normalizedOperator,
+              departure_time: journey.time,
+              oldPrice: previous.price,
+              newPrice,
+            });
+            db.prepare(
+              "UPDATE obilet_prices SET operator = ?, price = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = NULL, pending_seen_count = 0 WHERE id = ?"
+            ).run(normalizedOperator, newPrice, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
+            addPricingNotification(
+              "oBilet Fiyat Takip",
+              `${toDotDate(journey.journey_date)} ${normalizedOperator} (${journey.time}, ${journey.departureStop || "-"}) fiyatı değişti: ${previous.price} TL -> ${newPrice} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
             );
+          } else {
+            if (DEBUG_OBILET_PRICE) {
+              console.log(`[oBilet ${target.origin}→${target.destination}] ${journeyKey}: Pending ${previousPendingCount}→${pendingCount} (${previous.price}→${newPrice}TL)`);
+            }
+            db.prepare(
+              "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = ?, pending_seen_count = ? WHERE id = ?"
+            ).run(normalizedOperator, journey.departureStop || "", journey.arrivalStop || "", now, newPrice, pendingCount, previous.id);
           }
         }
     }
@@ -4922,30 +4900,36 @@ async function processObiletTarget(target) {
       );
     }
     
-    const emails = parseCsvList(target.email_notifications);
-    if (changes.length > 0) {
-      console.log(`[Takip Görevi] ${changes.length} adet fiyat degisimi tespit edildi.`);
+    const totalUpdates = changes.length + additions.length + removals.length;
+    if (totalUpdates > 0) {
+      console.log(`[Takip Görevi] Değişiklik: ${changes.length} fiyat, ${additions.length} yeni sefer, ${removals.length} iptal`);
     } else {
-      console.log(`[Takip Görevi] Fiyat değişikliği yok: ${target.origin} - ${target.destination}`);
+      console.log(`[Takip Görevi] Değişiklik yok: ${target.origin} - ${target.destination}`);
     }
 
+    const emails = parseCsvList(target.email_notifications);
     let mailWarning = "";
     if (emails.length > 0) {
-      const hasChanges = changes.length > 0;
-      const shouldSendEmail = hasChanges || OBILET_EMAIL_MODE === "always";
+      // Mail tetikleme:
+      //  - Bir şey değişti (fiyat/ekleme/iptal), VEYA
+      //  - Bu hat icin daha hic mail atilmadi (ilk takip raporu — kullanici "hat ekledim, bu hatti takipte" diye gormeli), VEYA
+      //  - Mod "always" (her tur)
+      const isFirstReport = isFirstMailForTarget && trackedJourneys.length > 0;
+      const shouldSendEmail = totalUpdates > 0 || isFirstReport || OBILET_EMAIL_MODE === "always";
 
       if (!shouldSendEmail) {
-        console.log(`[Takip Görevi] Degisiklik yok, mail atlanıyor (mod: ${OBILET_EMAIL_MODE})`);
+        console.log(`[Takip Görevi] Değişiklik yok, mail atlanıyor (mod: ${OBILET_EMAIL_MODE})`);
       } else {
-        console.log(`[Takip Görevi] Mail gonderiliyor (degisiklik:${changes.length}, mod:${OBILET_EMAIL_MODE})`);
+        const reason = isFirstReport ? "ilk takip raporu" : `${totalUpdates} değişiklik`;
+        console.log(`[Takip Görevi] Mail gönderiliyor (${reason}, mod: ${OBILET_EMAIL_MODE})`);
         try {
-          await sendObiletCycleStatusEmail(emails, target, trackedJourneys, changes);
+          await sendObiletCycleStatusEmail(emails, target, trackedJourneys, changes, additions, removals, isFirstReport);
           db.prepare("UPDATE obilet_targets SET last_email_sent_at = ? WHERE id = ?").run(now, target.id);
-          console.log(`[Takip Görevi] Mail gonderildi: ${emails.join(", ")}`);
+          console.log(`[Takip Görevi] Mail gönderildi: ${emails.join(", ")}`);
         } catch (mailError) {
           mailWarning = " E-posta gonderilemedi: " + mailError.message;
           console.error(`[Takip Görevi] Mail hatasi (${target.origin} -> ${target.destination}): ${mailError.message}`);
-          addPricingNotification("oBilet Fiyat Takip", `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} rapor maili gonderilemedi: ${mailError.message}`);
+          addPricingNotification("oBilet Fiyat Takip", `${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} rapor maili gönderilemedi: ${mailError.message}`);
         }
       }
     } else {
@@ -4953,9 +4937,11 @@ async function processObiletTarget(target) {
     }
 
     if (trackedJourneys.length > 0) {
-      const changeText = changes.length > 0
-        ? `${changes.length} degisiklik bulundu`
-        : "Degisiklik yok";
+      const parts = [];
+      if (changes.length) parts.push(`${changes.length} fiyat değişti`);
+      if (additions.length) parts.push(`${additions.length} yeni sefer`);
+      if (removals.length) parts.push(`${removals.length} iptal`);
+      const changeText = parts.length ? parts.join(", ") : "Değişiklik yok";
       setObiletTargetSyncStatus(
         target.id,
         `Basarili. ${dateList.length} gun tarandi, ${trackedJourneys.length} sefer izlendi, ${changeText}.${mailWarning}`
