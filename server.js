@@ -3892,11 +3892,29 @@ async function scrapeObilet(origin, destination, dateIso, routeId = null) {
 
 // oBilet station ID seed tablosu — kullanici tarafindan dogrulanmis ID'ler.
 // Yeni ID eklemek icin: panelden "oBilet Sehir Kodlari" bolumunden ekleyin (kalici DB'ye gider),
-// veya direkt buraya gomun.
+// veya direkt buraya gomun. Key'ler slugTr ile uretilir: turkce karakterler donusur, bosluk silinir.
 const OBILET_STATION_IDS_SEED = {
-  "kadirli": 595,
-  "ankara": 356,
   "adana": 348,
+  "ankara": 356,
+  "balikesir": 360,    // Balıkesir
+  "bolu": 364,
+  "bursa": 366,
+  "ceyhan": 488,
+  "diyarbakir": 371,   // Diyarbakır
+  "eskisehir": 376,    // Eskişehir
+  "gaziantep": 377,
+  "hatay": 430,
+  "istanbul": 349,     // İstanbul
+  "izmir": 383,        // İzmir
+  "kadirli": 595,
+  "kilis": 425,
+  "konya": 389,
+  "kozan": 617,
+  "mersin": 382,
+  "osmaniye": 426,
+  "sanliurfa": 409,    // Şanlıurfa
+  "siirt": 402,
+  "van": 411,
 };
 
 function cityKey(cityName) {
