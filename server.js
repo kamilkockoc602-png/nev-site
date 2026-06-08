@@ -4554,9 +4554,9 @@ async function sendPriceChangeEmail(emailList, target, changes) {
   return info;
 }
 
-async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, changes = [], additions = [], removals = [], isFirstReport = false) {
+// Fiyat degisikligi raporu maili. Sadece changes.length > 0 oldugunda cagrilir.
+async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, changes = []) {
   const { smtpUser } = createSmtpTransportsWithFallback();
-
   const smtpFrom = process.env.SMTP_FROM || `"oBilet Fiyat Takip" <${smtpUser}>`;
 
   const formattedDate = String(target.date || "").split("-").reverse().join(".");
@@ -4565,132 +4565,82 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
     ? `${formattedDate} - ${formattedEndDate}`
     : formattedDate;
   const checkedAt = nowStamp();
-  const totalUpdates = changes.length + additions.length + removals.length;
-  const hasUpdates = totalUpdates > 0;
+  const hasChanges = changes.length > 0;
 
-  const headerColor = isFirstReport ? "#27ae60" : (hasUpdates ? "#c0392b" : "#1a73e8");
-  const headerTitle = isFirstReport ? "Yeni Hat Takibe Alındı" : "oBilet Fiyat Raporu";
-
-  const buildPriceRow = (item) => `
+  const currentPriceRows = trackedJourneys.map(item => `
     <tr style="background:#ffffff;">
       <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${toDotDate(item.journey_date) || "-"}</td>
       <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${item.operator}</td>
       <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:center;color:#333333;">${item.time}</td>
       <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#1a73e8;font-weight:600;font-size:14px;">${item.price} TL</td>
-    </tr>`;
+    </tr>`).join("");
 
-  const currentPriceRows = trackedJourneys.map(buildPriceRow).join("");
-
-  const changesRows = changes.map(c => `
+  const changesRows = changes.map(c => {
+    const isDrop = c.newPrice < c.oldPrice;
+    const newColor = isDrop ? "#27ae60" : "#d32f2f";
+    return `
     <tr style="background:#fff8f8;">
       <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${toDotDate(c.journey_date) || "-"}</td>
       <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${c.operator}</td>
       <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:center;color:#333333;">${c.departure_time}</td>
       <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#999999;text-decoration:line-through;">${c.oldPrice} TL</td>
-      <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#d32f2f;font-weight:700;font-size:14px;">${c.newPrice} TL</td>
-    </tr>`).join("");
-
-  const additionsRows = additions.map(a => `
-    <tr style="background:#f4fbf5;">
-      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${toDotDate(a.journey_date) || "-"}</td>
-      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${a.operator}</td>
-      <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:center;color:#333333;">${a.departure_time}</td>
-      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${a.departureStop || "-"}</td>
-      <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#27ae60;font-weight:700;font-size:14px;">${a.price} TL</td>
-    </tr>`).join("");
-
-  const removalsRows = removals.map(r => `
-    <tr style="background:#fff5f5;">
-      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${toDotDate(r.journey_date) || "-"}</td>
-      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${r.operator}</td>
-      <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:center;color:#333333;">${r.departure_time}</td>
-      <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${r.departureStop || "-"}</td>
-      <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:#999999;text-decoration:line-through;font-weight:600;">${r.price} TL</td>
-    </tr>`).join("");
-
-  const tableHead = (cols) => `
-    <thead><tr style="background:#f8f9fa;">${cols.map(c => `
-      <th style="padding:10px;text-align:${c.align || "left"};color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">${c.label}</th>`).join("")}
-    </tr></thead>`;
-
-  const summaryLines = [];
-  if (isFirstReport) {
-    summaryLines.push(`<p style="margin:0 0 12px 0;padding:12px;background:#e8f5e9;color:#1b5e20;border-left:4px solid #27ae60;border-radius:4px;">
-      Bu hat takibe alındı. Aşağıdaki <strong>${trackedJourneys.length}</strong> sefer izlenmeye başladı. Bir sonraki turdan itibaren değişiklikler bu adrese mail olarak iletilecek.
-    </p>`);
-  } else {
-    const parts = [];
-    if (changes.length) parts.push(`<strong style="color:#c0392b;">${changes.length}</strong> fiyat değişikliği`);
-    if (additions.length) parts.push(`<strong style="color:#27ae60;">${additions.length}</strong> yeni sefer`);
-    if (removals.length) parts.push(`<strong style="color:#999999;">${removals.length}</strong> iptal/kaldırılan sefer`);
-    if (parts.length) {
-      summaryLines.push(`<p style="margin:0 0 12px 0;color:#333333;"><strong>Durum:</strong> ${parts.join(", ")}.</p>`);
-    } else {
-      summaryLines.push(`<p style="margin:0 0 12px 0;color:#333333;"><strong>Durum:</strong> <span style="color:#27ae60;font-weight:600;">Değişiklik yok</span></p>`);
-    }
-  }
+      <td style="padding:10px;border-bottom:1px solid #e8e8e8;text-align:right;color:${newColor};font-weight:700;font-size:14px;">${c.newPrice} TL</td>
+    </tr>`;
+  }).join("");
 
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;background:#ffffff;">
-      <div style="padding:20px;background:${headerColor};color:#ffffff;text-align:center;">
-        <h2 style="margin:0;font-size:20px;font-weight:600;">${headerTitle}</h2>
+      <div style="padding:20px;background:${hasChanges ? "#c0392b" : "#1a73e8"};color:#ffffff;text-align:center;">
+        <h2 style="margin:0;font-size:20px;font-weight:600;">oBilet Fiyat Raporu</h2>
       </div>
       <div style="padding:20px;background:#ffffff;">
         <p style="margin:0 0 12px 0;color:#333333;">Merhaba,</p>
-
         <p style="margin:0 0 10px 0;color:#333333;"><strong>Hat:</strong> ${target.origin.toUpperCase()} → ${target.destination.toUpperCase()}</p>
         <p style="margin:0 0 10px 0;color:#333333;"><strong>Tarih Araligi:</strong> ${dateLabel}</p>
         <p style="margin:0 0 16px 0;color:#333333;"><strong>Kontrol Zamani:</strong> ${checkedAt}</p>
 
-        ${summaryLines.join("")}
+        <p style="margin:0 0 12px 0;color:#333333;"><strong>Durum:</strong>
+          <span style="color:${hasChanges ? "#c0392b" : "#27ae60"};font-weight:600;">
+            ${hasChanges ? `${changes.length} fiyat değişikliği` : "Değişiklik yok"}
+          </span>
+        </p>
 
-        ${changes.length ? `
-          <h3 style="margin:20px 0 10px 0;font-size:16px;color:#c0392b;font-weight:600;">📊 Fiyat Değişiklikleri</h3>
+        ${hasChanges ? `
+          <h3 style="margin:20px 0 10px 0;font-size:16px;color:#c0392b;font-weight:600;">Fiyat Değişiklikleri</h3>
           <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e0e0e0;border-radius:4px;">
-            ${tableHead([{label:"Tarih"},{label:"Firma"},{label:"Saat",align:"center"},{label:"Eski",align:"right"},{label:"Yeni",align:"right"}])}
+            <thead><tr style="background:#f8f9fa;">
+              <th style="padding:10px;text-align:left;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Tarih</th>
+              <th style="padding:10px;text-align:left;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Firma</th>
+              <th style="padding:10px;text-align:center;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Saat</th>
+              <th style="padding:10px;text-align:right;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Eski</th>
+              <th style="padding:10px;text-align:right;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Yeni</th>
+            </tr></thead>
             <tbody>${changesRows}</tbody>
           </table>` : ""}
 
-        ${additions.length ? `
-          <h3 style="margin:20px 0 10px 0;font-size:16px;color:#27ae60;font-weight:600;">➕ Yeni Eklenen Seferler</h3>
-          <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e0e0e0;border-radius:4px;">
-            ${tableHead([{label:"Tarih"},{label:"Firma"},{label:"Saat",align:"center"},{label:"Kalkış"},{label:"Fiyat",align:"right"}])}
-            <tbody>${additionsRows}</tbody>
-          </table>` : ""}
-
-        ${removals.length ? `
-          <h3 style="margin:20px 0 10px 0;font-size:16px;color:#777777;font-weight:600;">➖ İptal / Kaldırılan Seferler</h3>
-          <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e0e0e0;border-radius:4px;">
-            ${tableHead([{label:"Tarih"},{label:"Firma"},{label:"Saat",align:"center"},{label:"Kalkış"},{label:"Son Fiyat",align:"right"}])}
-            <tbody>${removalsRows}</tbody>
-          </table>` : ""}
-
-        <h3 style="margin:20px 0 10px 0;font-size:16px;color:#333333;font-weight:600;">📋 Anlık Fiyat Listesi</h3>
+        <h3 style="margin:20px 0 10px 0;font-size:16px;color:#333333;font-weight:600;">Anlık Fiyat Listesi</h3>
         <table style="width:100%;border-collapse:collapse;font-size:13px;border:1px solid #e0e0e0;border-radius:4px;">
-          ${tableHead([{label:"Tarih"},{label:"Firma"},{label:"Saat",align:"center"},{label:"Fiyat",align:"right"}])}
-          <tbody>${currentPriceRows || '<tr><td colspan="4" style="padding:12px;text-align:center;color:#999999;">Takip edilen firmalar için sefer verisi bulunamadı.</td></tr>'}</tbody>
+          <thead><tr style="background:#f8f9fa;">
+            <th style="padding:10px;text-align:left;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Tarih</th>
+            <th style="padding:10px;text-align:left;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Firma</th>
+            <th style="padding:10px;text-align:center;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Saat</th>
+            <th style="padding:10px;text-align:right;color:#555555;font-weight:600;border-bottom:2px solid #e0e0e0;">Fiyat</th>
+          </tr></thead>
+          <tbody>${currentPriceRows || '<tr><td colspan="4" style="padding:12px;text-align:center;color:#999999;">Sefer verisi bulunamadı.</td></tr>'}</tbody>
         </table>
         ${renderEmailSignature()}
       </div>
     </div>
   `;
 
-  // Konu satiri: ilk rapor mu, degisiklik mi, yoksa standart mi
-  let subjectTemplate;
-  if (isFirstReport) {
-    subjectTemplate = "oBilet Takip Baslatildi";
-  } else {
-    subjectTemplate = hasUpdates ? OBILET_SUBJECT_CHANGE : OBILET_SUBJECT_NO_CHANGE;
-  }
-
   const { info, smtpPort } = await sendMailWithSmtpFallback({
     from: smtpFrom,
     to: emailList,
-    subject: buildObiletSubject(subjectTemplate, target, dateLabel),
+    subject: buildObiletSubject(hasChanges ? OBILET_SUBJECT_CHANGE : OBILET_SUBJECT_NO_CHANGE, target, dateLabel),
     html,
   });
   console.log(`[E-posta] SMTP portu kullanildi: ${smtpPort}`);
-  console.log(`[E-posta] Rapor gonderildi (${isFirstReport ? "ilk" : "periyodik"}): ${info.messageId}`);
+  console.log(`[E-posta] Rapor gonderildi: ${info.messageId}`);
   return info;
 }
 
@@ -4758,13 +4708,9 @@ async function processObiletTarget(target) {
     const queryOriginPrimary = departureStopFilter || target.origin;
 
     const trackedJourneys = [];
-    const changes = [];     // [{ journey_date, operator, departure_time, oldPrice, newPrice }]
-    const additions = [];   // [{ journey_date, operator, departure_time, price, departureStop }]
-    const removals = [];    // [{ journey_date, operator, departure_time, price, departureStop }]
+    const changes = [];     // [{ journey_date, operator, departure_time, oldPrice, newPrice }] — mail tetikleyici tek liste
     const now = nowStamp();
     const scrapedOperators = new Set();
-    // Bu hat icin ilk mail mi? (target'i ilk ekledikten sonra hic mail atilmamis)
-    const isFirstMailForTarget = !String(target.last_email_sent_at || "").trim();
 
     const targetRouteId = String(target.route_id || "").trim();
     for (const journeyDate of dateList) {
@@ -4797,23 +4743,19 @@ async function processObiletTarget(target) {
           dayTracked.map((j) => buildJourneyIdentityKey(j.operator, j.time, j.departureStop))
         );
 
-        // VAR OLAN DB SATIRLARI: geçmiş saatleri sil, bu turda görülmeyenleri "iptal" olarak işaretle ve sil.
+        // VAR OLAN DB SATIRLARI: geçmiş saatleri ve bu turda gorulmeyen kayitlari sil.
+        // Iptal/eklenen seferleri raporlamiyoruz — sadece fiyat degisikligi mail tetikler.
         const existingRows = db
           .prepare("SELECT id, operator, departure_time, journey_date, departure_stop, arrival_stop, price FROM obilet_prices WHERE target_id = ? AND journey_date = ?")
           .all(target.id, journeyDate);
 
-        // Bu gun icin DB'de hic kayit yoksa: o gunun ILK basarili taramasidir, "yeni sefer" olarak
-        // raporlamayalim — sadece baseline kuruyoruz. Sonraki turdan itibaren gercek yeni/iptal'leri yakalariz.
-        const isFirstScrapeForDay = existingRows.length === 0;
-        const isBaselineDay = isFirstMailForTarget || isFirstScrapeForDay;
-
         for (const row of existingRows) {
-          // Geçmiş kalkış: sessizce sil, iptal sayma.
+          // Geçmiş kalkış: sessizce sil.
           if (!isJourneyInFuture(row.journey_date, row.departure_time)) {
             db.prepare("DELETE FROM obilet_prices WHERE id = ?").run(row.id);
             continue;
           }
-          // Filtre dışı satırlar (firma/durak): hiç değerlendirme, mail'e dahil etme.
+          // Filtre dışı satırlar (firma/durak): hiç değerlendirme.
           const operatorMatched = acceptAllOperators || targetOperators.some((op) => isObiletOperatorMatch(op, row.operator));
           if (!operatorMatched) continue;
           if (departureStopFilterKey) {
@@ -4823,21 +4765,7 @@ async function processObiletTarget(target) {
 
           const rowKey = buildJourneyIdentityKey(row.operator, row.departure_time, row.departure_stop);
           if (!currentKeys.has(rowKey)) {
-            // Bu sefer bu turda yok = firma iptal etmiş veya gözden kaybolmuş.
-            // Baseline durumunda (ilk mail veya gunun ilk taramasi) iptal raporlamayalim.
-            if (!isBaselineDay) {
-              removals.push({
-                journey_date: row.journey_date,
-                operator: row.operator,
-                departure_time: row.departure_time,
-                price: row.price,
-                departureStop: row.departure_stop || "",
-              });
-              addPricingNotification(
-                "oBilet Fiyat Takip",
-                `${toDotDate(row.journey_date)} ${row.operator} (${row.departure_time}, ${row.departure_stop || "-"}) seferi iptal/kaldırıldı (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
-              );
-            }
+            // Bu sefer bu turda yok — DB'den sessizce kaldir (iptal/yeni sefer maili istemiyoruz).
             db.prepare("DELETE FROM obilet_prices WHERE id = ?").run(row.id);
           }
         }
@@ -4856,25 +4784,10 @@ async function processObiletTarget(target) {
           );
 
           if (!previous) {
-            // YENİ SEFER: sadece baseline kurulu degilse "yeni eklendi" olarak raporla.
-            // Baseline = (target icin ilk mail) VEYA (bu gun icin DB'de hic kayit yoktu = ilk tarama).
+            // YENI SEFER: sessizce DB'ye ekle, mail/bildirim yok (sade mod).
             db.prepare(
               "INSERT INTO obilet_prices (target_id, journey_date, operator, departure_time, departure_stop, arrival_stop, price, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
             ).run(target.id, journey.journey_date, normalizedOperator, journey.time, journey.departureStop || "", journey.arrivalStop || "", journey.price, now);
-
-            if (!isBaselineDay) {
-              additions.push({
-                journey_date: journey.journey_date,
-                operator: normalizedOperator,
-                departure_time: journey.time,
-                price: journey.price,
-                departureStop: journey.departureStop || "",
-              });
-              addPricingNotification(
-                "oBilet Fiyat Takip",
-                `${toDotDate(journey.journey_date)} ${normalizedOperator} (${journey.time}, ${journey.departureStop || "-"}) YENİ sefer eklendi - ${journey.price} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
-              );
-            }
             continue;
           }
 
@@ -4933,30 +4846,25 @@ async function processObiletTarget(target) {
       );
     }
     
-    const totalUpdates = changes.length + additions.length + removals.length;
-    if (totalUpdates > 0) {
-      console.log(`[Takip Görevi] Değişiklik: ${changes.length} fiyat, ${additions.length} yeni sefer, ${removals.length} iptal`);
+    if (changes.length > 0) {
+      console.log(`[Takip Görevi] ${changes.length} fiyat değişikliği tespit edildi.`);
     } else {
-      console.log(`[Takip Görevi] Değişiklik yok: ${target.origin} - ${target.destination}`);
+      console.log(`[Takip Görevi] Fiyat değişikliği yok: ${target.origin} - ${target.destination}`);
     }
 
     const emails = parseCsvList(target.email_notifications);
     let mailWarning = "";
     if (emails.length > 0) {
-      // Mail tetikleme:
-      //  - Bir şey değişti (fiyat/ekleme/iptal), VEYA
-      //  - Bu hat icin daha hic mail atilmadi (ilk takip raporu — kullanici "hat ekledim, bu hatti takipte" diye gormeli), VEYA
-      //  - Mod "always" (her tur)
-      const isFirstReport = isFirstMailForTarget && trackedJourneys.length > 0;
-      const shouldSendEmail = totalUpdates > 0 || isFirstReport || OBILET_EMAIL_MODE === "always";
+      // Mail SADECE fiyat degisikligi olunca atilir (kullanici tercihi: sade mod).
+      // "always" modu env ile yine acilabilir ama varsayilan kapali.
+      const shouldSendEmail = changes.length > 0 || OBILET_EMAIL_MODE === "always";
 
       if (!shouldSendEmail) {
-        console.log(`[Takip Görevi] Değişiklik yok, mail atlanıyor (mod: ${OBILET_EMAIL_MODE})`);
+        console.log(`[Takip Görevi] Fiyat değişikliği yok, mail atlanıyor.`);
       } else {
-        const reason = isFirstReport ? "ilk takip raporu" : `${totalUpdates} değişiklik`;
-        console.log(`[Takip Görevi] Mail gönderiliyor (${reason}, mod: ${OBILET_EMAIL_MODE})`);
+        console.log(`[Takip Görevi] Mail gönderiliyor (${changes.length} fiyat değişikliği)`);
         try {
-          await sendObiletCycleStatusEmail(emails, target, trackedJourneys, changes, additions, removals, isFirstReport);
+          await sendObiletCycleStatusEmail(emails, target, trackedJourneys, changes);
           db.prepare("UPDATE obilet_targets SET last_email_sent_at = ? WHERE id = ?").run(now, target.id);
           console.log(`[Takip Görevi] Mail gönderildi: ${emails.join(", ")}`);
         } catch (mailError) {
@@ -4970,11 +4878,7 @@ async function processObiletTarget(target) {
     }
 
     if (trackedJourneys.length > 0) {
-      const parts = [];
-      if (changes.length) parts.push(`${changes.length} fiyat değişti`);
-      if (additions.length) parts.push(`${additions.length} yeni sefer`);
-      if (removals.length) parts.push(`${removals.length} iptal`);
-      const changeText = parts.length ? parts.join(", ") : "Değişiklik yok";
+      const changeText = changes.length > 0 ? `${changes.length} fiyat degisti` : "Degisiklik yok";
       setObiletTargetSyncStatus(
         target.id,
         `Basarili. ${dateList.length} gun tarandi, ${trackedJourneys.length} sefer izlendi, ${changeText}.${mailWarning}`
