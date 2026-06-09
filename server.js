@@ -3380,18 +3380,15 @@ async function getBrowserInstance() {
       sharedBrowser = await puppeteer.launch({
         headless: "new",
         executablePath,
-        // NOT: Railway gibi sinirli RAM ortamlarda --single-process + --no-zygote ZORUNLU.
-        // Aksi halde Chromium birden fazla renderer process acar, RAM patlar, browser coker
-        // ("Protocol error (Target.createTarget): Session with given id not found").
-        // Eskiden "detached frame" hatasi vardi cunku concurrent page acmalari vardi —
-        // simdi obiletTaskRunning lock'u sequential calismayi garantiliyor, race kalmadi.
+        // NOT: --single-process + --no-zygote sistem Chrome'unda detached-frame hatasi yaratiyor.
+        // O flag'ler Puppeteer'in bundled Chromium'u icin gerekliydi (RAM koruma). System Chrome
+        // multi-process'i guvenli sekilde yonetir, RAM'i optimize eder. obiletTaskRunning lock'u
+        // sequential calismayi zaten garantiledigi icin concurrent tab tear-down riski yok.
         args: [
           "--no-sandbox",
           "--disable-setuid-sandbox",
           "--disable-dev-shm-usage",
           "--disable-blink-features=AutomationControlled",
-          "--single-process",
-          "--no-zygote",
           "--disable-gpu",
           "--disable-software-rasterizer",
           "--disable-extensions",
