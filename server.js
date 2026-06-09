@@ -3345,7 +3345,11 @@ app.delete("/api/error-reports/:id", requireAuth, (req, res) => {
 // oBiLET FIYAT TAKIP VE E-POSTA ENTEGRASYONU
 // ==========================================
 
-const puppeteer = require("puppeteer");
+// Puppeteer + stealth plugin: bilinen headless Chrome fingerprint'lerini gizler.
+// Cloudflare/anti-bot taramalarini yenmek icin en yaygin cozum.
+const puppeteer = require("puppeteer-extra");
+const StealthPlugin = require("puppeteer-extra-plugin-stealth");
+puppeteer.use(StealthPlugin());
 const nodemailer = require("nodemailer");
 
 // Browser pool (kaynak optimizasyonu için tek instance)
@@ -4020,20 +4024,15 @@ function learnObiletStationId(cityName, stationId) {
 // Landing sayfasinda "Otobus Ara"ya basinca acilan /seferler/X-Y/DATE URL'inden ogrenilir.
 const obiletRouteIdCache = new Map();
 
-// Puppeteer ile bir sayfa hazirla — Cloudflare bypass + reklam blok.
+// Puppeteer ile bir sayfa hazirla — Stealth plugin webdriver/navigator/chrome maskelenmesini
+// otomatik yapar. Burada ek olarak sadece reklam istegi engelleme ve Turkce locale.
 // Browser cokmusse (Target.createTarget hatasi) bir kez yeniden baslat ve tekrar dene.
 async function setupObiletPage(browser) {
   const buildPage = async (b) => {
     const page = await b.newPage();
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-      Object.defineProperty(navigator, "languages", { get: () => ["tr-TR", "tr"] });
-      window.chrome = { runtime: {} };
-    });
     await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36");
     await page.setViewport({ width: 1366, height: 768 });
     await page.setExtraHTTPHeaders({ "Accept-Language": "tr-TR,tr;q=0.9" });
-    await page.setCacheEnabled(false);
     await page.setRequestInterception(true);
     page.on("request", (req) => {
       const reqUrl = req.url();
