@@ -499,6 +499,28 @@ try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_sync_status TEXT NOT N
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_sync_at TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_email_sent_at TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN route_id TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+try { db.exec("ALTER TABLE obilet_targets ADD COLUMN created_by TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+
+// Fiyat degisikligi gecmisi tablosu: her bir onaylanmis fiyat degisikligini kayit altina alir.
+// Raporlama ekraninda kronolojik liste olarak gosterilir.
+db.exec(`
+CREATE TABLE IF NOT EXISTS obilet_price_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  target_id INTEGER NOT NULL,
+  origin TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  journey_date TEXT NOT NULL,
+  operator TEXT NOT NULL,
+  departure_time TEXT NOT NULL,
+  departure_stop TEXT NOT NULL DEFAULT '',
+  old_price INTEGER NOT NULL,
+  new_price INTEGER NOT NULL,
+  changed_at TEXT NOT NULL,
+  detected_by TEXT NOT NULL DEFAULT 'auto'
+);
+CREATE INDEX IF NOT EXISTS idx_obilet_price_history_changed_at ON obilet_price_history(changed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_obilet_price_history_target ON obilet_price_history(target_id);
+`);
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN journey_date TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN departure_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN arrival_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
@@ -4867,6 +4889,28 @@ async function processObiletTarget(target) {
             db.prepare(
               "UPDATE obilet_prices SET operator = ?, price = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = NULL, pending_seen_count = 0 WHERE id = ?"
             ).run(normalizedOperator, newPrice, journey.departureStop || "", journey.arrivalStop || "", now, previous.id);
+
+            // Kalıcı geçmiş kaydı — raporlama sayfası bu tablodan okur.
+            try {
+              db.prepare(
+                "INSERT INTO obilet_price_history (target_id, origin, destination, journey_date, operator, departure_time, departure_stop, old_price, new_price, changed_at, detected_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+              ).run(
+                target.id,
+                target.origin,
+                target.destination,
+                journey.journey_date,
+                normalizedOperator,
+                journey.time,
+                journey.departureStop || "",
+                previous.price,
+                newPrice,
+                now,
+                "auto"
+              );
+            } catch (histErr) {
+              console.warn(`[oBilet] Fiyat gecmisi kaydı basarisiz: ${histErr.message}`);
+            }
+
             addPricingNotification(
               "oBilet Fiyat Takip",
               `${toDotDate(journey.journey_date)} ${normalizedOperator} (${journey.time}, ${journey.departureStop || "-"}) fiyatı değişti: ${previous.price} TL -> ${newPrice} TL (${target.origin.toUpperCase()} - ${target.destination.toUpperCase()})`
@@ -5092,17 +5136,20 @@ app.post("/api/obilet/targets", requireAuth, (req, res) => {
     emailNotifications = String(process.env.DEFAULT_NOTIF_EMAIL || "").trim();
   }
 
+  // Hatti ekleyen kullanici (audit icin)
+  const createdBy = String(req.auth?.user?.username || "").trim();
+
   try {
     const result = db.prepare(
-      "INSERT INTO obilet_targets (origin, destination, date, end_date, departure_stop_filter, operators, email_notifications, telegram_chat_ids, route_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    ).run(origin, destination, date, normalizedEndDate, departureStopFilter, operators, emailNotifications, "", routeId, nowStamp());
+      "INSERT INTO obilet_targets (origin, destination, date, end_date, departure_stop_filter, operators, email_notifications, telegram_chat_ids, route_id, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(origin, destination, date, normalizedEndDate, departureStopFilter, operators, emailNotifications, "", routeId, createdBy, nowStamp());
 
     // Ekleme işleminden sonra fiyatları hemen çekmek için arka planda tetikle
     setTimeout(() => {
       refreshObiletPricesTask().catch(() => null);
     }, 1000);
 
-    res.json({ ok: true, id: result.lastInsertRowid, routeId });
+    res.json({ ok: true, id: result.lastInsertRowid, routeId, createdBy });
   } catch (error) {
     res.status(500).json({ message: error.message || "Kayit basarisiz." });
   }
@@ -5311,6 +5358,71 @@ app.delete("/api/obilet/station-ids/:cityKey", requireAuth, (req, res) => {
 
 // API: Bir hattin tum kayitli fiyatlarini sil (kayitli hat duruyor, sadece fiyatlar temizlenir)
 // Eski yanlis fiyatlar DB'de kalmissa, bunu cagirip bir sonraki taramada temiz baslarsiniz.
+// API: Fiyat degisiklik gecmisi (Raporlama sayfasi icin).
+// Filtreler: hat (targetId), tarih araligi (from/to), arama (firma/sehir), limit.
+app.get("/api/obilet/price-history", requireAuth, (req, res) => {
+  try {
+    const targetId = parseInt(req.query.targetId || "0", 10);
+    const fromDate = String(req.query.from || "").trim();
+    const toDate = String(req.query.to || "").trim();
+    const search = String(req.query.search || "").trim().toLowerCase();
+    const limit = Math.min(parseInt(req.query.limit || "500", 10) || 500, 5000);
+
+    const conditions = [];
+    const params = [];
+
+    if (targetId) {
+      conditions.push("target_id = ?");
+      params.push(targetId);
+    }
+    if (fromDate && /^\d{4}-\d{2}-\d{2}$/.test(fromDate)) {
+      conditions.push("substr(changed_at, 7, 4) || '-' || substr(changed_at, 4, 2) || '-' || substr(changed_at, 1, 2) >= ?");
+      params.push(fromDate);
+    }
+    if (toDate && /^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+      conditions.push("substr(changed_at, 7, 4) || '-' || substr(changed_at, 4, 2) || '-' || substr(changed_at, 1, 2) <= ?");
+      params.push(toDate);
+    }
+
+    const whereSql = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const sql = `
+      SELECT id, target_id, origin, destination, journey_date, operator,
+             departure_time, departure_stop, old_price, new_price, changed_at, detected_by
+        FROM obilet_price_history
+        ${whereSql}
+       ORDER BY id DESC
+       LIMIT ?
+    `;
+    let rows = db.prepare(sql).all(...params, limit);
+
+    // Search'u SQL'de yapmadık (LIKE turkce karakterlerle zayif). JS tarafinda filtrele.
+    if (search) {
+      rows = rows.filter(r =>
+        String(r.operator || "").toLowerCase().includes(search) ||
+        String(r.origin || "").toLowerCase().includes(search) ||
+        String(r.destination || "").toLowerCase().includes(search) ||
+        String(r.departure_stop || "").toLowerCase().includes(search)
+      );
+    }
+
+    res.json({ ok: true, count: rows.length, history: rows });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Geçmiş alınamadı." });
+  }
+});
+
+// API: Tek satir fiyat gecmisi silme (admin yardimi icin)
+app.delete("/api/obilet/price-history/:id", requireAuth, (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ message: "Gecersiz ID." });
+    db.prepare("DELETE FROM obilet_price_history WHERE id = ?").run(id);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Silme basarisiz." });
+  }
+});
+
 app.post("/api/obilet/targets/:id/clear-prices", requireAuth, (req, res) => {
   try {
     const targetId = parseInt(req.params.id, 10);

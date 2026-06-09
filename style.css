@@ -2187,3 +2187,77 @@ body[data-theme="dark"] .obilet-operator-option span {
   }
 }
 
+
+/* ============================================
+   FİYAT DEĞİŞİKLİK RAPORU (Raporlama menüsü)
+   ============================================ */
+.ph-toolbar {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr) auto;
+  gap: 0.75rem;
+  align-items: end;
+  margin-top: 1rem;
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.ph-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+}
+.ph-toolbar label span {
+  font-weight: 500;
+  opacity: 0.8;
+  font-size: 0.78rem;
+}
+.ph-toolbar input,
+.ph-toolbar select {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.2);
+  color: inherit;
+  font-size: 14px;
+}
+.ph-toolbar-actions {
+  display: flex;
+  gap: 0.4rem;
+  align-items: flex-end;
+}
+.ph-table-wrap {
+  margin-top: 1rem;
+  overflow-x: auto;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+.ph-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.ph-table th {
+  text-align: left;
+  padding: 12px 10px;
+  background: rgba(0, 0, 0, 0.25);
+  font-weight: 600;
+  opacity: 0.85;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.08);
+  position: sticky;
+  top: 0;
+}
+.ph-table td {
+  padding: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.ph-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+@media (max-width: 960px) {
+  .ph-toolbar {
+    grid-template-columns: 1fr;
+  }
+}

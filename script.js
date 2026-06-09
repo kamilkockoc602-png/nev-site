@@ -102,6 +102,20 @@ const dom = {
   ocrApplyReviewBtn: document.getElementById("ocrApplyReviewBtn"),
   errorPriorityInput: document.getElementById("errorPriorityInput"),
   errorSearchInput: document.getElementById("errorSearchInput"),
+  // Fiyat Değişiklik Raporu (Raporlama menusu yeni)
+  phFromDate: document.getElementById("phFromDate"),
+  phToDate: document.getElementById("phToDate"),
+  phTargetSelect: document.getElementById("phTargetSelect"),
+  phSearchInput: document.getElementById("phSearchInput"),
+  phApplyBtn: document.getElementById("phApplyBtn"),
+  phResetBtn: document.getElementById("phResetBtn"),
+  phExportBtn: document.getElementById("phExportBtn"),
+  phStatTotal: document.getElementById("phStatTotal"),
+  phStatIncrease: document.getElementById("phStatIncrease"),
+  phStatDecrease: document.getElementById("phStatDecrease"),
+  phStatRoutes: document.getElementById("phStatRoutes"),
+  phStatusMsg: document.getElementById("phStatusMsg"),
+  phTableBody: document.getElementById("phTableBody"),
 };
 
 const state = {
@@ -2629,21 +2643,12 @@ async function activatePanel(menuKey) {
   }
 
   if (menuKey === "reporting") {
-    ensureReportingAutoRefresh();
-    (async () => {
-      await refreshReportingData();
-      if (!state.reportingRows.length) {
-        await syncReportingData();
-      }
-    })().catch((error) => {
-      if (dom.reportingSummary) {
-        dom.reportingSummary.textContent = error.message || "Rapor verisi yuklenemedi.";
+    // Yeni Raporlama sayfasi: oBilet fiyat degisiklik gecmisi.
+    initPriceHistoryPanel().catch((error) => {
+      if (dom.phStatusMsg) {
+        dom.phStatusMsg.textContent = error.message || "Veri yuklenemedi.";
       }
     });
-  }
-
-  if (menuKey !== "reporting") {
-    stopReportingAutoRefresh();
   }
 
   if (menuKey === "oneops") {
@@ -3562,6 +3567,192 @@ function generateCSV(prices, target) {
   return [headers.join(";"), ...rows].join("\n");
 }
 
+// ==========================================
+// FIYAT DEGISIKLIK RAPORU (Raporlama menusu)
+// ==========================================
+
+const priceHistoryState = {
+  rows: [],
+  lastQuery: null,
+};
+
+async function loadPriceHistory() {
+  if (!dom.phTableBody) return;
+  if (dom.phStatusMsg) dom.phStatusMsg.textContent = "Veri yükleniyor...";
+
+  const params = new URLSearchParams();
+  const targetId = dom.phTargetSelect?.value || "";
+  const from = dom.phFromDate?.value || "";
+  const to = dom.phToDate?.value || "";
+  const search = dom.phSearchInput?.value.trim() || "";
+  if (targetId) params.set("targetId", targetId);
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  if (search) params.set("search", search);
+  params.set("limit", "1000");
+
+  try {
+    const data = await apiFetch(`/api/obilet/price-history?${params.toString()}`);
+    priceHistoryState.rows = Array.isArray(data?.history) ? data.history : [];
+    renderPriceHistory();
+    if (dom.phStatusMsg) {
+      dom.phStatusMsg.textContent = priceHistoryState.rows.length
+        ? `${priceHistoryState.rows.length} kayıt bulundu.`
+        : "Filtreye uygun kayıt yok.";
+    }
+  } catch (err) {
+    if (dom.phStatusMsg) dom.phStatusMsg.textContent = `Hata: ${err.message}`;
+  }
+}
+
+function renderPriceHistory() {
+  if (!dom.phTableBody) return;
+  const rows = priceHistoryState.rows;
+
+  // İstatistikler
+  let increase = 0, decrease = 0;
+  const routeSet = new Set();
+  for (const r of rows) {
+    if (r.new_price > r.old_price) increase++;
+    else if (r.new_price < r.old_price) decrease++;
+    routeSet.add(`${r.origin}->${r.destination}`);
+  }
+  if (dom.phStatTotal) dom.phStatTotal.textContent = rows.length;
+  if (dom.phStatIncrease) dom.phStatIncrease.textContent = increase;
+  if (dom.phStatDecrease) dom.phStatDecrease.textContent = decrease;
+  if (dom.phStatRoutes) dom.phStatRoutes.textContent = routeSet.size;
+
+  if (!rows.length) {
+    dom.phTableBody.innerHTML = `<tr><td colspan="10" style="text-align:center; padding:2rem; opacity:0.6;">Filtreye uygun kayıt yok.</td></tr>`;
+    return;
+  }
+
+  const escape = (s) => String(s || "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[c]);
+  const toDot = (iso) => {
+    const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m ? `${m[3]}.${m[2]}.${m[1]}` : iso || "-";
+  };
+
+  dom.phTableBody.innerHTML = rows.map(r => {
+    const diff = r.new_price - r.old_price;
+    const isIncrease = diff > 0;
+    const isDecrease = diff < 0;
+    const color = isIncrease ? "#d32f2f" : isDecrease ? "#27ae60" : "#666";
+    const arrow = isIncrease ? "▲" : isDecrease ? "▼" : "•";
+    const badge = isIncrease
+      ? `<span style="background:#ffe5e5;color:#c0392b;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">ARTIŞ</span>`
+      : isDecrease
+      ? `<span style="background:#e8f5e9;color:#1b5e20;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">DÜŞÜŞ</span>`
+      : `<span style="background:#f0f0f0;color:#666;padding:2px 8px;border-radius:4px;font-size:11px;">—</span>`;
+
+    return `
+      <tr>
+        <td style="white-space:nowrap;">${escape(r.changed_at)}</td>
+        <td><strong>${escape((r.origin || "").toUpperCase())}</strong> → <strong>${escape((r.destination || "").toUpperCase())}</strong></td>
+        <td>${toDot(r.journey_date)}</td>
+        <td style="text-align:center;font-family:monospace;">${escape(r.departure_time)}</td>
+        <td>${escape(r.operator)}</td>
+        <td style="opacity:0.85;">${escape(r.departure_stop || "-")}</td>
+        <td style="text-align:right;text-decoration:line-through;opacity:0.7;">${r.old_price} TL</td>
+        <td style="text-align:right;color:${color};font-weight:700;">${r.new_price} TL</td>
+        <td style="text-align:right;color:${color};font-weight:600;">${arrow} ${Math.abs(diff)} TL</td>
+        <td>${badge}</td>
+      </tr>
+    `;
+  }).join("");
+}
+
+function exportPriceHistoryCsv() {
+  const rows = priceHistoryState.rows;
+  if (!rows.length) {
+    alert("Aktarılacak kayıt yok.");
+    return;
+  }
+  const toDot = (iso) => {
+    const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m ? `${m[3]}.${m[2]}.${m[1]}` : iso || "";
+  };
+  const headers = ["Tespit Zamani", "Kalkis", "Varis", "Sefer Tarihi", "Saat", "Firma", "Kalkis Duragi", "Eski Fiyat", "Yeni Fiyat", "Fark"];
+  const csvRows = rows.map(r => {
+    const diff = r.new_price - r.old_price;
+    return [
+      r.changed_at || "",
+      r.origin || "",
+      r.destination || "",
+      toDot(r.journey_date),
+      r.departure_time || "",
+      r.operator || "",
+      r.departure_stop || "",
+      r.old_price,
+      r.new_price,
+      diff
+    ].map(v => String(v).replace(/;/g, ",")).join(";");
+  });
+  const csv = "﻿" + [headers.join(";"), ...csvRows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `fiyat-degisiklikleri-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+async function populatePriceHistoryTargetSelect() {
+  if (!dom.phTargetSelect) return;
+  try {
+    const data = await apiFetch("/api/obilet/targets");
+    const targets = Array.isArray(data?.targets) ? data.targets : [];
+    const currentVal = dom.phTargetSelect.value;
+    dom.phTargetSelect.innerHTML = `<option value="">Tüm hatlar</option>` +
+      targets.map(t => `<option value="${t.id}">${(t.origin || "").toUpperCase()} → ${(t.destination || "").toUpperCase()}</option>`).join("");
+    if (currentVal) dom.phTargetSelect.value = currentVal;
+  } catch (e) { /* sessiz */ }
+}
+
+function setupPriceHistoryPanel() {
+  if (!dom.phApplyBtn) return; // panel henuz DOM'da degil
+  // Varsayilan tarih araligi: son 30 gun
+  if (dom.phFromDate && !dom.phFromDate.value) {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    dom.phFromDate.value = d.toISOString().slice(0, 10);
+  }
+  if (dom.phToDate && !dom.phToDate.value) {
+    dom.phToDate.value = new Date().toISOString().slice(0, 10);
+  }
+
+  dom.phApplyBtn.addEventListener("click", () => loadPriceHistory());
+  if (dom.phResetBtn) {
+    dom.phResetBtn.addEventListener("click", () => {
+      if (dom.phTargetSelect) dom.phTargetSelect.value = "";
+      if (dom.phSearchInput) dom.phSearchInput.value = "";
+      const d = new Date(); d.setDate(d.getDate() - 30);
+      if (dom.phFromDate) dom.phFromDate.value = d.toISOString().slice(0, 10);
+      if (dom.phToDate) dom.phToDate.value = new Date().toISOString().slice(0, 10);
+      loadPriceHistory();
+    });
+  }
+  if (dom.phExportBtn) {
+    dom.phExportBtn.addEventListener("click", exportPriceHistoryCsv);
+  }
+  if (dom.phSearchInput) {
+    dom.phSearchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") loadPriceHistory();
+    });
+  }
+}
+
+async function initPriceHistoryPanel() {
+  setupPriceHistoryPanel();
+  await populatePriceHistoryTargetSelect();
+  await loadPriceHistory();
+}
+
 async function renderObiletTargets() {
   const listEl = document.getElementById("obiletTargetsList");
   if (!listEl) return;
@@ -3618,6 +3809,7 @@ function renderObiletTargetCards(listEl) {
           <span class="obilet-tag">🏢 ${t.operators}</span>
           ${departureStopFilter ? `<span class="obilet-tag">📍 ${departureStopFilter}</span>` : ""}
           <span class="obilet-tag">📧 ${emails.length ? emails.join(", ") : "-"}</span>
+          ${t.created_by ? `<span class="obilet-tag" title="Hatti ekleyen kullanici">👤 ${t.created_by}</span>` : ""}
           <span class="obilet-tag ${t.is_active ? 'obilet-active' : 'obilet-passive'}">
             ${t.is_active ? '✅ Aktif' : '⏸ Pasif'}
           </span>

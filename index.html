@@ -212,68 +212,75 @@
         </div>
 
         <div id="panelReporting" class="panel-block hidden" data-menu="reporting">
-          <h4>Raporlama</h4>
-          <p class="subtle">Siirt kalkisli seferleri gunluk otomatik cek, rotar/plaka bilgisini kaydet ve doluluklari takip et.</p>
+          <h4>Fiyat Değişiklik Raporu</h4>
+          <p class="subtle">oBilet üzerinde takip edilen hatlarda tespit edilen tüm fiyat değişiklikleri burada listelenir. Tarih, hat, firma, saat, eski ve yeni fiyat detayları görünür.</p>
 
-          <div class="reporting-toolbar">
+          <div class="ph-toolbar">
             <label>
-              <span>Rapor Tarihi</span>
-              <input id="reportingDateInput" type="date" />
+              <span>Başlangıç</span>
+              <input id="phFromDate" type="date" />
             </label>
             <label>
-              <span>Kalkis</span>
-              <input id="reportingOriginInput" type="text" value="Siirt" placeholder="Ornek: Van, Kilis, Diyarbakir" />
+              <span>Bitiş</span>
+              <input id="phToDate" type="date" />
             </label>
-            <div class="reporting-toolbar-actions">
-              <button id="reportingSyncBtn" class="btn btn-primary" type="button">Gunluk Raporu Cek</button>
-              <button id="reportingRefreshBtn" class="btn btn-ghost" type="button">Yenile</button>
+            <label>
+              <span>Hat</span>
+              <select id="phTargetSelect">
+                <option value="">Tüm hatlar</option>
+              </select>
+            </label>
+            <label>
+              <span>Ara</span>
+              <input id="phSearchInput" type="text" placeholder="Firma / şehir / durak" />
+            </label>
+            <div class="ph-toolbar-actions">
+              <button id="phApplyBtn" class="btn btn-primary" type="button">Filtrele</button>
+              <button id="phResetBtn" class="btn btn-ghost" type="button">Temizle</button>
+              <button id="phExportBtn" class="btn btn-ghost" type="button">📥 Excel</button>
             </div>
           </div>
 
-          <div class="reporting-filter-row">
-            <input id="reportingFilterInput" type="text" placeholder="Sefer ara (ornek: Siirt -> Marmaris)" />
-          </div>
-
-          <div class="reporting-filter-row" style="margin-top:.5rem; display:grid; grid-template-columns: 1fr auto; gap:.5rem;">
-            <input id="reportingRideUuidInput" type="text" placeholder="ride_uuid ile plaka test (ornek: 21c3f102-9290-43d9-87c3-6c37c1a2bdf8)" />
-            <button id="reportingPlateDebugBtn" class="btn btn-ghost" type="button">UUID ile Plaka Test</button>
-          </div>
-          <p id="reportingPlateDebugMsg" class="subtle" style="margin-top:.35rem;"></p>
-
-          <p id="reportingSummary" class="subtle">Rapor verisi bekleniyor...</p>
-
-          <div class="stats-grid" style="margin-bottom:.8rem;">
+          <div class="stats-grid" style="margin-top:1rem; margin-bottom:0.8rem;">
             <article>
-              <h4>Toplam Gelir (TRY)</h4>
-              <p id="reportingRevenueTryTotal">0 TL</p>
+              <h4>Toplam Değişiklik</h4>
+              <p id="phStatTotal">0</p>
             </article>
             <article>
-              <h4>Toplam Gelir (EUR)</h4>
-              <p id="reportingRevenueEurTotal">0 EUR</p>
+              <h4>Fiyat Artışı</h4>
+              <p id="phStatIncrease" style="color:#d32f2f;">0</p>
             </article>
             <article>
-              <h4>Gelir Verisi Olan Sefer</h4>
-              <p id="reportingRevenueCount">0</p>
+              <h4>Fiyat Düşüşü</h4>
+              <p id="phStatDecrease" style="color:#27ae60;">0</p>
+            </article>
+            <article>
+              <h4>Etkilenen Hat</h4>
+              <p id="phStatRoutes">0</p>
             </article>
           </div>
 
-          <div class="reports-table-wrap">
-            <table class="data-table reporting-table">
+          <p id="phStatusMsg" class="subtle">Veri yükleniyor...</p>
+
+          <div class="ph-table-wrap">
+            <table class="data-table ph-table">
               <thead>
                 <tr>
-                  <th>Sefer</th>
-                  <th>Kalkis</th>
-                  <th>Varis</th>
-                  <th>Rotar</th>
-                  <th>Plaka</th>
-                  <th>Arac / Operator</th>
-                  <th>Doluluk</th>
-                  <th>Gelir</th>
-                  <th>Not</th>
-                  <th>Kaydet</th>
+                  <th>Tespit Zamanı</th>
+                  <th>Hat</th>
+                  <th>Sefer Tarihi</th>
+                  <th>Saat</th>
+                  <th>Firma</th>
+                  <th>Kalkış Durağı</th>
+                  <th style="text-align:right;">Eski Fiyat</th>
+                  <th style="text-align:right;">Yeni Fiyat</th>
+                  <th style="text-align:right;">Fark</th>
+                  <th>Durum</th>
                 </tr>
               </thead>
-              <tbody id="reportingTableBody"></tbody>
+              <tbody id="phTableBody">
+                <tr><td colspan="10" style="text-align:center; padding:2rem; opacity:0.6;">Henüz fiyat değişikliği kaydı yok.</td></tr>
+              </tbody>
             </table>
           </div>
         </div>
