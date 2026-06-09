@@ -3373,8 +3373,13 @@ async function getBrowserInstance() {
     browserLaunchInProgress = true;
     try {
       console.log("[Browser Pool] Yeni browser instance oluşturuluyor...");
+      // Production'da Dockerfile google-chrome-stable kuruyor ve
+      // PUPPETEER_EXECUTABLE_PATH env'i set ediyor. Local geliştirmede env yoksa
+      // Puppeteer'in indirdigi Chromium kullanilir.
+      const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || undefined;
       sharedBrowser = await puppeteer.launch({
         headless: "new",
+        executablePath,
         // NOT: Railway gibi sinirli RAM ortamlarda --single-process + --no-zygote ZORUNLU.
         // Aksi halde Chromium birden fazla renderer process acar, RAM patlar, browser coker
         // ("Protocol error (Target.createTarget): Session with given id not found").

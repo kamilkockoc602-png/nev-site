@@ -1,64 +1,38 @@
 # Otobus Fiyat Paneli — Production Dockerfile
-# Node.js + Puppeteer (Chromium icin sistem bagimliliklari) icin modern Debian base.
-# Railway'in nixpacks builder'i Puppeteer icin eski/kaldirilmis paketler (libappindicator1,
-# gconf-service) kurmaya calistigi icin failliyor — bunun yerine kendi imajimizi kuruyoruz.
+#
+# Onceki yaklasim Puppeteer'in indirdigi Chromium'u kullaniyordu, ama Railway
+# konteynerinde Chrome'un crashpad_handler subprocess'i posix_spawn ile fail
+# oluyor ("Failed to launch the browser process"). Cozum: Google'in resmi Chrome
+# stable paketini sistemden kur, Puppeteer'a executablePath ile yonlendir.
 
-FROM node:20-slim
+FROM node:20-bookworm-slim
 
-# Puppeteer'in indirdigi Chromium'i calistirmak icin gereken sistem kutuphaneleri.
-# Liste Puppeteer'in resmi onerilen listesidir (legacy paketler haric).
+# 1) Chrome resmi reposundan google-chrome-stable kurulumu icin gerekli araclar.
+# 2) Chrome'un calismasi icin standart fontlar + emoji desteği.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
+    gnupg \
     fonts-liberation \
     fonts-noto-color-emoji \
-    libasound2 \
-    libatk-bridge2.0-0 \
-    libatk1.0-0 \
-    libc6 \
-    libcairo2 \
-    libcups2 \
-    libdbus-1-3 \
-    libexpat1 \
-    libfontconfig1 \
-    libgbm1 \
-    libgcc-s1 \
-    libglib2.0-0 \
-    libgtk-3-0 \
-    libnspr4 \
-    libnss3 \
-    libpango-1.0-0 \
-    libpangocairo-1.0-0 \
-    libstdc++6 \
-    libx11-6 \
-    libx11-xcb1 \
-    libxcb1 \
-    libxcomposite1 \
-    libxcursor1 \
-    libxdamage1 \
-    libxext6 \
-    libxfixes3 \
-    libxi6 \
-    libxrandr2 \
-    libxrender1 \
-    libxss1 \
-    libxtst6 \
-    lsb-release \
-    wget \
-    xdg-utils \
+    fonts-noto-cjk \
+    && curl -fsSL https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends google-chrome-stable \
     && rm -rf /var/lib/apt/lists/*
+
+# Puppeteer kendi Chromium'unu indirmesin (npm install'da skip).
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 
 WORKDIR /app
 
-# Once package dosyalarini kopyala ki npm install Docker layer cache'inden faydalanabilsin.
 COPY package*.json ./
-
-# Production dependency'leri kur. Puppeteer post-install'da Chromium'u kendi indirir.
 RUN npm install --omit=dev
 
-# Uygulama kodunu kopyala.
 COPY . .
 
-# Railway PORT env'i veriyor; varsayilan 8080.
 ENV PORT=8080
 EXPOSE 8080
 
