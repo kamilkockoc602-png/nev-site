@@ -241,6 +241,17 @@
             </div>
           </div>
 
+          <!-- Hızlı tarih chip'leri -->
+          <div id="phChipsRow" class="ph-chips-row">
+            <button class="ph-chip" data-range="today" type="button">Bugün</button>
+            <button class="ph-chip" data-range="yesterday" type="button">Dün</button>
+            <button class="ph-chip" data-range="last7" type="button">Son 7 gün</button>
+            <button class="ph-chip ph-chip-active" data-range="last30" type="button">Son 30 gün</button>
+            <button class="ph-chip" data-range="thismonth" type="button">Bu ay</button>
+            <button class="ph-chip" data-range="thisyear" type="button">Bu yıl</button>
+            <button class="ph-chip" data-range="all" type="button">Hepsi</button>
+          </div>
+
           <div class="stats-grid" style="margin-top:1rem; margin-bottom:0.8rem;">
             <article>
               <h4>Toplam Değişiklik</h4>
@@ -260,21 +271,24 @@
             </article>
           </div>
 
+          <!-- Hat bazlı özet kartlar -->
+          <div id="phRouteCards" class="ph-route-cards"></div>
+
           <p id="phStatusMsg" class="subtle">Veri yükleniyor...</p>
 
           <div class="ph-table-wrap">
             <table class="data-table ph-table">
               <thead>
                 <tr>
-                  <th>Tespit Zamanı</th>
-                  <th>Hat</th>
-                  <th>Sefer Tarihi</th>
-                  <th>Saat</th>
-                  <th>Firma</th>
+                  <th class="ph-sortable" data-sort="changed_at">Tespit Zamanı <span class="ph-sort-icon">↕</span></th>
+                  <th class="ph-sortable" data-sort="route">Hat <span class="ph-sort-icon">↕</span></th>
+                  <th class="ph-sortable" data-sort="journey_date">Sefer Tarihi <span class="ph-sort-icon">↕</span></th>
+                  <th class="ph-sortable" data-sort="departure_time">Saat <span class="ph-sort-icon">↕</span></th>
+                  <th class="ph-sortable" data-sort="operator">Firma <span class="ph-sort-icon">↕</span></th>
                   <th>Kalkış Durağı</th>
-                  <th style="text-align:right;">Eski Fiyat</th>
-                  <th style="text-align:right;">Yeni Fiyat</th>
-                  <th style="text-align:right;">Fark</th>
+                  <th class="ph-sortable" data-sort="old_price" style="text-align:right;">Eski <span class="ph-sort-icon">↕</span></th>
+                  <th class="ph-sortable" data-sort="new_price" style="text-align:right;">Yeni <span class="ph-sort-icon">↕</span></th>
+                  <th class="ph-sortable" data-sort="diff" style="text-align:right;">Fark / % <span class="ph-sort-icon">↕</span></th>
                   <th>Durum</th>
                 </tr>
               </thead>
@@ -284,6 +298,27 @@
             </table>
           </div>
         </div>
+
+        <!-- Drilldown side panel (sefer detayı) -->
+        <div id="phDetailBackdrop" class="ph-detail-backdrop hidden"></div>
+        <aside id="phDetailPanel" class="ph-detail-panel hidden" aria-hidden="true">
+          <div class="ph-detail-head">
+            <div>
+              <h4 id="phDetailTitle" style="margin:0;">Sefer Detayı</h4>
+              <p id="phDetailSubtitle" class="subtle" style="margin:0.3rem 0 0;"></p>
+            </div>
+            <button id="phDetailClose" type="button" class="btn btn-sm btn-ghost" title="Kapat">✕</button>
+          </div>
+          <div class="ph-detail-body">
+            <div class="ph-detail-stats" id="phDetailStats"></div>
+            <h5 style="margin:1rem 0 0.5rem;">Fiyat Trendi</h5>
+            <div id="phDetailChart" class="ph-detail-chart"></div>
+            <h5 style="margin:1rem 0 0.5rem;">Geçmiş Değişiklikler</h5>
+            <div id="phDetailHistory" class="ph-detail-history"></div>
+            <h5 style="margin:1rem 0 0.5rem;">Aynı Saatte Rakipler</h5>
+            <div id="phDetailPeers" class="ph-detail-peers"></div>
+          </div>
+        </aside>
 
         <div id="panelOneops" class="panel-block hidden" data-menu="oneops">
           <h4>Hatali Islemler</h4>

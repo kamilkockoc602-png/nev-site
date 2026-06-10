@@ -5413,6 +5413,60 @@ app.get("/api/obilet/price-history", requireAuth, (req, res) => {
   }
 });
 
+// API: Tek bir seferin (operator + saat + hat) tum fiyat gecmisini getir + ozet stats.
+// Drilldown sidebar icin kullanilir.
+app.get("/api/obilet/price-history/journey-detail", requireAuth, (req, res) => {
+  try {
+    const targetId = parseInt(req.query.targetId || "0", 10);
+    const operator = String(req.query.operator || "").trim();
+    const time = String(req.query.time || "").trim();
+    if (!targetId || !operator || !time) {
+      return res.status(400).json({ message: "targetId, operator ve time zorunlu." });
+    }
+    // Bu spesifik seferin tum degisiklikleri (son 50, kronolojik artan)
+    const history = db.prepare(
+      `SELECT id, journey_date, departure_stop, old_price, new_price, changed_at
+         FROM obilet_price_history
+        WHERE target_id = ? AND operator = ? AND departure_time = ?
+        ORDER BY id DESC
+        LIMIT 100`
+    ).all(targetId, operator, time);
+
+    // Ayni hatta + ayni saatte calisan diger firmalarla karsilastirma (son fiyat).
+    // obilet_prices guncel anlik fiyat, oradan cekiyoruz.
+    const peers = db.prepare(
+      `SELECT operator, departure_stop, price, last_updated
+         FROM obilet_prices
+        WHERE target_id = ? AND departure_time = ? AND operator != ?
+        ORDER BY price ASC
+        LIMIT 20`
+    ).all(targetId, time, operator);
+
+    // Anlik fiyat (bu sefer)
+    const currentRow = db.prepare(
+      `SELECT price, last_updated, departure_stop, arrival_stop
+         FROM obilet_prices
+        WHERE target_id = ? AND operator = ? AND departure_time = ?
+        ORDER BY last_updated DESC LIMIT 1`
+    ).get(targetId, operator, time);
+
+    // Stats (history uzerinden)
+    const prices = [];
+    history.forEach(h => { prices.push(h.old_price, h.new_price); });
+    if (currentRow?.price) prices.push(currentRow.price);
+    const stats = prices.length ? {
+      min: Math.min(...prices),
+      max: Math.max(...prices),
+      avg: Math.round(prices.reduce((a, b) => a + b, 0) / prices.length),
+      changes: history.length,
+    } : null;
+
+    res.json({ ok: true, history, peers, current: currentRow, stats });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Detay alınamadı." });
+  }
+});
+
 // API: Tek satir fiyat gecmisi silme (admin yardimi icin)
 app.delete("/api/obilet/price-history/:id", requireAuth, (req, res) => {
   try {

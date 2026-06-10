@@ -116,6 +116,17 @@ const dom = {
   phStatRoutes: document.getElementById("phStatRoutes"),
   phStatusMsg: document.getElementById("phStatusMsg"),
   phTableBody: document.getElementById("phTableBody"),
+  phChipsRow: document.getElementById("phChipsRow"),
+  phRouteCards: document.getElementById("phRouteCards"),
+  phDetailBackdrop: document.getElementById("phDetailBackdrop"),
+  phDetailPanel: document.getElementById("phDetailPanel"),
+  phDetailTitle: document.getElementById("phDetailTitle"),
+  phDetailSubtitle: document.getElementById("phDetailSubtitle"),
+  phDetailClose: document.getElementById("phDetailClose"),
+  phDetailStats: document.getElementById("phDetailStats"),
+  phDetailChart: document.getElementById("phDetailChart"),
+  phDetailHistory: document.getElementById("phDetailHistory"),
+  phDetailPeers: document.getElementById("phDetailPeers"),
 };
 
 const state = {
@@ -3574,6 +3585,10 @@ function generateCSV(prices, target) {
 const priceHistoryState = {
   rows: [],
   lastQuery: null,
+  sortKey: "changed_at",   // default
+  sortDir: "desc",          // asc | desc
+  targets: [],              // hat dropdown ve hat kartlari icin
+  targetsById: {},
 };
 
 async function loadPriceHistory() {
@@ -3605,6 +3620,61 @@ async function loadPriceHistory() {
   }
 }
 
+function phEscape(s) {
+  return String(s || "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  })[c]);
+}
+
+function phToDot(iso) {
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : iso || "-";
+}
+
+// DD.MM.YYYY HH:mm:ss → sortable timestamp (yaklasik). Backend Istanbul timezone ile yaziyor.
+function phChangedAtSortKey(s) {
+  const m = String(s || "").match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
+  if (!m) return 0;
+  return new Date(`${m[3]}-${m[2]}-${m[1]}T${m[4]}:${m[5]}:${m[6]}`).getTime();
+}
+
+function phSortedRows() {
+  const { rows, sortKey, sortDir } = priceHistoryState;
+  const dir = sortDir === "asc" ? 1 : -1;
+  const arr = rows.slice();
+  arr.sort((a, b) => {
+    let va, vb;
+    switch (sortKey) {
+      case "changed_at":
+        va = phChangedAtSortKey(a.changed_at); vb = phChangedAtSortKey(b.changed_at); break;
+      case "journey_date":
+        va = a.journey_date || ""; vb = b.journey_date || ""; break;
+      case "departure_time":
+        va = a.departure_time || ""; vb = b.departure_time || ""; break;
+      case "operator":
+        va = (a.operator || "").toLocaleLowerCase("tr-TR"); vb = (b.operator || "").toLocaleLowerCase("tr-TR"); break;
+      case "route":
+        va = `${a.origin}-${a.destination}`.toLocaleLowerCase("tr-TR");
+        vb = `${b.origin}-${b.destination}`.toLocaleLowerCase("tr-TR"); break;
+      case "old_price":
+        va = Number(a.old_price); vb = Number(b.old_price); break;
+      case "new_price":
+        va = Number(a.new_price); vb = Number(b.new_price); break;
+      case "diff": {
+        const da = Math.abs(a.new_price - a.old_price);
+        const db = Math.abs(b.new_price - b.old_price);
+        va = da; vb = db; break;
+      }
+      default:
+        va = a[sortKey]; vb = b[sortKey];
+    }
+    if (va < vb) return -1 * dir;
+    if (va > vb) return 1 * dir;
+    return 0;
+  });
+  return arr;
+}
+
 function renderPriceHistory() {
   if (!dom.phTableBody) return;
   const rows = priceHistoryState.rows;
@@ -3622,26 +3692,25 @@ function renderPriceHistory() {
   if (dom.phStatDecrease) dom.phStatDecrease.textContent = decrease;
   if (dom.phStatRoutes) dom.phStatRoutes.textContent = routeSet.size;
 
+  renderPriceHistoryRouteCards();
+  renderPriceHistorySortIcons();
+
   if (!rows.length) {
     dom.phTableBody.innerHTML = `<tr><td colspan="10" style="text-align:center; padding:2rem; opacity:0.6;">Filtreye uygun kayıt yok.</td></tr>`;
     return;
   }
 
-  const escape = (s) => String(s || "").replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-  })[c]);
-  const toDot = (iso) => {
-    const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    return m ? `${m[3]}.${m[2]}.${m[1]}` : iso || "-";
-  };
+  const sorted = phSortedRows();
 
-  dom.phTableBody.innerHTML = rows.map(r => {
+  dom.phTableBody.innerHTML = sorted.map((r, idx) => {
     const diff = r.new_price - r.old_price;
     const isIncrease = diff > 0;
     const isDecrease = diff < 0;
     // Firma perspektifi: rakibin artisi = YESIL (iyi haber), rakibin dususu = KIRMIZI (rekabet baskisi)
     const color = isIncrease ? "#27ae60" : isDecrease ? "#d32f2f" : "#666";
     const arrow = isIncrease ? "▲" : isDecrease ? "▼" : "•";
+    const pct = r.old_price > 0 ? ((diff / r.old_price) * 100).toFixed(1) : "0.0";
+    const pctStr = (diff >= 0 ? "+" : "") + pct + "%";
     const badge = isIncrease
       ? `<span style="background:#e8f5e9;color:#1b5e20;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">ARTIŞ</span>`
       : isDecrease
@@ -3649,20 +3718,273 @@ function renderPriceHistory() {
       : `<span style="background:#f0f0f0;color:#666;padding:2px 8px;border-radius:4px;font-size:11px;">—</span>`;
 
     return `
-      <tr>
-        <td style="white-space:nowrap;">${escape(r.changed_at)}</td>
-        <td><strong>${escape((r.origin || "").toUpperCase())}</strong> → <strong>${escape((r.destination || "").toUpperCase())}</strong></td>
-        <td>${toDot(r.journey_date)}</td>
-        <td style="text-align:center;font-family:monospace;">${escape(r.departure_time)}</td>
-        <td>${escape(r.operator)}</td>
-        <td style="opacity:0.85;">${escape(r.departure_stop || "-")}</td>
+      <tr class="ph-row" data-idx="${idx}">
+        <td style="white-space:nowrap;">${phEscape(r.changed_at)}</td>
+        <td><strong>${phEscape((r.origin || "").toUpperCase())}</strong> → <strong>${phEscape((r.destination || "").toUpperCase())}</strong></td>
+        <td>${phToDot(r.journey_date)}</td>
+        <td style="text-align:center;font-family:monospace;">${phEscape(r.departure_time)}</td>
+        <td>${phEscape(r.operator)}</td>
+        <td style="opacity:0.85;">${phEscape(r.departure_stop || "-")}</td>
         <td style="text-align:right;text-decoration:line-through;opacity:0.7;">${r.old_price} TL</td>
         <td style="text-align:right;color:${color};font-weight:700;">${r.new_price} TL</td>
-        <td style="text-align:right;color:${color};font-weight:600;">${arrow} ${Math.abs(diff)} TL</td>
+        <td style="text-align:right;color:${color};font-weight:600;white-space:nowrap;">
+          ${arrow} ${Math.abs(diff)} TL <span style="opacity:0.75;font-size:11px;">(${pctStr})</span>
+        </td>
         <td>${badge}</td>
       </tr>
     `;
   }).join("");
+
+  // Satira tiklama -> drilldown panel
+  dom.phTableBody.querySelectorAll(".ph-row").forEach(tr => {
+    tr.addEventListener("click", () => {
+      const idx = parseInt(tr.dataset.idx, 10);
+      const row = sorted[idx];
+      if (row) openPriceHistoryDetail(row);
+    });
+  });
+}
+
+function renderPriceHistorySortIcons() {
+  document.querySelectorAll(".ph-sortable").forEach(th => {
+    const icon = th.querySelector(".ph-sort-icon");
+    if (!icon) return;
+    if (th.dataset.sort === priceHistoryState.sortKey) {
+      icon.textContent = priceHistoryState.sortDir === "asc" ? "▲" : "▼";
+      th.classList.add("ph-sort-active");
+    } else {
+      icon.textContent = "↕";
+      th.classList.remove("ph-sort-active");
+    }
+  });
+}
+
+function renderPriceHistoryRouteCards() {
+  if (!dom.phRouteCards) return;
+  const rows = priceHistoryState.rows;
+  if (!rows.length) { dom.phRouteCards.innerHTML = ""; return; }
+
+  // Hat bazinda grupla
+  const byRoute = new Map();
+  for (const r of rows) {
+    const key = `${r.target_id}|${r.origin}->${r.destination}`;
+    if (!byRoute.has(key)) {
+      byRoute.set(key, {
+        target_id: r.target_id,
+        origin: r.origin,
+        destination: r.destination,
+        total: 0, up: 0, down: 0,
+        diffs: [],
+        operatorCounts: new Map(),
+      });
+    }
+    const grp = byRoute.get(key);
+    grp.total++;
+    const diff = r.new_price - r.old_price;
+    grp.diffs.push(diff);
+    if (diff > 0) grp.up++;
+    else if (diff < 0) grp.down++;
+    grp.operatorCounts.set(r.operator, (grp.operatorCounts.get(r.operator) || 0) + 1);
+  }
+
+  // Toplam degisiklik sayisina gore sirala (desc)
+  const groups = Array.from(byRoute.values()).sort((a, b) => b.total - a.total);
+
+  dom.phRouteCards.innerHTML = groups.map(g => {
+    const avgDiff = Math.round(g.diffs.reduce((a, b) => a + b, 0) / g.diffs.length);
+    const topOp = Array.from(g.operatorCounts.entries()).sort((a, b) => b[1] - a[1])[0];
+    const avgColor = avgDiff > 0 ? "#27ae60" : avgDiff < 0 ? "#d32f2f" : "#888";
+    const avgSign = avgDiff > 0 ? "+" : "";
+    return `
+      <article class="ph-route-card" data-target-id="${g.target_id}" tabindex="0" role="button">
+        <header class="ph-route-card-head">
+          <span class="ph-route-icon">🚌</span>
+          <h5>${phEscape((g.origin || "").toUpperCase())} → ${phEscape((g.destination || "").toUpperCase())}</h5>
+        </header>
+        <div class="ph-route-card-grid">
+          <div><span class="ph-rc-label">Değişiklik</span><span class="ph-rc-value">${g.total}</span></div>
+          <div><span class="ph-rc-label">Artış</span><span class="ph-rc-value" style="color:#27ae60;">▲ ${g.up}</span></div>
+          <div><span class="ph-rc-label">Düşüş</span><span class="ph-rc-value" style="color:#d32f2f;">▼ ${g.down}</span></div>
+          <div><span class="ph-rc-label">Ort. fark</span><span class="ph-rc-value" style="color:${avgColor};">${avgSign}${avgDiff} TL</span></div>
+        </div>
+        ${topOp ? `<footer class="ph-route-card-foot">En aktif: <strong>${phEscape(topOp[0])}</strong> · ${topOp[1]} değişim</footer>` : ""}
+      </article>
+    `;
+  }).join("");
+
+  dom.phRouteCards.querySelectorAll(".ph-route-card").forEach(card => {
+    card.addEventListener("click", () => {
+      const tid = card.dataset.targetId;
+      if (dom.phTargetSelect && tid) {
+        dom.phTargetSelect.value = tid;
+        loadPriceHistory();
+      }
+    });
+  });
+}
+
+// =====================
+// Drilldown side panel
+// =====================
+async function openPriceHistoryDetail(row) {
+  if (!dom.phDetailPanel) return;
+  dom.phDetailPanel.classList.remove("hidden");
+  dom.phDetailPanel.setAttribute("aria-hidden", "false");
+  if (dom.phDetailBackdrop) dom.phDetailBackdrop.classList.remove("hidden");
+
+  dom.phDetailTitle.textContent = `${(row.origin || "").toUpperCase()} → ${(row.destination || "").toUpperCase()}`;
+  dom.phDetailSubtitle.textContent = `${row.operator} · ${row.departure_time} · ${row.departure_stop || "-"}`;
+  dom.phDetailStats.innerHTML = `<p class="subtle">Yükleniyor...</p>`;
+  dom.phDetailChart.innerHTML = "";
+  dom.phDetailHistory.innerHTML = "";
+  dom.phDetailPeers.innerHTML = "";
+
+  try {
+    const params = new URLSearchParams({
+      targetId: String(row.target_id || ""),
+      operator: row.operator || "",
+      time: row.departure_time || "",
+    });
+    const data = await apiFetch(`/api/obilet/price-history/journey-detail?${params.toString()}`);
+
+    // Stats
+    const s = data.stats || {};
+    dom.phDetailStats.innerHTML = `
+      <div class="ph-detail-stat-grid">
+        <div><span>Değişim</span><strong>${s.changes ?? 0}</strong></div>
+        <div><span>Min</span><strong style="color:#d32f2f;">${s.min ?? "-"} TL</strong></div>
+        <div><span>Ortalama</span><strong>${s.avg ?? "-"} TL</strong></div>
+        <div><span>Max</span><strong style="color:#27ae60;">${s.max ?? "-"} TL</strong></div>
+      </div>
+    `;
+
+    // Chart (SVG line) — history kronolojik ASC olmasi lazim
+    const history = Array.isArray(data.history) ? data.history.slice().reverse() : [];
+    dom.phDetailChart.innerHTML = renderPriceTrendSVG(history, data.current);
+
+    // History list
+    if (history.length) {
+      dom.phDetailHistory.innerHTML = history.slice().reverse().map(h => {
+        const diff = h.new_price - h.old_price;
+        const color = diff > 0 ? "#27ae60" : diff < 0 ? "#d32f2f" : "#888";
+        const arrow = diff > 0 ? "▲" : diff < 0 ? "▼" : "•";
+        return `<div class="ph-detail-history-row">
+          <span style="opacity:0.75;font-size:12px;">${phEscape(h.changed_at)}</span>
+          <span style="text-decoration:line-through;opacity:0.7;">${h.old_price} TL</span>
+          <span>→</span>
+          <strong style="color:${color};">${h.new_price} TL</strong>
+          <span style="color:${color};">${arrow} ${Math.abs(diff)} TL</span>
+        </div>`;
+      }).join("");
+    } else {
+      dom.phDetailHistory.innerHTML = `<p class="subtle">Bu sefer icin gecmis kayit yok (bu satir ilk degisim olabilir).</p>`;
+    }
+
+    // Peers
+    const peers = Array.isArray(data.peers) ? data.peers : [];
+    if (peers.length) {
+      dom.phDetailPeers.innerHTML = peers.map(p => `
+        <div class="ph-detail-peer-row">
+          <span>${phEscape(p.operator)}</span>
+          <span style="opacity:0.7;font-size:12px;">${phEscape(p.departure_stop || "-")}</span>
+          <strong>${p.price} TL</strong>
+        </div>
+      `).join("");
+    } else {
+      dom.phDetailPeers.innerHTML = `<p class="subtle">Bu saatte ${phEscape(row.operator)} disinda kayitli firma yok.</p>`;
+    }
+  } catch (err) {
+    dom.phDetailStats.innerHTML = `<p class="subtle" style="color:#d32f2f;">Detay alinamadi: ${phEscape(err.message)}</p>`;
+  }
+}
+
+function closePriceHistoryDetail() {
+  if (!dom.phDetailPanel) return;
+  dom.phDetailPanel.classList.add("hidden");
+  dom.phDetailPanel.setAttribute("aria-hidden", "true");
+  if (dom.phDetailBackdrop) dom.phDetailBackdrop.classList.add("hidden");
+}
+
+// Basit SVG line chart — son fiyatlar zaman ekseninde
+function renderPriceTrendSVG(history, current) {
+  // Veri noktalari: her history kaydinin old_price + new_price + suanki anlik fiyat
+  const points = [];
+  for (const h of history) {
+    points.push({ y: h.old_price, label: h.changed_at + " (önce)" });
+    points.push({ y: h.new_price, label: h.changed_at + " (sonra)" });
+  }
+  if (current?.price) points.push({ y: current.price, label: "Şu an" });
+  if (points.length < 2) {
+    return `<p class="subtle">Yeterli veri yok — fiyat değişikliği oldukça trend çizilecek.</p>`;
+  }
+  const W = 460, H = 140, P = 24;
+  const ys = points.map(p => p.y);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const rangeY = Math.max(1, maxY - minY);
+  const xStep = (W - 2 * P) / Math.max(1, points.length - 1);
+  const yScale = (y) => H - P - ((y - minY) / rangeY) * (H - 2 * P);
+  const pts = points.map((p, i) => `${P + i * xStep},${yScale(p.y)}`);
+  const last = points[points.length - 1];
+  const first = points[0];
+  const trendUp = last.y >= first.y;
+  const lineColor = trendUp ? "#27ae60" : "#d32f2f";
+  const areaColor = trendUp ? "rgba(39,174,96,0.12)" : "rgba(211,47,47,0.12)";
+  const polyline = pts.join(" ");
+  const areaPath = `${P},${H - P} ${polyline} ${P + (points.length - 1) * xStep},${H - P}`;
+  const circles = points.map((p, i) => {
+    const cx = P + i * xStep;
+    const cy = yScale(p.y);
+    return `<circle cx="${cx}" cy="${cy}" r="3" fill="${lineColor}" />`;
+  }).join("");
+  return `
+    <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;">
+      <polygon points="${areaPath}" fill="${areaColor}" stroke="none" />
+      <polyline points="${polyline}" fill="none" stroke="${lineColor}" stroke-width="2" />
+      ${circles}
+      <text x="${P}" y="${P - 6}" font-size="10" fill="currentColor" opacity="0.65">${maxY} TL</text>
+      <text x="${P}" y="${H - 6}" font-size="10" fill="currentColor" opacity="0.65">${minY} TL</text>
+    </svg>
+  `;
+}
+
+// =====================
+// Hizli tarih chip'leri
+// =====================
+function applyDateRange(rangeKey) {
+  const today = new Date();
+  let from = new Date(today), to = new Date(today);
+  switch (rangeKey) {
+    case "today":
+      break;
+    case "yesterday":
+      from.setDate(from.getDate() - 1);
+      to.setDate(to.getDate() - 1);
+      break;
+    case "last7":
+      from.setDate(from.getDate() - 6);
+      break;
+    case "last30":
+      from.setDate(from.getDate() - 29);
+      break;
+    case "thismonth":
+      from = new Date(today.getFullYear(), today.getMonth(), 1);
+      break;
+    case "thisyear":
+      from = new Date(today.getFullYear(), 0, 1);
+      break;
+    case "all":
+      from = null;
+      break;
+  }
+  if (dom.phFromDate) dom.phFromDate.value = from ? from.toISOString().slice(0, 10) : "";
+  if (dom.phToDate) dom.phToDate.value = to.toISOString().slice(0, 10);
+  // Active chip işareti
+  if (dom.phChipsRow) {
+    dom.phChipsRow.querySelectorAll(".ph-chip").forEach(c => {
+      c.classList.toggle("ph-chip-active", c.dataset.range === rangeKey);
+    });
+  }
+  loadPriceHistory();
 }
 
 function exportPriceHistoryCsv() {
@@ -3716,7 +4038,7 @@ async function populatePriceHistoryTargetSelect() {
 }
 
 function setupPriceHistoryPanel() {
-  if (!dom.phApplyBtn) return; // panel henuz DOM'da degil
+  if (!dom.phApplyBtn) return;
   // Varsayilan tarih araligi: son 30 gun
   if (dom.phFromDate && !dom.phFromDate.value) {
     const d = new Date();
@@ -3735,17 +4057,51 @@ function setupPriceHistoryPanel() {
       const d = new Date(); d.setDate(d.getDate() - 30);
       if (dom.phFromDate) dom.phFromDate.value = d.toISOString().slice(0, 10);
       if (dom.phToDate) dom.phToDate.value = new Date().toISOString().slice(0, 10);
+      // Active chip = last30
+      if (dom.phChipsRow) {
+        dom.phChipsRow.querySelectorAll(".ph-chip").forEach(c =>
+          c.classList.toggle("ph-chip-active", c.dataset.range === "last30")
+        );
+      }
       loadPriceHistory();
     });
   }
-  if (dom.phExportBtn) {
-    dom.phExportBtn.addEventListener("click", exportPriceHistoryCsv);
-  }
+  if (dom.phExportBtn) dom.phExportBtn.addEventListener("click", exportPriceHistoryCsv);
   if (dom.phSearchInput) {
     dom.phSearchInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") loadPriceHistory();
     });
   }
+
+  // Hızlı tarih chip'leri
+  if (dom.phChipsRow) {
+    dom.phChipsRow.querySelectorAll(".ph-chip").forEach(chip => {
+      chip.addEventListener("click", () => applyDateRange(chip.dataset.range));
+    });
+  }
+
+  // Sutun sıralama
+  document.querySelectorAll(".ph-sortable").forEach(th => {
+    th.addEventListener("click", () => {
+      const key = th.dataset.sort;
+      if (priceHistoryState.sortKey === key) {
+        priceHistoryState.sortDir = priceHistoryState.sortDir === "asc" ? "desc" : "asc";
+      } else {
+        priceHistoryState.sortKey = key;
+        priceHistoryState.sortDir = "desc";
+      }
+      renderPriceHistory();
+    });
+  });
+
+  // Drilldown panel close
+  if (dom.phDetailClose) dom.phDetailClose.addEventListener("click", closePriceHistoryDetail);
+  if (dom.phDetailBackdrop) dom.phDetailBackdrop.addEventListener("click", closePriceHistoryDetail);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && dom.phDetailPanel && !dom.phDetailPanel.classList.contains("hidden")) {
+      closePriceHistoryDetail();
+    }
+  });
 }
 
 async function initPriceHistoryPanel() {
