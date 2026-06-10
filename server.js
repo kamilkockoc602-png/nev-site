@@ -4544,7 +4544,8 @@ async function sendPriceChangeEmail(emailList, target, changes) {
   const changeRows = changes.map(c => {
     const isDrop = c.newPrice < c.oldPrice;
     const direction = isDrop ? "📉 Fiyat DÜŞTÜ" : "📈 Fiyat YÜKSELDİ";
-    const directionColor = isDrop ? "#27ae60" : "#c0392b";
+    // Firma perspektifi: rakip artisi = YESIL (iyi), rakip dususu = KIRMIZI (rekabet baskisi)
+    const directionColor = isDrop ? "#c0392b" : "#27ae60";
     return `
       <tr style="border-bottom: 1px solid #eaeaea;">
         <td style="padding: 12px; font-weight: bold; color: #2c3e50; font-family: sans-serif;">${c.operator}</td>
@@ -4644,7 +4645,8 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
 
   const changesRows = changes.map(c => {
     const isDrop = c.newPrice < c.oldPrice;
-    const newColor = isDrop ? "#27ae60" : "#d32f2f";
+    // Firma perspektifi: rakip artisi = YESIL (iyi), rakip dususu = KIRMIZI (rekabet baskisi)
+    const newColor = isDrop ? "#d32f2f" : "#27ae60";
     return `
     <tr style="background:#fff8f8;">
       <td style="padding:10px;border-bottom:1px solid #e8e8e8;color:#333333;">${toDotDate(c.journey_date) || "-"}</td>

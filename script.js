@@ -3639,12 +3639,13 @@ function renderPriceHistory() {
     const diff = r.new_price - r.old_price;
     const isIncrease = diff > 0;
     const isDecrease = diff < 0;
-    const color = isIncrease ? "#d32f2f" : isDecrease ? "#27ae60" : "#666";
+    // Firma perspektifi: rakibin artisi = YESIL (iyi haber), rakibin dususu = KIRMIZI (rekabet baskisi)
+    const color = isIncrease ? "#27ae60" : isDecrease ? "#d32f2f" : "#666";
     const arrow = isIncrease ? "▲" : isDecrease ? "▼" : "•";
     const badge = isIncrease
-      ? `<span style="background:#ffe5e5;color:#c0392b;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">ARTIŞ</span>`
+      ? `<span style="background:#e8f5e9;color:#1b5e20;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">ARTIŞ</span>`
       : isDecrease
-      ? `<span style="background:#e8f5e9;color:#1b5e20;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">DÜŞÜŞ</span>`
+      ? `<span style="background:#ffe5e5;color:#c0392b;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;">DÜŞÜŞ</span>`
       : `<span style="background:#f0f0f0;color:#666;padding:2px 8px;border-radius:4px;font-size:11px;">—</span>`;
 
     return `
