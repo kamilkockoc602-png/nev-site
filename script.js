@@ -3536,23 +3536,31 @@ function setupObiletOperatorPicker(root) {
         renderSelected();
       });
 
-      // Logo / amblem alani — once gercek logo dene (/firma-logolari/{slug}.png),
-      // bulamazsa firma adinin ilk harflerinden renkli avatar fallback.
+      // Logo / amblem alani — once gercek logo dene; tum yaygın uzantilari sirayla dene
+      // (.png, .jpg, .jpeg, .webp, .svg). Hicbiri bulamazsa firma adinin ilk
+      // harflerinden renkli avatar fallback.
       const avatar = document.createElement("span");
       avatar.className = "firma-avatar";
       const slug = firmaLogoSlug(name);
       const initials = firmaInitials(name);
       const bg = firmaAvatarColor(name);
       avatar.style.background = bg;
-      // Once img'i goster; onerror -> initials fallback
+
+      const extensions = ["png", "jpg", "jpeg", "webp", "svg"];
+      let extIdx = 0;
       const img = document.createElement("img");
-      img.src = `/firma-logolari/${slug}.png`;
+      img.src = `/firma-logolari/${slug}.${extensions[extIdx]}`;
       img.alt = "";
       img.loading = "lazy";
       img.addEventListener("error", () => {
-        img.remove();
-        avatar.textContent = initials;
-        avatar.classList.add("firma-avatar-fallback");
+        extIdx++;
+        if (extIdx < extensions.length) {
+          img.src = `/firma-logolari/${slug}.${extensions[extIdx]}`;
+        } else {
+          img.remove();
+          avatar.textContent = initials;
+          avatar.classList.add("firma-avatar-fallback");
+        }
       });
       avatar.appendChild(img);
 

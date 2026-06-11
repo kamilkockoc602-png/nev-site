@@ -23,5 +23,16 @@ Firma adı **slug** formatında dosya adı olarak kullanılır:
 - 128×128 piksel (kare)
 - PNG (şeffaf arka plan ideal)
 
+## Desteklenen uzantılar
+Sistem sırayla dener: `.png` → `.jpg` → `.jpeg` → `.webp` → `.svg`
+Yani dosya `kamil-koc.png` de olabilir `kamil-koc.jpeg` de — sistem bulur.
+
+## ⚠️ Windows kullanıcıları için kritik
+Windows varsayılan olarak dosya uzantısını gizler. "Yeniden Adlandır"
+deyip `kamil-koc.png` yazınca gerçek ad `kamil-koc.png.jpeg` olur.
+Çözüm: **Dosya gezgini → Görünüm → Dosya uzantıları** kutusunu açın,
+gerçek uzantıyı görebilirsiniz.
+
 ## Logo yoksa
-Logo dosyası bulunamayan firmalar için **otomatik renkli avatar** (firma adının ilk harfleri ile) gösterilir.
+Logo dosyası bulunamayan firmalar için **otomatik renkli avatar**
+(firma adının ilk harfleri ile) gösterilir.
