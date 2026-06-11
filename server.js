@@ -3959,7 +3959,12 @@ async function scrapeObilet(origin, destination, dateIso, routeId = null) {
 // veya direkt buraya gomun. Key'ler slugTr ile uretilir: turkce karakterler donusur, bosluk silinir.
 const OBILET_STATION_IDS_SEED = {
   "adana": 348,
+  "adiyaman": 352,     // Adıyaman
+  "afyon": 353,
+  "agri": 354,         // Ağrı
+  "aksaray": 414,
   "ankara": 356,
+  "antalya": 357,
   "balikesir": 360,    // Balıkesir
   "bolu": 364,
   "bursa": 366,
@@ -3968,16 +3973,21 @@ const OBILET_STATION_IDS_SEED = {
   "eskisehir": 376,    // Eskişehir
   "gaziantep": 377,
   "hatay": 430,
+  "isparta": 381,
   "istanbul": 349,     // İstanbul
   "izmir": 383,        // İzmir
   "kadirli": 595,
+  "kayseri": 386,
   "kilis": 425,
   "konya": 389,
   "kozan": 617,
   "mersin": 382,
+  "nigde": 398,        // Niğde
   "osmaniye": 426,
   "sanliurfa": 409,    // Şanlıurfa
   "siirt": 402,
+  "trabzon": 407,
+  "usak": 410,         // Uşak
   "van": 411,
 };
 
