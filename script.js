@@ -3427,6 +3427,45 @@ async function loadObiletOperatorCatalog() {
   return obiletState.operatorCatalog;
 }
 
+// Firma logosu / avatar yardimcilari
+// Dosya adi normalize: "Kamil Koç" -> "kamil-koc"
+function firmaLogoSlug(name) {
+  return String(name || "")
+    .toLocaleLowerCase("tr-TR")
+    .replace(/ı/g, "i").replace(/ğ/g, "g").replace(/ü/g, "u")
+    .replace(/ş/g, "s").replace(/ö/g, "o").replace(/ç/g, "c")
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function firmaInitials(name) {
+  const words = String(name || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(w => w && !/^(turizm|seyahat|otobus|nakliyat|vip|tur)$/i.test(w));
+  if (!words.length) return "?";
+  if (words.length === 1) return words[0].slice(0, 2).toLocaleUpperCase("tr-TR");
+  return (words[0][0] + words[1][0]).toLocaleUpperCase("tr-TR");
+}
+
+function firmaAvatarColor(name) {
+  // Firma adindan hash uret, sabit bir renk paletinden sec.
+  // Renkler kasten karanlik tonlarda secildi (panel temasiyla uyumlu).
+  const palette = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+    "#3b5998", "#c0392b", "#16a085", "#8e44ad", "#d35400",
+  ];
+  let hash = 0;
+  for (let i = 0; i < (name || "").length; i++) {
+    hash = (hash * 31 + name.charCodeAt(i)) | 0;
+  }
+  return palette[Math.abs(hash) % palette.length];
+}
+
 function setupObiletOperatorPicker(root) {
   const hiddenInput = root.querySelector(".obilet-operators-hidden");
   const searchInput = root.querySelector(".obilet-operator-search");
@@ -3497,10 +3536,32 @@ function setupObiletOperatorPicker(root) {
         renderSelected();
       });
 
+      // Logo / amblem alani — once gercek logo dene (/firma-logolari/{slug}.png),
+      // bulamazsa firma adinin ilk harflerinden renkli avatar fallback.
+      const avatar = document.createElement("span");
+      avatar.className = "firma-avatar";
+      const slug = firmaLogoSlug(name);
+      const initials = firmaInitials(name);
+      const bg = firmaAvatarColor(name);
+      avatar.style.background = bg;
+      // Once img'i goster; onerror -> initials fallback
+      const img = document.createElement("img");
+      img.src = `/firma-logolari/${slug}.png`;
+      img.alt = "";
+      img.loading = "lazy";
+      img.addEventListener("error", () => {
+        img.remove();
+        avatar.textContent = initials;
+        avatar.classList.add("firma-avatar-fallback");
+      });
+      avatar.appendChild(img);
+
       const text = document.createElement("span");
+      text.className = "firma-option-name";
       text.textContent = name;
 
       label.appendChild(checkbox);
+      label.appendChild(avatar);
       label.appendChild(text);
       optionsEl.appendChild(label);
     });
