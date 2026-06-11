@@ -1993,12 +1993,13 @@ body[data-theme="dark"] .delay-badge-late {
   border: 1px solid var(--stroke);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.55);
-  max-height: 220px;
+  max-height: 280px;
   overflow-y: auto;
   padding: 0.35rem;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.25rem 0.6rem;
+  /* Tek sütun: avatar + isim için yeterli yer. Logo + tam ad görünür. */
+  grid-template-columns: 1fr;
+  gap: 0.18rem;
 }
 
 .obilet-operator-option {
