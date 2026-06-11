@@ -2437,26 +2437,15 @@ body[data-theme="dark"] .obilet-operator-option span {
 }
 
 /* ===== Firma seçim picker — logo/avatar ===== */
-.obilet-operator-option {
-  display: grid;
-  grid-template-columns: auto auto 1fr;
-  align-items: center;
-  gap: 0.55rem;
-  padding: 0.35rem 0.5rem;
-  border-radius: 8px;
-  transition: background 0.15s ease;
-  cursor: pointer;
-}
-.obilet-operator-option:hover {
-  background: rgba(15, 157, 143, 0.08);
-}
-.firma-avatar {
+/* NOT: Yukarida mevcut .obilet-operator-option (display:flex !important) korunur.
+   Burada sadece icindeki avatar ve isim span'larinin flex davranisini ayarliyoruz. */
+.obilet-operator-option .firma-avatar {
+  flex: 0 0 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 28px;
   height: 28px;
-  min-width: 28px;
   border-radius: 50%;
   overflow: hidden;
   font-size: 0.72rem;
@@ -2464,23 +2453,27 @@ body[data-theme="dark"] .obilet-operator-option span {
   color: #ffffff;
   letter-spacing: 0.02em;
   user-select: none;
-  flex-shrink: 0;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
-.firma-avatar img {
+.obilet-operator-option .firma-avatar img {
   width: 100%;
   height: 100%;
   object-fit: contain;
   background: #ffffff;
   padding: 2px;
 }
-.firma-avatar-fallback {
-  /* Logo bulunamayinca: ilk harfler + renkli arka plan (inline style) */
+.obilet-operator-option .firma-avatar-fallback {
   text-transform: uppercase;
 }
-.firma-option-name {
-  font-size: 0.88rem;
+.obilet-operator-option .firma-option-name {
+  flex: 1 1 auto;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-size: 0.86rem;
+  color: inherit;
+}
+body[data-theme="dark"] .obilet-operator-option .firma-option-name {
+  color: #d8e9f8;
 }
