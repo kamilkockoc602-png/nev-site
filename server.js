@@ -57,7 +57,6 @@ const OBILET_OPERATOR_CATALOG = [
   "Aksakal Seyahat",
   "Ali Osman Ulusoy",
   "Anadolu Ulaşım",
-  "Aydoğanlar Turizm",
   "Balıkesir Uludağ Turizm",
   "Ben Turizm",
   "Best Van Turizm",
@@ -75,8 +74,6 @@ const OBILET_OPERATOR_CATALOG = [
   "Esadaş Turizm",
   "Güney Akdeniz Seyahat",
   "Has Karayolu",
-  "Has Turizm",
-  "Hatay CSR Turizm",
   "Hatay Gokbey",
   "Hatay Günsas Turizm",
   "Iğdırlı Turizm",
@@ -84,7 +81,6 @@ const OBILET_OPERATOR_CATALOG = [
   "İstanbul Seyahat",
   "Jet Turizm",
   "Kamil Koç",
-  "Kamil Koç FlixBus",
   "Kanberoğlu Turizm",
   "Kontur Turizm",
   "Lider Adana",
@@ -100,7 +96,6 @@ const OBILET_OPERATOR_CATALOG = [
   "Mardin Seyahat",
   "Martur",
   "Mersin Nur",
-  "Metro Luxury",
   "Metro Turizm",
   "Muş Yolu Turizm",
   "Niğde Aydoğanlar",
@@ -5111,28 +5106,46 @@ app.get("/api/obilet/targets", requireAuth, (req, res) => {
 // API: Türkiye geneli firma listesi (secmeli alan icin)
 app.get("/api/obilet/operators", requireAuth, (req, res) => {
   try {
-    const set = new Set();
+    // Suffix-aware base slug: "Mersin Nur" ve "Mersin Nur Turizm" ayni anahtarda toplanir.
+    // turizm/seyahat/tur/vip/luxury gibi yaygin sonekler eslestirmede dikkate alinmaz.
+    const baseSlug = (name) => {
+      const noiseWords = /\b(turizm|seyahat|tur|vip|luxury|ekspres|otobus|nakliyat|seferleri|gokbey)\b/gi;
+      return slugTr(name)
+        .replace(noiseWords, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/\s+/g, "-");
+    };
 
-    for (const name of OBILET_OPERATOR_CATALOG) {
-      const normalized = normalizeObiletOperatorName(name);
-      if (normalized) set.add(normalized);
-    }
+    // slug -> { name, fromCatalog } eslemesi. Catalog'taki versiyon DAİMA korunur,
+    // DB'den gelen ayni slug zaten varsa atilir (Mersin Nur Turizm dedup edilir).
+    const bySlug = new Map();
+
+    const tryAdd = (rawName, fromCatalog) => {
+      const normalized = normalizeObiletOperatorName(rawName);
+      if (!normalized) return;
+      const key = baseSlug(normalized);
+      if (!key) return;
+      const existing = bySlug.get(key);
+      // Catalog'tan gelen DB'den gelene üstün gelir; iki catalog girisi varsa ilki kalir.
+      if (!existing || (fromCatalog && !existing.fromCatalog)) {
+        bySlug.set(key, { name: normalized, fromCatalog });
+      }
+    };
+
+    for (const name of OBILET_OPERATOR_CATALOG) tryAdd(name, true);
 
     const priceRows = db.prepare("SELECT DISTINCT operator FROM obilet_prices WHERE TRIM(operator) <> ''").all();
-    for (const row of priceRows) {
-      const normalized = normalizeObiletOperatorName(row.operator);
-      if (normalized) set.add(normalized);
-    }
+    for (const row of priceRows) tryAdd(row.operator, false);
 
     const targetRows = db.prepare("SELECT operators FROM obilet_targets WHERE TRIM(operators) <> ''").all();
     for (const row of targetRows) {
-      const items = parseCsvList(row.operators).map(normalizeObiletOperatorName).filter(Boolean);
-      for (const item of items) {
-        set.add(item);
-      }
+      for (const item of parseCsvList(row.operators)) tryAdd(item, false);
     }
 
-    const operators = Array.from(set).sort((a, b) => a.localeCompare(b, "tr-TR"));
+    const operators = Array.from(bySlug.values())
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b, "tr-TR"));
     res.json({ ok: true, operators });
   } catch (error) {
     res.status(500).json({ message: error.message || "Firma listesi alinamadi." });
