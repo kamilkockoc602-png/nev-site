@@ -21,6 +21,55 @@
         <div class="login-copy">
           <p class="eyebrow">Kamil Koc</p>
           <h1>Dogu Anadolu ve Cukurova Bolge Operasyon</h1>
+
+          <!-- Yol + otobus animasyonu -->
+          <div class="login-scene" aria-hidden="true">
+            <svg class="login-scene-svg" viewBox="0 0 360 160" xmlns="http://www.w3.org/2000/svg">
+              <!-- Dalgalanan yol cizgisi -->
+              <path class="road-path" d="M -20 130 Q 60 90, 140 120 T 300 110 T 400 130"
+                    fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                    stroke-dasharray="6 10" opacity="0.45"/>
+
+              <!-- Otobus (animasyonla yol uzerinde hareket eder) -->
+              <g class="bus-group">
+                <!-- Govde -->
+                <rect x="0" y="-22" width="56" height="22" rx="4" fill="#3dc2b2"/>
+                <rect x="2" y="-19" width="6" height="6" rx="1" fill="#ffffff" opacity="0.9"/>
+                <rect x="10" y="-19" width="6" height="6" rx="1" fill="#ffffff" opacity="0.7"/>
+                <rect x="18" y="-19" width="6" height="6" rx="1" fill="#ffffff" opacity="0.7"/>
+                <rect x="26" y="-19" width="6" height="6" rx="1" fill="#ffffff" opacity="0.7"/>
+                <rect x="34" y="-19" width="6" height="6" rx="1" fill="#ffffff" opacity="0.7"/>
+                <rect x="42" y="-19" width="10" height="6" rx="1" fill="#ffffff" opacity="0.9"/>
+                <!-- On panjur -->
+                <rect x="50" y="-10" width="6" height="3" rx="1" fill="#ffd166"/>
+                <!-- Tekerlekler -->
+                <circle class="wheel" cx="12" cy="0" r="4" fill="#0e1f2c" stroke="#3dc2b2" stroke-width="1"/>
+                <circle class="wheel" cx="44" cy="0" r="4" fill="#0e1f2c" stroke="#3dc2b2" stroke-width="1"/>
+              </g>
+
+              <!-- Arka plan sehir siluet -->
+              <g class="city-silhouette" opacity="0.18">
+                <rect x="20" y="60" width="14" height="50" fill="currentColor"/>
+                <rect x="36" y="40" width="18" height="70" fill="currentColor"/>
+                <polygon points="45,40 36,40 45,28 54,40" fill="currentColor"/>
+                <rect x="58" y="55" width="12" height="55" fill="currentColor"/>
+                <rect x="74" y="48" width="22" height="62" fill="currentColor"/>
+                <rect x="100" y="68" width="10" height="42" fill="currentColor"/>
+                <rect x="114" y="38" width="20" height="72" fill="currentColor"/>
+                <rect x="138" y="62" width="14" height="48" fill="currentColor"/>
+                <rect x="156" y="50" width="18" height="60" fill="currentColor"/>
+                <rect x="180" y="70" width="10" height="40" fill="currentColor"/>
+                <rect x="194" y="56" width="16" height="54" fill="currentColor"/>
+                <rect x="214" y="40" width="22" height="70" fill="currentColor"/>
+                <polygon points="225,40 214,40 225,30 236,40" fill="currentColor"/>
+                <rect x="240" y="64" width="14" height="46" fill="currentColor"/>
+                <rect x="258" y="48" width="20" height="62" fill="currentColor"/>
+                <rect x="282" y="58" width="14" height="52" fill="currentColor"/>
+                <rect x="300" y="42" width="22" height="68" fill="currentColor"/>
+                <rect x="326" y="62" width="12" height="48" fill="currentColor"/>
+              </g>
+            </svg>
+          </div>
         </div>
 
         <div class="login-orbit card">
@@ -29,12 +78,23 @@
             <form id="loginForm" class="form-stack login-form-stack" autocomplete="off">
               <label>
                 <span>Kullanici Adi</span>
-                <input id="loginUsername" type="text" placeholder="ornek: admin" required />
+                <input id="loginUsername" type="text" placeholder="ornek: admin" required autocomplete="username" />
               </label>
 
               <label>
                 <span>Sifre</span>
-                <input id="loginPassword" type="password" placeholder="Sifre" required />
+                <div class="password-field">
+                  <input id="loginPassword" type="password" placeholder="Sifre" required autocomplete="current-password" />
+                  <button type="button" id="loginPasswordToggle" class="password-toggle" aria-label="Sifreyi goster">
+                    <span class="pw-eye-on">👁</span>
+                    <span class="pw-eye-off" hidden>🙈</span>
+                  </button>
+                </div>
+              </label>
+
+              <label class="remember-me">
+                <input id="loginRemember" type="checkbox" />
+                <span>Beni hatirla (30 gun)</span>
               </label>
 
               <button type="submit" class="btn btn-primary">Giris Yap</button>

@@ -27,6 +27,8 @@ const dom = {
   loginForm: document.getElementById("loginForm"),
   loginUsername: document.getElementById("loginUsername"),
   loginPassword: document.getElementById("loginPassword"),
+  loginRemember: document.getElementById("loginRemember"),
+  loginPasswordToggle: document.getElementById("loginPasswordToggle"),
   loginMessage: document.getElementById("loginMessage"),
   menuList: document.getElementById("menuList"),
   contentCard: document.querySelector(".content"),
@@ -3007,12 +3009,54 @@ async function renderLoginLogs() {
   }
 }
 
+// "Beni hatirla" — kullanici adi local storage'da saklanir (sifre ASLA saklanmaz).
+const REMEMBERED_USER_KEY = "bus_remembered_username";
+
+// Sayfa acilinca eski kullanici adini doldur (varsa)
+(() => {
+  try {
+    const remembered = localStorage.getItem(REMEMBERED_USER_KEY);
+    if (remembered && dom.loginUsername && !dom.loginUsername.value) {
+      dom.loginUsername.value = remembered;
+      if (dom.loginRemember) dom.loginRemember.checked = true;
+      // Imleci sifre alanina otomatik tasi — UX
+      if (dom.loginPassword) setTimeout(() => dom.loginPassword.focus(), 100);
+    }
+  } catch { /* localStorage devre disi olabilir */ }
+})();
+
 dom.loginForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const username = dom.loginUsername.value.trim();
   const password = dom.loginPassword.value.trim();
+  // Beni hatirla isaretliyse kullanici adini sakla; isaretli degilse sil.
+  try {
+    if (dom.loginRemember?.checked) {
+      localStorage.setItem(REMEMBERED_USER_KEY, username);
+    } else {
+      localStorage.removeItem(REMEMBERED_USER_KEY);
+    }
+  } catch { /* sessiz gec */ }
   await handleLogin(username, password);
 });
+
+// Parola goster/gizle toggle
+if (dom.loginPasswordToggle && dom.loginPassword) {
+  dom.loginPasswordToggle.addEventListener("click", () => {
+    const isPwd = dom.loginPassword.type === "password";
+    dom.loginPassword.type = isPwd ? "text" : "password";
+    dom.loginPasswordToggle.setAttribute(
+      "aria-label",
+      isPwd ? "Sifreyi gizle" : "Sifreyi goster"
+    );
+    const eyeOn = dom.loginPasswordToggle.querySelector(".pw-eye-on");
+    const eyeOff = dom.loginPasswordToggle.querySelector(".pw-eye-off");
+    if (eyeOn && eyeOff) {
+      eyeOn.hidden = isPwd;
+      eyeOff.hidden = !isPwd;
+    }
+  });
+}
 
 dom.logoutBtn.addEventListener("click", async () => {
   await handleLogout();
