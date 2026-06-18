@@ -110,9 +110,23 @@
         <div class="sidebar-brand">
           <h2>KAMILKOC</h2>
           <p class="sidebar-brand-subtitle">Fiyat Planning</p>
-          <div class="sidebar-brand-meta">
-            <span class="sidebar-brand-dot" aria-hidden="true"></span>
-            <p class="subtle" id="currentUserLabel"></p>
+        </div>
+
+        <!-- Zenginlestirilmis kullanici karti -->
+        <div id="sidebarUserCard" class="sidebar-user-card">
+          <div class="sidebar-user-head">
+            <div id="sidebarUserAvatar" class="sidebar-user-avatar" aria-hidden="true">?</div>
+            <div class="sidebar-user-info">
+              <p id="sidebarUserName" class="sidebar-user-name">—</p>
+              <p id="sidebarUserRole" class="sidebar-user-role subtle">—</p>
+            </div>
+            <span class="sidebar-user-status" title="Cevrimici" aria-hidden="true"></span>
+          </div>
+          <div class="sidebar-user-meta">
+            <span class="sidebar-user-meta-item" id="sidebarUserSession">
+              <span aria-hidden="true">📅</span>
+              <span id="sidebarUserSessionText">Oturum aktif</span>
+            </span>
           </div>
         </div>
 
@@ -125,8 +139,12 @@
 
       <section class="content card slide-in-right">
         <header class="content-head">
-          <h3 id="activeTitle">Panel</h3>
+          <div class="content-head-main">
+            <h3 id="activeTitle">Panel</h3>
+            <p id="activeSubtitle" class="subtle content-head-subtitle"></p>
+          </div>
           <div class="head-actions">
+            <span id="contentHeadStat" class="content-head-stat hidden" aria-live="polite"></span>
             <button id="themeToggleBtn" class="theme-switch" type="button" aria-label="Tema degistir">
               <span id="themeLabel" class="theme-label">Acik</span>
               <span class="theme-track">
@@ -150,30 +168,82 @@
         </div>
 
         <div id="panelDashboard" class="panel-block" data-menu="dashboard">
-          <div class="stats-grid">
-            <article>
-              <h4>Yuklenen Tek Yon Fiyatlar</h4>
-              <p id="avgFare">0 satir</p>
+          <!-- Hosgeldin baligi (saat-bazli selam) -->
+          <div class="dash-hero">
+            <div>
+              <p id="dashGreeting" class="dash-greeting">Merhaba</p>
+              <h3 id="dashTitle">Bugun ne oluyor?</h3>
+            </div>
+            <p id="dashGeneratedAt" class="subtle dash-generated">—</p>
+          </div>
+
+          <!-- 4'lu ana stat kartlari -->
+          <div class="dash-kpi-grid">
+            <article class="dash-kpi dash-kpi-active">
+              <div class="dash-kpi-icon">🚌</div>
+              <div class="dash-kpi-body">
+                <p class="dash-kpi-label">Aktif Hat</p>
+                <p class="dash-kpi-value" id="dashActiveTargets">—</p>
+                <p class="dash-kpi-sub" id="dashTotalJourneys">— sefer izleniyor</p>
+              </div>
             </article>
-            <article>
-              <h4>Yuklenen Gidis-Donus Fiyatlar</h4>
-              <p id="totalRoutes">0 satir</p>
+            <article class="dash-kpi dash-kpi-changes">
+              <div class="dash-kpi-icon">🔄</div>
+              <div class="dash-kpi-body">
+                <p class="dash-kpi-label">Bugunku Degisiklik</p>
+                <p class="dash-kpi-value" id="dashTodayChanges">—</p>
+                <p class="dash-kpi-sub" id="dash24hChanges">Son 24 saatte —</p>
+              </div>
             </article>
-            <article>
-              <h4>Toplam Yuklenen Fiyatlar</h4>
-              <p id="updateCount">0 satir</p>
+            <article class="dash-kpi dash-kpi-biggest">
+              <div class="dash-kpi-icon">🚨</div>
+              <div class="dash-kpi-body">
+                <p class="dash-kpi-label">En Buyuk Degisim</p>
+                <p class="dash-kpi-value" id="dashBiggestAmount">—</p>
+                <p class="dash-kpi-sub" id="dashBiggestDetail">Bugun degisim yok</p>
+              </div>
+            </article>
+            <article class="dash-kpi dash-kpi-top">
+              <div class="dash-kpi-icon">🔥</div>
+              <div class="dash-kpi-body">
+                <p class="dash-kpi-label">En Aktif Rakip (30g)</p>
+                <p class="dash-kpi-value dash-kpi-value-sm" id="dashTopOperator">—</p>
+                <p class="dash-kpi-sub" id="dashTopOperatorCount">—</p>
+              </div>
             </article>
           </div>
-          <p id="lastPriceUpdate" class="subtle" style="margin-top: 0.8rem;"></p>
 
-          <section class="dashboard-expired-wrap">
-            <div class="dashboard-expired-head">
-              <h4>Tarihi Gecen Fiyatlar</h4>
-              <span id="expiredUploadsCount" class="dashboard-expired-count">0</span>
-            </div>
-            <p id="expiredUploadsEmpty" class="subtle">Tarihi gecmis fiyat kaydi yok.</p>
-            <ul id="expiredUploadsList" class="dashboard-expired-list"></ul>
-          </section>
+          <!-- Trend grafigi + Son bildirimler iki sutun -->
+          <div class="dash-split">
+            <section class="dash-card">
+              <div class="dash-card-head">
+                <h4>📈 Son 7 Gun Trendi</h4>
+                <p class="subtle" id="dashTrendSummary">—</p>
+              </div>
+              <div id="dashTrendChart" class="dash-trend-chart"></div>
+            </section>
+
+            <section class="dash-card">
+              <div class="dash-card-head">
+                <h4>🔔 Son Bildirimler</h4>
+                <a href="#" id="dashAllNotifsLink" class="dash-card-link">Tumunu Gor</a>
+              </div>
+              <div id="dashNotifList" class="dash-notif-list">
+                <p class="subtle">Yukleniyor...</p>
+              </div>
+            </section>
+          </div>
+
+          <!-- Eski tarife stat bilgileri (corumlu form icin gizli ama veri dolu durur) -->
+          <div class="dash-legacy-stats hidden">
+            <p id="avgFare">0</p>
+            <p id="totalRoutes">0</p>
+            <p id="updateCount">0</p>
+            <p id="lastPriceUpdate"></p>
+            <span id="expiredUploadsCount">0</span>
+            <p id="expiredUploadsEmpty"></p>
+            <ul id="expiredUploadsList"></ul>
+          </div>
         </div>
 
         <div id="panelRoutes" class="panel-block hidden" data-menu="routes">

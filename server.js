@@ -5473,6 +5473,106 @@ app.get("/api/obilet/price-history", requireAuth, (req, res) => {
   }
 });
 
+// API: Genel Panel dashboard ozeti — tek call'da tum kartlar icin veri.
+app.get("/api/obilet/dashboard-summary", requireAuth, (req, res) => {
+  try {
+    // DD.MM.YYYY HH:mm:ss formatindaki changed_at'i ISO formatina ceviren SQL ifadesi.
+    // SQLite'da substr ile parse — Istanbul timezone tutarli.
+    const changedAtToISO = `
+      (substr(changed_at, 7, 4) || '-' ||
+       substr(changed_at, 4, 2) || '-' ||
+       substr(changed_at, 1, 2) || 'T' ||
+       substr(changed_at, 12, 8))
+    `;
+
+    // Aktif hat sayisi
+    const activeTargets = db.prepare(
+      "SELECT COUNT(*) AS c FROM obilet_targets WHERE is_active = 1"
+    ).get();
+
+    // Bugunku degisiklikler (Istanbul local "DD.MM.YYYY" prefix ile)
+    const today = todayIsoInIstanbul(); // "2026-06-17"
+    const todayDot = today.split("-").reverse().join(".");
+    const todayChanges = db.prepare(
+      "SELECT COUNT(*) AS c FROM obilet_price_history WHERE substr(changed_at, 1, 10) = ?"
+    ).get(todayDot);
+
+    // Son 24 saat degisiklik sayisi (Istanbul'da "now - 24h" ISO uretip karsilastir)
+    const last24Cutoff = new Date(Date.now() - 24 * 3600 * 1000)
+      .toLocaleString("sv-SE", { timeZone: "Europe/Istanbul" })
+      .replace(" ", "T");
+    const last24Changes = db.prepare(
+      `SELECT COUNT(*) AS c FROM obilet_price_history WHERE ${changedAtToISO} >= ?`
+    ).get(last24Cutoff);
+
+    // Bugunun en buyuk fiyat degisikligi
+    const biggestToday = db.prepare(
+      `SELECT origin, destination, operator, departure_time, journey_date,
+              old_price, new_price, changed_at
+         FROM obilet_price_history
+        WHERE substr(changed_at, 1, 10) = ?
+        ORDER BY ABS(new_price - old_price) DESC
+        LIMIT 1`
+    ).get(todayDot);
+
+    // En aktif rakip firma (son 30 gun)
+    const cutoff30 = new Date(Date.now() - 30 * 24 * 3600 * 1000)
+      .toLocaleString("sv-SE", { timeZone: "Europe/Istanbul" })
+      .replace(" ", "T");
+    const topOperator = db.prepare(
+      `SELECT operator, COUNT(*) AS c
+         FROM obilet_price_history
+        WHERE ${changedAtToISO} >= ?
+        GROUP BY operator
+        ORDER BY c DESC
+        LIMIT 1`
+    ).get(cutoff30);
+
+    // Son 7 gunun gunluk degisim sayisi (sparkline icin)
+    const sevenDays = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const isoDate = d.toLocaleDateString("en-CA", { timeZone: "Europe/Istanbul" });
+      const dotDate = isoDate.split("-").reverse().join(".");
+      const row = db.prepare(
+        "SELECT COUNT(*) AS c FROM obilet_price_history WHERE substr(changed_at, 1, 10) = ?"
+      ).get(dotDate);
+      sevenDays.push({ date: isoDate, count: row.c });
+    }
+
+    // Toplam izlenen sefer sayisi (anlik snapshot)
+    const totalJourneys = db.prepare(
+      "SELECT COUNT(*) AS c FROM obilet_prices"
+    ).get();
+
+    // Son 5 bildirim
+    const recentNotifs = db.prepare(
+      `SELECT id, username, message, created_at, is_read
+         FROM pricing_notifications
+        ORDER BY id DESC
+        LIMIT 5`
+    ).all();
+
+    res.json({
+      ok: true,
+      summary: {
+        activeTargets: activeTargets.c,
+        todayChanges: todayChanges.c,
+        last24hChanges: last24Changes.c,
+        totalJourneys: totalJourneys.c,
+        biggestToday,
+        topOperator,
+        sevenDays,
+        recentNotifs,
+        generatedAt: nowStamp(),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Dashboard verisi alinamadi." });
+  }
+});
+
 // API: Tek bir seferin (operator + saat + hat) tum fiyat gecmisini getir + ozet stats.
 // Drilldown sidebar icin kullanilir.
 app.get("/api/obilet/price-history/journey-detail", requireAuth, (req, res) => {

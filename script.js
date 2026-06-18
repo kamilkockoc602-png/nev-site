@@ -35,6 +35,27 @@ const dom = {
   activeTitle: document.getElementById("activeTitle"),
   logoutBtn: document.getElementById("logoutBtn"),
   currentUserLabel: document.getElementById("currentUserLabel"),
+  sidebarUserAvatar: document.getElementById("sidebarUserAvatar"),
+  sidebarUserName: document.getElementById("sidebarUserName"),
+  sidebarUserRole: document.getElementById("sidebarUserRole"),
+  sidebarUserSessionText: document.getElementById("sidebarUserSessionText"),
+  activeSubtitle: document.getElementById("activeSubtitle"),
+  contentHeadStat: document.getElementById("contentHeadStat"),
+  dashGreeting: document.getElementById("dashGreeting"),
+  dashTitle: document.getElementById("dashTitle"),
+  dashGeneratedAt: document.getElementById("dashGeneratedAt"),
+  dashActiveTargets: document.getElementById("dashActiveTargets"),
+  dashTotalJourneys: document.getElementById("dashTotalJourneys"),
+  dashTodayChanges: document.getElementById("dashTodayChanges"),
+  dash24hChanges: document.getElementById("dash24hChanges"),
+  dashBiggestAmount: document.getElementById("dashBiggestAmount"),
+  dashBiggestDetail: document.getElementById("dashBiggestDetail"),
+  dashTopOperator: document.getElementById("dashTopOperator"),
+  dashTopOperatorCount: document.getElementById("dashTopOperatorCount"),
+  dashTrendSummary: document.getElementById("dashTrendSummary"),
+  dashTrendChart: document.getElementById("dashTrendChart"),
+  dashNotifList: document.getElementById("dashNotifList"),
+  dashAllNotifsLink: document.getElementById("dashAllNotifsLink"),
   permissionAdminArea: document.getElementById("permissionAdminArea"),
   loginLogsArea: document.getElementById("loginLogsArea"),
   templateRow: document.getElementById("userRowTemplate"),
@@ -1323,13 +1344,214 @@ function render() {
 
   dom.loginView.classList.remove("active");
   dom.portalView.classList.add("active");
-  dom.currentUserLabel.textContent = `Aktif: ${state.currentUser.username}${
-    state.currentUser.isAdmin ? " (Admin)" : ""
-  }`;
 
+  // Eski currentUserLabel (varsa hala bos durur)
+  if (dom.currentUserLabel) {
+    dom.currentUserLabel.textContent = "";
+  }
+
+  renderSidebarUserCard();
   renderMenu(state.currentUser);
   const first = availableMenus(state.currentUser)[0]?.key || "dashboard";
   activatePanel(first);
+}
+
+// ===== Sidebar user card =====
+function renderSidebarUserCard() {
+  if (!state.currentUser) return;
+  const u = state.currentUser;
+  const fullName = u.fullName || u.username || "Kullanıcı";
+
+  if (dom.sidebarUserName) dom.sidebarUserName.textContent = fullName;
+  if (dom.sidebarUserRole) {
+    const roleParts = [];
+    if (u.isAdmin) roleParts.push("Admin");
+    if (u.role) roleParts.push(u.role);
+    if (u.title) roleParts.push(u.title);
+    dom.sidebarUserRole.textContent = roleParts.length ? roleParts.join(" · ") : "Kullanıcı";
+  }
+
+  // Initials avatar: ad ve soyaddan al
+  if (dom.sidebarUserAvatar) {
+    const parts = String(fullName).replace(/\./g, " ").split(/\s+/).filter(Boolean);
+    let initials = "?";
+    if (parts.length >= 2) initials = (parts[0][0] + parts[1][0]).toUpperCase();
+    else if (parts.length === 1) initials = parts[0].slice(0, 2).toUpperCase();
+    dom.sidebarUserAvatar.textContent = initials;
+  }
+
+  if (dom.sidebarUserSessionText) {
+    dom.sidebarUserSessionText.textContent = `Oturum: şimdi`;
+  }
+}
+
+// ===== Content header (alt başlık + sağ chip) =====
+function setContentHeader(opts) {
+  const { title, subtitle, stat } = opts || {};
+  if (title && dom.activeTitle) dom.activeTitle.textContent = title;
+  if (dom.activeSubtitle) dom.activeSubtitle.textContent = subtitle || "";
+  if (dom.contentHeadStat) {
+    if (stat) {
+      dom.contentHeadStat.textContent = stat;
+      dom.contentHeadStat.classList.remove("hidden");
+    } else {
+      dom.contentHeadStat.classList.add("hidden");
+      dom.contentHeadStat.textContent = "";
+    }
+  }
+}
+
+// ===== Göreli zaman ("2dk önce") =====
+function relativeTime(input) {
+  // input: "DD.MM.YYYY HH:mm:ss" Istanbul-local
+  const m = String(input || "").match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
+  if (!m) return input || "";
+  const past = new Date(`${m[3]}-${m[2]}-${m[1]}T${m[4]}:${m[5]}:${m[6]}`).getTime();
+  const diffSec = Math.floor((Date.now() - past) / 1000);
+  if (diffSec < 60) return "az önce";
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} dk önce`;
+  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)} saat önce`;
+  const days = Math.floor(diffSec / 86400);
+  if (days < 7) return `${days} gün önce`;
+  return input;
+}
+
+// ===== Saat-bazlı selamlama =====
+function timeBasedGreeting() {
+  const h = new Date().getHours();
+  if (h >= 6 && h < 12) return "Günaydın 👋";
+  if (h >= 12 && h < 18) return "İyi günler ☀️";
+  if (h >= 18 && h < 24) return "İyi akşamlar 🌆";
+  return "İyi geceler 🌙";
+}
+
+// ===== Dashboard: backend'den çek ve render et =====
+async function loadDashboardSummary() {
+  try {
+    const data = await apiFetch("/api/obilet/dashboard-summary");
+    renderDashboardSummary(data?.summary || null);
+  } catch (err) {
+    if (dom.dashNotifList) {
+      dom.dashNotifList.innerHTML = `<p class="subtle">Veri alınamadı: ${err.message}</p>`;
+    }
+  }
+}
+
+function renderDashboardSummary(s) {
+  if (!s) return;
+
+  // Hero
+  if (dom.dashGreeting) {
+    const greet = timeBasedGreeting();
+    const name = state.currentUser?.fullName || state.currentUser?.username || "";
+    dom.dashGreeting.textContent = name ? `${greet}, ${name}` : greet;
+  }
+  if (dom.dashGeneratedAt) {
+    dom.dashGeneratedAt.textContent = `Son güncelleme: ${s.generatedAt || "-"}`;
+  }
+
+  // KPI 1 — Aktif hat
+  if (dom.dashActiveTargets) dom.dashActiveTargets.textContent = s.activeTargets ?? 0;
+  if (dom.dashTotalJourneys) {
+    dom.dashTotalJourneys.textContent = `${s.totalJourneys || 0} sefer izleniyor`;
+  }
+
+  // KPI 2 — Bugün ve son 24 saat
+  if (dom.dashTodayChanges) dom.dashTodayChanges.textContent = s.todayChanges ?? 0;
+  if (dom.dash24hChanges) {
+    dom.dash24hChanges.textContent = `Son 24 saatte ${s.last24hChanges ?? 0} değişiklik`;
+  }
+
+  // KPI 3 — En büyük değişim
+  if (s.biggestToday) {
+    const b = s.biggestToday;
+    const diff = b.new_price - b.old_price;
+    const arrow = diff > 0 ? "▲" : diff < 0 ? "▼" : "•";
+    const color = diff > 0 ? "#27ae60" : diff < 0 ? "#d32f2f" : "#999";
+    if (dom.dashBiggestAmount) {
+      dom.dashBiggestAmount.textContent = `${arrow} ${Math.abs(diff)} TL`;
+      dom.dashBiggestAmount.style.color = color;
+    }
+    if (dom.dashBiggestDetail) {
+      const route = `${(b.origin || "").toUpperCase()} → ${(b.destination || "").toUpperCase()}`;
+      dom.dashBiggestDetail.textContent = `${b.operator} ${b.departure_time} · ${route}`;
+    }
+  } else {
+    if (dom.dashBiggestAmount) {
+      dom.dashBiggestAmount.textContent = "—";
+      dom.dashBiggestAmount.style.color = "";
+    }
+    if (dom.dashBiggestDetail) dom.dashBiggestDetail.textContent = "Bugün değişiklik yok";
+  }
+
+  // KPI 4 — En aktif rakip
+  if (s.topOperator) {
+    if (dom.dashTopOperator) dom.dashTopOperator.textContent = s.topOperator.operator || "—";
+    if (dom.dashTopOperatorCount) {
+      dom.dashTopOperatorCount.textContent = `${s.topOperator.c || 0} değişiklik`;
+    }
+  } else {
+    if (dom.dashTopOperator) dom.dashTopOperator.textContent = "—";
+    if (dom.dashTopOperatorCount) dom.dashTopOperatorCount.textContent = "Veri yok";
+  }
+
+  // Trend chart (SVG line)
+  if (dom.dashTrendChart) {
+    const days = Array.isArray(s.sevenDays) ? s.sevenDays : [];
+    dom.dashTrendChart.innerHTML = renderDashTrendSVG(days);
+    if (dom.dashTrendSummary) {
+      const total = days.reduce((a, d) => a + (d.count || 0), 0);
+      dom.dashTrendSummary.textContent = `Toplam ${total} değişiklik`;
+    }
+  }
+
+  // Notifikasyonlar
+  if (dom.dashNotifList) {
+    const notifs = Array.isArray(s.recentNotifs) ? s.recentNotifs : [];
+    if (!notifs.length) {
+      dom.dashNotifList.innerHTML = `<p class="subtle">Henüz bildirim yok.</p>`;
+    } else {
+      const escape = (s) => String(s || "").replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      })[c]);
+      dom.dashNotifList.innerHTML = notifs.map(n => `
+        <div class="dash-notif-item ${n.is_read ? "" : "unread"}">
+          <p class="dash-notif-msg">${escape(n.message)}</p>
+          <p class="dash-notif-time">${relativeTime(n.created_at)}</p>
+        </div>
+      `).join("");
+    }
+  }
+}
+
+// Mini SVG line chart — 7 gün trend
+function renderDashTrendSVG(days) {
+  if (!days.length) return `<p class="subtle">Yeterli veri yok.</p>`;
+  const W = 540, H = 130, P = 24;
+  const counts = days.map(d => d.count || 0);
+  const maxC = Math.max(1, ...counts);
+  const xStep = (W - 2 * P) / Math.max(1, days.length - 1);
+  const yScale = (c) => H - P - (c / maxC) * (H - 2 * P);
+  const pts = days.map((d, i) => `${P + i * xStep},${yScale(d.count || 0)}`);
+  const polyline = pts.join(" ");
+  const areaPath = `${P},${H - P} ${polyline} ${P + (days.length - 1) * xStep},${H - P}`;
+  const circles = days.map((d, i) => {
+    const cx = P + i * xStep;
+    const cy = yScale(d.count || 0);
+    const dayLabel = d.date ? d.date.slice(8) : "";
+    return `<g>
+      <circle cx="${cx}" cy="${cy}" r="3.5" fill="#3dc2b2" />
+      <text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.6">${dayLabel}</text>
+      <text x="${cx}" y="${cy - 8}" text-anchor="middle" font-size="10" fill="currentColor" opacity="0.85" font-weight="600">${d.count || 0}</text>
+    </g>`;
+  }).join("");
+  return `
+    <svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="width:100%;height:auto;">
+      <polygon points="${areaPath}" fill="rgba(61, 194, 178, 0.15)" stroke="none" />
+      <polyline points="${polyline}" fill="none" stroke="#3dc2b2" stroke-width="2" />
+      ${circles}
+    </svg>
+  `;
 }
 
 function renderPrices() {
@@ -2623,7 +2845,27 @@ async function activatePanel(menuKey) {
   }
 
   const current = MENUS.find((m) => m.key === menuKey);
-  dom.activeTitle.textContent = current ? current.label : "Panel";
+  const title = current ? current.label : "Panel";
+
+  // Her menu icin alt baslik tanimla (sayfa kapsami bir bakista anlasilsin)
+  const SUBTITLES = {
+    dashboard: "Bugünün özetini ve son hareketleri tek bakışta görün",
+    routes: "Bakanlık tarife verisi - hat ve fiyat sorgulama",
+    pricing: "Tek yön / gidiş-dönüş fiyat dosyalarını yükleyin",
+    oneway: "Yüklenen tek yön fiyatlarını görüntüleyin",
+    reporting: "oBilet üzerinde tespit edilen fiyat değişikliklerinin geçmişi",
+    oneops: "Hatalı işlem bildirimleri ve fotoğraf kayıtları",
+    obilet: "Rakip otobüs firmalarının fiyatlarını otomatik takip edin",
+    ocr: "Fotoğraftan otomatik tablo çıkarımı",
+    permissions: "Kullanıcı yetki yönetimi",
+    logs: "Sistem giriş ve oturum kayıtları",
+  };
+  setContentHeader({ title, subtitle: SUBTITLES[menuKey] || "" });
+
+  // Dashboard verisi yukle
+  if (menuKey === "dashboard") {
+    loadDashboardSummary().catch(() => null);
+  }
 
   if (menuKey === "permissions") {
     renderAdminPermissions();
@@ -3061,6 +3303,14 @@ if (dom.loginPasswordToggle && dom.loginPassword) {
 dom.logoutBtn.addEventListener("click", async () => {
   await handleLogout();
 });
+
+// Dashboard "Tümünü Gör" linki → bildirim panelini aç
+if (dom.dashAllNotifsLink) {
+  dom.dashAllNotifsLink.addEventListener("click", (e) => {
+    e.preventDefault();
+    if (dom.notifBtn) dom.notifBtn.click();
+  });
+}
 
 dom.notifBtn.addEventListener("click", async () => {
   const willOpen = dom.notifPanel.classList.contains("hidden");
