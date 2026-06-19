@@ -3963,15 +3963,23 @@ function generateCSV(prices, target) {
 const priceHistoryState = {
   rows: [],
   lastQuery: null,
-  sortKey: "changed_at",   // default
-  sortDir: "desc",          // asc | desc
-  targets: [],              // hat dropdown ve hat kartlari icin
+  sortKey: "changed_at",
+  sortDir: "desc",
+  targets: [],
   targetsById: {},
+  total: 0,
+  offset: 0,
+  limit: 1000,
 };
 
-async function loadPriceHistory() {
+async function loadPriceHistory(append = false) {
   if (!dom.phTableBody) return;
-  if (dom.phStatusMsg) dom.phStatusMsg.textContent = "Veri yükleniyor...";
+  if (dom.phStatusMsg) dom.phStatusMsg.textContent = append ? "Daha fazla yükleniyor..." : "Veri yükleniyor...";
+
+  if (!append) {
+    priceHistoryState.offset = 0;
+    priceHistoryState.rows = [];
+  }
 
   const params = new URLSearchParams();
   const targetId = dom.phTargetSelect?.value || "";
@@ -3982,20 +3990,41 @@ async function loadPriceHistory() {
   if (from) params.set("from", from);
   if (to) params.set("to", to);
   if (search) params.set("search", search);
-  params.set("limit", "1000");
+  params.set("limit", String(priceHistoryState.limit));
+  params.set("offset", String(priceHistoryState.offset));
 
   try {
     const data = await apiFetch(`/api/obilet/price-history?${params.toString()}`);
-    priceHistoryState.rows = Array.isArray(data?.history) ? data.history : [];
+    const incoming = Array.isArray(data?.history) ? data.history : [];
+    priceHistoryState.rows = append ? [...priceHistoryState.rows, ...incoming] : incoming;
+    priceHistoryState.total = data?.total ?? priceHistoryState.rows.length;
+    priceHistoryState.offset += incoming.length;
     renderPriceHistory();
     if (dom.phStatusMsg) {
-      dom.phStatusMsg.textContent = priceHistoryState.rows.length
-        ? `${priceHistoryState.rows.length} kayıt bulundu.`
-        : "Filtreye uygun kayıt yok.";
+      if (priceHistoryState.rows.length === 0) {
+        dom.phStatusMsg.textContent = "Filtreye uygun kayıt yok.";
+      } else {
+        const remaining = priceHistoryState.total - priceHistoryState.rows.length;
+        dom.phStatusMsg.textContent = `${priceHistoryState.rows.length} / ${priceHistoryState.total} kayıt gösteriliyor.${remaining > 0 ? ` (${remaining} kayıt daha var)` : ""}`;
+      }
     }
+    renderPhLoadMoreBtn();
   } catch (err) {
     if (dom.phStatusMsg) dom.phStatusMsg.textContent = `Hata: ${err.message}`;
   }
+}
+
+function renderPhLoadMoreBtn() {
+  const existing = document.getElementById("phLoadMoreBtn");
+  const hasMore = priceHistoryState.rows.length < priceHistoryState.total;
+  if (existing) existing.remove();
+  if (!hasMore || !dom.phTableBody) return;
+  const wrap = document.createElement("div");
+  wrap.style.cssText = "margin-top:.75rem;display:flex;gap:.5rem;align-items:center;";
+  const remaining = priceHistoryState.total - priceHistoryState.rows.length;
+  wrap.innerHTML = `<button id="phLoadMoreBtn" class="btn btn-ghost" type="button">+ ${Math.min(remaining, priceHistoryState.limit)} kayıt daha yükle</button><span class="subtle" style="font-size:.85rem;">${remaining} kayıt kaldı</span>`;
+  dom.phTableBody.closest("table").after(wrap);
+  wrap.querySelector("#phLoadMoreBtn").addEventListener("click", () => loadPriceHistory(true));
 }
 
 function phEscape(s) {

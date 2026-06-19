@@ -5443,7 +5443,8 @@ app.get("/api/obilet/price-history", requireAuth, (req, res) => {
     const fromDate = String(req.query.from || "").trim();
     const toDate = String(req.query.to || "").trim();
     const search = String(req.query.search || "").trim().toLowerCase();
-    const limit = Math.min(parseInt(req.query.limit || "500", 10) || 500, 5000);
+    const limit = Math.min(parseInt(req.query.limit || "1000", 10) || 1000, 2000);
+    const offset = Math.max(parseInt(req.query.offset || "0", 10) || 0, 0);
 
     const conditions = [];
     const params = [];
@@ -5462,15 +5463,16 @@ app.get("/api/obilet/price-history", requireAuth, (req, res) => {
     }
 
     const whereSql = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const total = db.prepare(`SELECT COUNT(*) AS c FROM obilet_price_history ${whereSql}`).get(...params).c;
     const sql = `
       SELECT id, target_id, origin, destination, journey_date, operator,
              departure_time, departure_stop, old_price, new_price, changed_at, detected_by
         FROM obilet_price_history
         ${whereSql}
        ORDER BY id DESC
-       LIMIT ?
+       LIMIT ? OFFSET ?
     `;
-    let rows = db.prepare(sql).all(...params, limit);
+    let rows = db.prepare(sql).all(...params, limit, offset);
 
     // Search'u SQL'de yapmadık (LIKE turkce karakterlerle zayif). JS tarafinda filtrele.
     if (search) {
@@ -5482,7 +5484,7 @@ app.get("/api/obilet/price-history", requireAuth, (req, res) => {
       );
     }
 
-    res.json({ ok: true, count: rows.length, history: rows });
+    res.json({ ok: true, count: rows.length, total, offset, limit, history: rows });
   } catch (error) {
     res.status(500).json({ message: error.message || "Geçmiş alınamadı." });
   }
