@@ -4207,6 +4207,11 @@ function renderPriceHistoryRouteCards() {
         <header class="ph-route-card-head">
           <span class="ph-route-icon">🚌</span>
           <h5>${phEscape((g.origin || "").toUpperCase())} → ${phEscape((g.destination || "").toUpperCase())}</h5>
+          <button class="btn btn-small btn-ghost ph-route-excel-btn" type="button"
+            data-target-id="${g.target_id}"
+            data-origin="${phEscape(g.origin || "")}"
+            data-destination="${phEscape(g.destination || "")}"
+            title="Bu hattı Excel'e aktar">📥</button>
         </header>
         <div class="ph-route-card-grid">
           <div><span class="ph-rc-label">Değişiklik</span><span class="ph-rc-value">${g.total}</span></div>
@@ -4220,7 +4225,8 @@ function renderPriceHistoryRouteCards() {
   }).join("");
 
   dom.phRouteCards.querySelectorAll(".ph-route-card").forEach(card => {
-    card.addEventListener("click", () => {
+    card.addEventListener("click", (e) => {
+      if (e.target.closest(".ph-route-excel-btn")) return;
       const tid = card.dataset.targetId;
       if (dom.phTargetSelect && tid) {
         dom.phTargetSelect.value = tid;
@@ -4228,6 +4234,68 @@ function renderPriceHistoryRouteCards() {
       }
     });
   });
+
+  dom.phRouteCards.querySelectorAll(".ph-route-excel-btn").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      exportRouteToExcel(btn.dataset.targetId, btn.dataset.origin, btn.dataset.destination);
+    });
+  });
+}
+
+function exportRouteToExcel(targetId, origin, destination) {
+  const all = priceHistoryState.rows;
+  const rows = targetId
+    ? all.filter(r => String(r.target_id) === String(targetId))
+    : all;
+
+  if (!rows.length) {
+    alert("Bu hat için aktarılacak kayıt yok.");
+    return;
+  }
+
+  const toDot = (iso) => {
+    const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return m ? `${m[3]}.${m[2]}.${m[1]}` : iso || "";
+  };
+
+  const sheetData = [
+    ["Tespit Zamanı", "Kalkış", "Varış", "Sefer Tarihi", "Saat", "Firma", "Kalkış Durağı", "Eski Fiyat (TL)", "Yeni Fiyat (TL)", "Fark (TL)", "Durum"],
+    ...rows.map(r => {
+      const diff = r.new_price - r.old_price;
+      return [
+        r.changed_at || "",
+        r.origin || "",
+        r.destination || "",
+        toDot(r.journey_date),
+        r.departure_time || "",
+        r.operator || "",
+        r.departure_stop || "",
+        Number(r.old_price) || 0,
+        Number(r.new_price) || 0,
+        diff,
+        diff > 0 ? "ARTIŞ" : diff < 0 ? "DÜŞÜŞ" : "DEĞİŞİM YOK",
+      ];
+    }),
+  ];
+
+  const XLSX = window.XLSX;
+  if (!XLSX) { alert("Excel kütüphanesi yüklenemedi."); return; }
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+  // Sütun genişlikleri
+  ws["!cols"] = [
+    { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 8 },
+    { wch: 28 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 10 }, { wch: 12 },
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, "Fiyat Degisiklikleri");
+
+  const routeSlug = `${(origin || "").replace(/\s+/g, "-")}-${(destination || "").replace(/\s+/g, "-")}`.toLocaleLowerCase("tr-TR");
+  const dateStr = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, `fiyat-degisiklik_${routeSlug}_${dateStr}.xlsx`);
 }
 
 // =====================
