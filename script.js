@@ -3133,22 +3133,34 @@ function openUpdateEditor(userId) {
   wrap.className = "admin-card";
   wrap.innerHTML = `
     <h5>${user.username} - Kullanici Guncelle</h5>
-    <div class="inline-form" style="grid-template-columns: 1fr 1fr 1fr auto;">
+    <div class="inline-form" style="grid-template-columns: 1fr 1fr; gap: 0.7rem;">
       <label>
         <span>Kullanici Adi</span>
-        <input id="editUsername" type="text" value="${user.username}" />
+        <input id="editUsername" type="text" value="${escapeHtml(user.username)}" />
       </label>
       <label>
         <span>Yeni Sifre (opsiyonel)</span>
         <input id="editPassword" type="password" placeholder="Bos birakirsan degismez" />
       </label>
+      <label>
+        <span>Ad Soyad</span>
+        <input id="editFullName" type="text" value="${escapeHtml(user.fullName || "")}" placeholder="Ornek: Ersan Bildirici" />
+      </label>
+      <label>
+        <span>Unvan / Rol (sidebar'da gorunur)</span>
+        <input id="editRole" type="text" value="${escapeHtml(user.role || "")}" placeholder="Ornek: Bölge Operasyon Uzmanı" />
+      </label>
+      <label>
+        <span>Gorevi (opsiyonel ek bilgi)</span>
+        <input id="editTitle" type="text" value="${escapeHtml(user.title || "")}" placeholder="Ornek: Dogu Anadolu" />
+      </label>
       <label class="checkbox-row" style="align-self:center;">
         <input id="editActive" type="checkbox" ${user.isActive ? "checked" : ""} /> Hesap aktif
       </label>
-      <button class="btn btn-primary" id="saveUserBtn">Kaydet</button>
     </div>
     <p class="field-hint">Sifre alanini bos birakirsan mevcut sifre korunur.</p>
-    <div class="actions">
+    <div class="actions" style="margin-top:.6rem;">
+      <button class="btn btn-primary" id="saveUserBtn">Kaydet</button>
       <button class="btn btn-ghost" id="cancelUserBtn">Kapat</button>
     </div>
   `;
@@ -3160,8 +3172,11 @@ function openUpdateEditor(userId) {
   wrap.querySelector("#saveUserBtn").addEventListener("click", async () => {
     const username = wrap.querySelector("#editUsername").value.trim();
     const password = wrap.querySelector("#editPassword").value.trim();
+    const fullName = wrap.querySelector("#editFullName").value.trim();
+    const role = wrap.querySelector("#editRole").value.trim();
+    const title = wrap.querySelector("#editTitle").value.trim();
     const isActive = wrap.querySelector("#editActive").checked;
-    await updateUser(userId, { username, password, isActive });
+    await updateUser(userId, { username, password, fullName, role, title, isActive });
     wrap.remove();
   });
 }

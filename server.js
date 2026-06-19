@@ -532,6 +532,9 @@ try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_sync_at TEXT NOT NULL 
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_email_sent_at TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN route_id TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_targets ADD COLUMN created_by TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+try { db.exec("ALTER TABLE users ADD COLUMN full_name TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+try { db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+try { db.exec("ALTER TABLE users ADD COLUMN title TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 
 // Fiyat degisikligi gecmisi tablosu: her bir onaylanmis fiyat degisikligini kayit altina alir.
 // Raporlama ekraninda kronolojik liste olarak gosterilir.
@@ -2204,6 +2207,9 @@ function sanitizeUser(row) {
   return {
     id: row.id,
     username: row.username,
+    fullName: row.full_name || "",
+    role: row.role || "",
+    title: row.title || "",
     isAdmin: Boolean(row.is_admin),
     isActive: Boolean(row.is_active),
     permissions: JSON.parse(row.permissions || "{}"),
@@ -2228,7 +2234,7 @@ function getAuthUser(req) {
 
   const user = db
     .prepare(
-      "SELECT id, username, is_admin, is_active, permissions, created_at FROM users WHERE id = ?"
+      "SELECT id, username, full_name, role, title, is_admin, is_active, permissions, created_at FROM users WHERE id = ?"
     )
     .get(session.user_id);
 
@@ -2275,7 +2281,7 @@ app.post("/api/login", (req, res) => {
 
   const user = db
     .prepare(
-      "SELECT id, username, password, is_admin, is_active, permissions, created_at FROM users WHERE username = ?"
+      "SELECT id, username, password, full_name, role, title, is_admin, is_active, permissions, created_at FROM users WHERE username = ?"
     )
     .get(username);
 
@@ -2318,7 +2324,7 @@ app.get("/api/me", requireAuth, (req, res) => {
 app.get("/api/admin/users", requireAuth, requireAdmin, (req, res) => {
   const rows = db
     .prepare(
-      "SELECT id, username, is_admin, is_active, permissions, created_at FROM users ORDER BY is_admin DESC, username ASC"
+      "SELECT id, username, full_name, role, title, is_admin, is_active, permissions, created_at FROM users ORDER BY is_admin DESC, username ASC"
     )
     .all();
 
@@ -2354,7 +2360,7 @@ app.patch("/api/admin/users/:id", requireAuth, requireAdmin, (req, res) => {
   const userId = String(req.params.id || "").trim();
   const target = db
     .prepare(
-      "SELECT id, username, password, is_admin, is_active, permissions, created_at FROM users WHERE id = ?"
+      "SELECT id, username, password, full_name, role, title, is_admin, is_active, permissions, created_at FROM users WHERE id = ?"
     )
     .get(userId);
 
@@ -2395,6 +2401,12 @@ app.patch("/api/admin/users/:id", requireAuth, requireAdmin, (req, res) => {
     typeof req.body?.password === "string" ? req.body.password.trim() : "";
   const newUsername =
     typeof req.body?.username === "string" ? req.body.username.trim() : "";
+  const newFullName =
+    typeof req.body?.fullName === "string" ? req.body.fullName.trim() : null;
+  const newRole =
+    typeof req.body?.role === "string" ? req.body.role.trim() : null;
+  const newTitle =
+    typeof req.body?.title === "string" ? req.body.title.trim() : null;
   const shouldUpdatePassword = Boolean(newPassword);
   const shouldUpdateUsername = Boolean(newUsername) && newUsername !== target.username;
 
@@ -2414,10 +2426,13 @@ app.patch("/api/admin/users/:id", requireAuth, requireAdmin, (req, res) => {
       : target.is_active;
 
   db.prepare(
-    "UPDATE users SET username = ?, password = ?, is_active = ?, permissions = ? WHERE id = ?"
+    "UPDATE users SET username = ?, password = ?, full_name = ?, role = ?, title = ?, is_active = ?, permissions = ? WHERE id = ?"
   ).run(
     shouldUpdateUsername ? newUsername : target.username,
     shouldUpdatePassword ? newPassword : target.password,
+    newFullName !== null ? newFullName : (target.full_name || ""),
+    newRole !== null ? newRole : (target.role || ""),
+    newTitle !== null ? newTitle : (target.title || ""),
     isActive,
     JSON.stringify(normalizedPermissions),
     userId
