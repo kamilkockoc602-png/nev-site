@@ -45,6 +45,15 @@ const OBILET_SUBJECT_CHANGE = String(process.env.OBILET_SUBJECT_CHANGE || "oBile
 const OBILET_SUBJECT_NO_CHANGE = String(process.env.OBILET_SUBJECT_NO_CHANGE || "oBilet Fiyat Raporu").trim();
 const OBILET_SUBJECT_PRICE_ALERT = String(process.env.OBILET_SUBJECT_PRICE_ALERT || "oBilet Fiyat Degisikligi").trim();
 const OBILET_SUBJECT_TEST = String(process.env.OBILET_SUBJECT_TEST || "oBilet Test E-postasi").trim();
+// Fiyat degisiklik kayitlari kac gun saklansin (varsayilan 3). 0 = otomatik temizlik kapali.
+const PRICE_HISTORY_RETENTION_DAYS_RAW = Number.parseInt(
+  process.env.PRICE_HISTORY_RETENTION_DAYS || "3",
+  10
+);
+const PRICE_HISTORY_RETENTION_DAYS =
+  Number.isFinite(PRICE_HISTORY_RETENTION_DAYS_RAW) && PRICE_HISTORY_RETENTION_DAYS_RAW >= 0
+    ? PRICE_HISTORY_RETENTION_DAYS_RAW
+    : 3;
 const EMAIL_SIGNATURE_HTML = String(process.env.EMAIL_SIGNATURE_HTML || "").trim();
 const EMAIL_SIGNATURE_TEXT = String(process.env.EMAIL_SIGNATURE_TEXT || "").trim();
 // Fiyat ayiklama loglari. Kapatmak icin env'e DEBUG_OBILET_PRICE=0
@@ -2189,6 +2198,33 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 autoSyncReportingDates().catch(() => null);
+
+// Eski fiyat degisiklik kayitlarini otomatik temizle.
+// changed_at formati: DD.MM.YYYY HH:mm:ss → SQL'de YYYY-MM-DD'ye cevirip kesim tarihiyle kiyasla.
+function cleanupOldPriceHistory() {
+  if (!PRICE_HISTORY_RETENTION_DAYS || PRICE_HISTORY_RETENTION_DAYS <= 0) {
+    return; // 0 veya gecersiz = temizlik kapali
+  }
+  try {
+    const cutoffIso = shiftIsoDate(todayIsoInIstanbul(), -PRICE_HISTORY_RETENTION_DAYS);
+    const changedAtDateIso =
+      "substr(changed_at, 7, 4) || '-' || substr(changed_at, 4, 2) || '-' || substr(changed_at, 1, 2)";
+    const info = db
+      .prepare(`DELETE FROM obilet_price_history WHERE ${changedAtDateIso} < ?`)
+      .run(cutoffIso);
+    if (info.changes > 0) {
+      console.log(
+        `[temizlik] ${info.changes} eski fiyat degisiklik kaydi silindi (${PRICE_HISTORY_RETENTION_DAYS} gunden eski, kesim < ${cutoffIso}).`
+      );
+    }
+  } catch (error) {
+    console.error("Eski fiyat gecmisi temizleme hatasi:", error.message);
+  }
+}
+
+// Acilista bir kez + her 6 saatte bir calistir.
+setInterval(cleanupOldPriceHistory, 6 * 60 * 60 * 1000);
+cleanupOldPriceHistory();
 
 app.use(express.json({ limit: "25mb" }));
 app.use(express.static(__dirname));
