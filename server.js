@@ -56,6 +56,13 @@ const PRICE_HISTORY_RETENTION_DAYS =
     : 3;
 const EMAIL_SIGNATURE_HTML = String(process.env.EMAIL_SIGNATURE_HTML || "").trim();
 const EMAIL_SIGNATURE_TEXT = String(process.env.EMAIL_SIGNATURE_TEXT || "").trim();
+// Telegram bildirim botu. Token + varsayilan sohbet ID'leri env'den okunur.
+const TELEGRAM_BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || "").trim();
+const TELEGRAM_DEFAULT_CHAT_IDS = String(process.env.TELEGRAM_CHAT_ID || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+const TELEGRAM_ENABLED = TELEGRAM_BOT_TOKEN.length > 0;
 // Fiyat ayiklama loglari. Kapatmak icin env'e DEBUG_OBILET_PRICE=0
 const DEBUG_OBILET_PRICE = String(process.env.DEBUG_OBILET_PRICE ?? "1").trim() !== "0";
 const DEBUG_OBILET_API = String(process.env.DEBUG_OBILET_API || "").trim() === "1";
@@ -4715,6 +4722,92 @@ async function sendPriceChangeEmail(emailList, target, changes) {
   return info;
 }
 
+// ============================================================
+// Telegram Bildirim Botu
+// ============================================================
+const tgHttps = require("https");
+
+// HTML ozel karakterlerini kacir (parse_mode=HTML icin).
+function tgEscape(s) {
+  return String(s == null ? "" : s).replace(/[&<>]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])
+  );
+}
+
+// YYYY-MM-DD -> DD.MM.YYYY (eslesmiyorsa oldugu gibi birakir).
+function tgDateDot(s) {
+  const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : String(s || "");
+}
+
+// Telegram'a tek bir mesaj gonderir. Hata olsa bile uygulamayi dusurmez (resolve(false)).
+function sendTelegramMessage(chatId, htmlText) {
+  return new Promise((resolve) => {
+    if (!TELEGRAM_ENABLED || !chatId) { resolve(false); return; }
+    const payload = JSON.stringify({
+      chat_id: String(chatId),
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      text: htmlText,
+    });
+    const req = tgHttps.request(
+      {
+        hostname: "api.telegram.org",
+        path: `/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(payload),
+        },
+        timeout: 15000,
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (c) => (body += c));
+        res.on("end", () => {
+          if (res.statusCode === 200) {
+            resolve(true);
+          } else {
+            console.warn(`[Telegram] Gonderim hatasi (${res.statusCode}): ${body}`);
+            resolve(false);
+          }
+        });
+      }
+    );
+    req.on("error", (e) => { console.warn(`[Telegram] Baglanti hatasi: ${e.message}`); resolve(false); });
+    req.on("timeout", () => { req.destroy(); console.warn("[Telegram] Zaman asimi."); resolve(false); });
+    req.write(payload);
+    req.end();
+  });
+}
+
+// Bir hattaki fiyat degisikliklerini Telegram'a bildirir.
+// Hedefe ozel telegram_chat_ids varsa onlar, yoksa global TELEGRAM_CHAT_ID kullanilir.
+async function sendObiletTelegramAlert(target, changes) {
+  if (!TELEGRAM_ENABLED || !changes || changes.length === 0) return;
+  const perTarget = parseCsvList(target.telegram_chat_ids || "");
+  const chatIds = perTarget.length > 0 ? perTarget : TELEGRAM_DEFAULT_CHAT_IDS;
+  if (chatIds.length === 0) return;
+
+  const route = `${tgEscape((target.origin || "").toUpperCase())} → ${tgEscape((target.destination || "").toUpperCase())}`;
+  const lines = changes.map((c) => {
+    const diff = (c.newPrice || 0) - (c.oldPrice || 0);
+    const icon = diff < 0 ? "🔻" : diff > 0 ? "🔺" : "▪️";
+    const sign = diff > 0 ? "+" : "";
+    const op = tgEscape(c.operator || "");
+    const timeStr = c.departure_time ? ` ${tgEscape(c.departure_time)}` : "";
+    const dateStr = c.journey_date ? ` <i>${tgEscape(tgDateDot(c.journey_date))}</i>` : "";
+    return `${icon} <b>${op}</b>${timeStr}${dateStr}\n   ${c.oldPrice} → <b>${c.newPrice} TL</b> (${sign}${diff} TL)`;
+  });
+  const text =
+    `🚌 <b>${route}</b>\n<i>${changes.length} fiyat değişikliği</i>\n\n` +
+    lines.join("\n\n");
+
+  for (const chatId of chatIds) {
+    await sendTelegramMessage(chatId, text);
+  }
+}
+
 // Fiyat degisikligi raporu maili. Sadece changes.length > 0 oldugunda cagrilir.
 async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, changes = []) {
   const { smtpUser } = createSmtpTransportsWithFallback();
@@ -5072,6 +5165,16 @@ async function processObiletTarget(target) {
       }
     } else {
       console.log(`[Takip Görevi] Mail adresi tanimli degil: ${target.origin} -> ${target.destination}`);
+    }
+
+    // Telegram bildirimi — sadece fiyat degisikligi oldugunda. Hata olsa bile akisi bozmaz.
+    if (changes.length > 0 && TELEGRAM_ENABLED) {
+      try {
+        await sendObiletTelegramAlert(target, changes);
+        console.log(`[Takip Görevi] Telegram bildirimi gönderildi (${changes.length} değişiklik).`);
+      } catch (tgErr) {
+        console.error(`[Takip Görevi] Telegram hatasi (${target.origin} -> ${target.destination}): ${tgErr.message}`);
+      }
     }
 
     if (trackedJourneys.length > 0) {
@@ -5799,6 +5902,29 @@ process.on("SIGINT", async () => {
   process.exit(0);
 });
 
+// Telegram test endpoint'i — panelden veya tarayicidan tetiklenir, ornek bildirim gonderir.
+app.post("/api/telegram/test", requireAuth, async (req, res) => {
+  if (!TELEGRAM_ENABLED) {
+    return res.status(400).json({ message: "Telegram botu kapali (TELEGRAM_BOT_TOKEN tanimli degil)." });
+  }
+  if (TELEGRAM_DEFAULT_CHAT_IDS.length === 0) {
+    return res.status(400).json({ message: "Sohbet ID tanimli degil (TELEGRAM_CHAT_ID)." });
+  }
+  const text =
+    "✅ <b>Test bildirimi</b>\n" +
+    "Kamil Koç Fiyat Takip botu çalışıyor. Fiyat değişikliklerinde bildirim buraya gelecek. 🚌";
+  let sent = 0;
+  for (const chatId of TELEGRAM_DEFAULT_CHAT_IDS) {
+    if (await sendTelegramMessage(chatId, text)) sent++;
+  }
+  res.json({ ok: true, sent, total: TELEGRAM_DEFAULT_CHAT_IDS.length });
+});
+
 app.listen(PORT, () => {
   console.log(`Sunucu calisiyor: http://localhost:${PORT}`);
+  if (TELEGRAM_ENABLED) {
+    console.log(`[Telegram] Bildirim botu AKTIF (${TELEGRAM_DEFAULT_CHAT_IDS.length} varsayilan sohbet).`);
+  } else {
+    console.log("[Telegram] Bildirim botu KAPALI (TELEGRAM_BOT_TOKEN tanimli degil).");
+  }
 });
