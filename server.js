@@ -4808,6 +4808,250 @@ async function sendObiletTelegramAlert(target, changes) {
   }
 }
 
+// ---- Komutlu bot (long polling) ----
+
+// Genel POST helper (setMyCommands gibi cagrilar icin). Parse edilmis cevabi doner.
+function telegramPost(method, obj) {
+  return new Promise((resolve) => {
+    if (!TELEGRAM_ENABLED) { resolve(null); return; }
+    const payload = JSON.stringify(obj || {});
+    const req = tgHttps.request(
+      {
+        hostname: "api.telegram.org",
+        path: `/bot${TELEGRAM_BOT_TOKEN}/${method}`,
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload) },
+        timeout: 15000,
+      },
+      (res) => {
+        let body = "";
+        res.on("data", (c) => (body += c));
+        res.on("end", () => { try { resolve(JSON.parse(body)); } catch { resolve(null); } });
+      }
+    );
+    req.on("error", () => resolve(null));
+    req.on("timeout", () => { req.destroy(); resolve(null); });
+    req.write(payload);
+    req.end();
+  });
+}
+
+// getUpdates icin GET helper (uzun bekleme destekli).
+function telegramGetUpdates(offset, timeoutSec) {
+  return new Promise((resolve) => {
+    if (!TELEGRAM_ENABLED) { resolve(null); return; }
+    const path = `/bot${TELEGRAM_BOT_TOKEN}/getUpdates?timeout=${timeoutSec}&offset=${offset}`;
+    const req = tgHttps.request(
+      { hostname: "api.telegram.org", path, method: "GET", timeout: (timeoutSec + 10) * 1000 },
+      (res) => {
+        let body = "";
+        res.on("data", (c) => (body += c));
+        res.on("end", () => { try { resolve(JSON.parse(body)); } catch { resolve(null); } });
+      }
+    );
+    req.on("error", () => resolve(null));
+    req.on("timeout", () => { req.destroy(); resolve(null); });
+    req.end();
+  });
+}
+
+// Yetkili sohbet ID'leri: env varsayilanlari + hedeflerde tanimli olanlar.
+function telegramAuthorizedChatIds() {
+  const set = new Set(TELEGRAM_DEFAULT_CHAT_IDS.map(String));
+  try {
+    const rows = db.prepare("SELECT telegram_chat_ids FROM obilet_targets WHERE telegram_chat_ids != ''").all();
+    for (const r of rows) {
+      for (const id of parseCsvList(r.telegram_chat_ids || "")) set.add(String(id));
+    }
+  } catch { /* yok say */ }
+  return set;
+}
+
+// ---- Komut cevaplari ----
+function tgCmdYardim() {
+  return (
+    "🤖 <b>Kamil Koç Fiyat Takip Botu</b>\n\n" +
+    "Kullanabileceğin komutlar:\n\n" +
+    "/durum — Sistem özeti (kaç hat, son değişiklik)\n" +
+    "/hatlar — Takip edilen hatların listesi\n" +
+    "/son — Son 10 fiyat değişikliği\n" +
+    "/fiyatlar — Hat bazında güncel fiyat aralığı\n" +
+    "/yardim — Bu menü"
+  );
+}
+
+function tgCmdDurum() {
+  try {
+    const targets = db.prepare("SELECT COUNT(*) AS c FROM obilet_targets").get().c;
+    const prices = db.prepare("SELECT COUNT(*) AS c FROM obilet_prices").get().c;
+    const last = db.prepare("SELECT origin, destination, old_price, new_price, changed_at FROM obilet_price_history ORDER BY id DESC LIMIT 1").get();
+    const todayPrefix = (() => {
+      try { return shiftIsoDate(todayIsoInIstanbul(), 0).split("-").reverse().join("."); } catch { return ""; }
+    })();
+    let changesToday = 0;
+    if (todayPrefix) {
+      changesToday = db.prepare("SELECT COUNT(*) AS c FROM obilet_price_history WHERE substr(changed_at,1,10) = ?").get(todayPrefix).c;
+    }
+    let lastLine = "Henüz değişiklik kaydı yok.";
+    if (last) {
+      const diff = last.new_price - last.old_price;
+      const icon = diff < 0 ? "🔻" : diff > 0 ? "🔺" : "▪️";
+      lastLine = `${icon} ${tgEscape(last.origin)} → ${tgEscape(last.destination)}: ${last.old_price} → ${last.new_price} TL\n<i>${tgEscape(last.changed_at)}</i>`;
+    }
+    return (
+      "📊 <b>Sistem Durumu</b>\n\n" +
+      `🚌 Takip edilen hat: <b>${targets}</b>\n` +
+      `🏷️ İzlenen sefer/fiyat: <b>${prices}</b>\n` +
+      `📅 Bugünkü değişiklik: <b>${changesToday}</b>\n\n` +
+      "Son değişiklik:\n" + lastLine
+    );
+  } catch (e) {
+    return "Durum alınamadı: " + tgEscape(e.message);
+  }
+}
+
+function tgCmdHatlar() {
+  try {
+    const rows = db.prepare("SELECT origin, destination FROM obilet_targets ORDER BY origin, destination").all();
+    if (!rows.length) return "Takip edilen hat yok.";
+    const lines = rows.map((r, i) => `${i + 1}. ${tgEscape((r.origin || "").toUpperCase())} → ${tgEscape((r.destination || "").toUpperCase())}`);
+    return `🚌 <b>Takip Edilen Hatlar (${rows.length})</b>\n\n` + lines.join("\n");
+  } catch (e) {
+    return "Hatlar alınamadı: " + tgEscape(e.message);
+  }
+}
+
+function tgCmdSon() {
+  try {
+    const rows = db.prepare(
+      "SELECT origin, destination, operator, departure_time, old_price, new_price, changed_at FROM obilet_price_history ORDER BY id DESC LIMIT 10"
+    ).all();
+    if (!rows.length) return "Henüz fiyat değişikliği kaydı yok.";
+    const lines = rows.map((r) => {
+      const diff = r.new_price - r.old_price;
+      const icon = diff < 0 ? "🔻" : diff > 0 ? "🔺" : "▪️";
+      const sign = diff > 0 ? "+" : "";
+      return `${icon} <b>${tgEscape((r.origin || "").toUpperCase())} → ${tgEscape((r.destination || "").toUpperCase())}</b>\n` +
+        `   ${tgEscape(r.operator || "")} ${tgEscape(r.departure_time || "")}: ${r.old_price} → <b>${r.new_price} TL</b> (${sign}${diff})\n` +
+        `   <i>${tgEscape(r.changed_at || "")}</i>`;
+    });
+    return "🕒 <b>Son 10 Fiyat Değişikliği</b>\n\n" + lines.join("\n\n");
+  } catch (e) {
+    return "Kayıtlar alınamadı: " + tgEscape(e.message);
+  }
+}
+
+function tgCmdFiyatlar() {
+  try {
+    const rows = db.prepare(`
+      SELECT t.origin, t.destination, MIN(p.price) AS min_price, MAX(p.price) AS max_price, COUNT(p.id) AS n
+        FROM obilet_targets t
+        JOIN obilet_prices p ON p.target_id = t.id
+       GROUP BY t.id
+       ORDER BY t.origin, t.destination
+    `).all();
+    if (!rows.length) return "Henüz fiyat verisi yok.";
+    const lines = rows.map((r) => {
+      const range = r.min_price === r.max_price ? `${r.min_price} TL` : `${r.min_price} - ${r.max_price} TL`;
+      return `🚌 <b>${tgEscape((r.origin || "").toUpperCase())} → ${tgEscape((r.destination || "").toUpperCase())}</b>\n   ${range} <i>(${r.n} sefer)</i>`;
+    });
+    return "🏷️ <b>Güncel Fiyatlar</b>\n\n" + lines.join("\n\n");
+  } catch (e) {
+    return "Fiyatlar alınamadı: " + tgEscape(e.message);
+  }
+}
+
+// Tek bir guncellemeyi isle.
+async function handleTelegramUpdate(update) {
+  const msg = update && update.message;
+  if (!msg || !msg.text) return;
+  const chatId = msg.chat && msg.chat.id;
+  if (chatId == null) return;
+
+  // Yetki kontrolu — sadece tanimli sohbetler cevap alir.
+  const authorized = telegramAuthorizedChatIds();
+  if (!authorized.has(String(chatId))) {
+    await sendTelegramMessage(chatId, "⛔ Bu bot özeldir. Yetkiniz yok.");
+    console.warn(`[Telegram] Yetkisiz erisim denemesi: chat ${chatId}`);
+    return;
+  }
+
+  // "/komut@botadi arg" -> "/komut"
+  let cmd = msg.text.trim().split(/\s+/)[0].toLowerCase();
+  cmd = cmd.split("@")[0];
+
+  let reply;
+  switch (cmd) {
+    case "/start":
+    case "/yardim":
+    case "/help":
+      reply = tgCmdYardim(); break;
+    case "/durum":
+      reply = tgCmdDurum(); break;
+    case "/hatlar":
+      reply = tgCmdHatlar(); break;
+    case "/son":
+      reply = tgCmdSon(); break;
+    case "/fiyatlar":
+      reply = tgCmdFiyatlar(); break;
+    default:
+      reply = "Bilinmeyen komut. /yardim yazarak komutları görebilirsin.";
+  }
+  // Telegram mesaj limiti 4096 karakter — uzunsa kirp.
+  if (reply.length > 4000) reply = reply.slice(0, 3990) + "\n…";
+  await sendTelegramMessage(chatId, reply);
+}
+
+// Polling dongusu — tek instance icin guvenli.
+let telegramPollingStarted = false;
+async function startTelegramPolling() {
+  if (!TELEGRAM_ENABLED || telegramPollingStarted) return;
+  telegramPollingStarted = true;
+
+  // Telegram'a komut menusunu tanit (kullaniciya "/" yazinca liste cikar).
+  await telegramPost("setMyCommands", {
+    commands: [
+      { command: "durum", description: "Sistem özeti" },
+      { command: "hatlar", description: "Takip edilen hatlar" },
+      { command: "son", description: "Son 10 fiyat değişikliği" },
+      { command: "fiyatlar", description: "Güncel fiyat aralıkları" },
+      { command: "yardim", description: "Komut menüsü" },
+    ],
+  });
+
+  // Acilista eski/birikmis mesajlari atla: en son update_id'yi bul, sonrasini dinle.
+  let offset = 0;
+  try {
+    const init = await telegramGetUpdates(-1, 0);
+    if (init && init.ok && init.result.length) {
+      offset = init.result[init.result.length - 1].update_id + 1;
+    }
+  } catch { /* yok say */ }
+
+  console.log("[Telegram] Komut dinleyici basladi (long polling).");
+  // Sonsuz dongu — her turda 30 sn uzun bekleme yapar.
+  /* eslint-disable no-constant-condition */
+  while (true) {
+    try {
+      const data = await telegramGetUpdates(offset, 30);
+      if (data && data.ok && Array.isArray(data.result)) {
+        for (const upd of data.result) {
+          offset = upd.update_id + 1;
+          try { await handleTelegramUpdate(upd); }
+          catch (e) { console.warn(`[Telegram] Komut isleme hatasi: ${e.message}`); }
+        }
+      } else if (data && data.ok === false) {
+        // 409 Conflict (baska poller/webhook) gibi durumlar — biraz bekle.
+        console.warn(`[Telegram] getUpdates reddedildi: ${data.description || "?"}`);
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+    } catch (e) {
+      console.warn(`[Telegram] Poll dongu hatasi: ${e.message}`);
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+}
+
 // Fiyat degisikligi raporu maili. Sadece changes.length > 0 oldugunda cagrilir.
 async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, changes = []) {
   const { smtpUser } = createSmtpTransportsWithFallback();
@@ -5924,6 +6168,8 @@ app.listen(PORT, () => {
   console.log(`Sunucu calisiyor: http://localhost:${PORT}`);
   if (TELEGRAM_ENABLED) {
     console.log(`[Telegram] Bildirim botu AKTIF (${TELEGRAM_DEFAULT_CHAT_IDS.length} varsayilan sohbet).`);
+    // Komut dinleyiciyi baslat (long polling, arka planda surekli calisir).
+    startTelegramPolling().catch((e) => console.error(`[Telegram] Polling baslatma hatasi: ${e.message}`));
   } else {
     console.log("[Telegram] Bildirim botu KAPALI (TELEGRAM_BOT_TOKEN tanimli degil).");
   }
