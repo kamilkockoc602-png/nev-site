@@ -4916,7 +4916,7 @@ function tgCmdYardim(isAdmin) {
     "Kullanabileceğin komutlar:\n\n" +
     "/durum — Sistem özeti (kaç hat, son değişiklik)\n" +
     "/hatlar — Takip edilen hatların listesi\n" +
-    "/son — Son 10 fiyat değişikliği\n" +
+    "/son — Son 30 fiyat değişikliği\n" +
     "/fiyatlar — Hat bazında güncel fiyat aralığı\n" +
     "/yardim — Bu menü";
   if (isAdmin) {
@@ -5048,7 +5048,7 @@ function tgCmdHatlar() {
 function tgCmdSon() {
   try {
     const rows = db.prepare(
-      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 10"
+      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 30"
     ).all();
     if (!rows.length) return "Henüz fiyat değişikliği kaydı yok.";
     const lines = rows.map((r) => {
@@ -5060,7 +5060,7 @@ function tgCmdSon() {
         (seferStr ? `   🗓 Sefer: ${seferStr}\n` : "") +
         `   ${tgEscape(r.operator || "")}: ${r.old_price} → <b>${r.new_price} TL</b> (${sign}${diff})`;
     });
-    return "🕒 <b>Son 10 Fiyat Değişikliği</b>\n\n" + lines.join("\n\n");
+    return "🕒 <b>Son 30 Fiyat Değişikliği</b>\n\n" + lines.join("\n\n");
   } catch (e) {
     return "Kayıtlar alınamadı: " + tgEscape(e.message);
   }
@@ -5179,7 +5179,7 @@ async function startTelegramPolling() {
   const userCommands = [
     { command: "durum", description: "Sistem özeti" },
     { command: "hatlar", description: "Takip edilen hatlar" },
-    { command: "son", description: "Son 10 fiyat değişikliği" },
+    { command: "son", description: "Son 30 fiyat değişikliği" },
     { command: "fiyatlar", description: "Güncel fiyat aralıkları" },
     { command: "yardim", description: "Komut menüsü" },
   ];
