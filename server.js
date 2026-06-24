@@ -572,6 +572,21 @@ CREATE TABLE IF NOT EXISTS obilet_price_history (
 CREATE INDEX IF NOT EXISTS idx_obilet_price_history_changed_at ON obilet_price_history(changed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_obilet_price_history_target ON obilet_price_history(target_id);
 `);
+
+// Telegram bot kullanicilari: self-servis kayit + admin onayi.
+// status: pending (onay bekliyor) | approved (onayli) | blocked (engelli)
+db.exec(`
+CREATE TABLE IF NOT EXISTS telegram_users (
+  chat_id TEXT PRIMARY KEY,
+  first_name TEXT NOT NULL DEFAULT '',
+  last_name TEXT NOT NULL DEFAULT '',
+  username TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  requested_at TEXT NOT NULL DEFAULT '',
+  approved_at TEXT NOT NULL DEFAULT '',
+  approved_by TEXT NOT NULL DEFAULT ''
+);
+`);
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN journey_date TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN departure_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN arrival_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
@@ -4785,8 +4800,8 @@ function sendTelegramMessage(chatId, htmlText) {
 // Hedefe ozel telegram_chat_ids varsa onlar, yoksa global TELEGRAM_CHAT_ID kullanilir.
 async function sendObiletTelegramAlert(target, changes) {
   if (!TELEGRAM_ENABLED || !changes || changes.length === 0) return;
-  const perTarget = parseCsvList(target.telegram_chat_ids || "");
-  const chatIds = perTarget.length > 0 ? perTarget : TELEGRAM_DEFAULT_CHAT_IDS;
+  // Alicilar: adminler + onayli kullanicilar + (varsa) hatta tanimli ID'ler.
+  const chatIds = telegramNotifyChatIds(target);
   if (chatIds.length === 0) return;
 
   const route = `${tgEscape((target.origin || "").toUpperCase())} → ${tgEscape((target.destination || "").toUpperCase())}`;
@@ -4855,29 +4870,136 @@ function telegramGetUpdates(offset, timeoutSec) {
   });
 }
 
-// Yetkili sohbet ID'leri: env varsayilanlari + hedeflerde tanimli olanlar.
-function telegramAuthorizedChatIds() {
+// ---- Kullanici yonetimi (self-servis + admin onayi) ----
+// Admin = env TELEGRAM_CHAT_ID'deki ID'ler. Her zaman tam yetkili + onaylama yapabilir.
+function telegramIsAdmin(chatId) {
+  return TELEGRAM_DEFAULT_CHAT_IDS.map(String).includes(String(chatId));
+}
+function telegramGetUser(chatId) {
+  try { return db.prepare("SELECT * FROM telegram_users WHERE chat_id = ?").get(String(chatId)); }
+  catch { return null; }
+}
+// Komut kullanabilir mi? Admin veya status='approved'.
+function telegramCanUse(chatId) {
+  if (telegramIsAdmin(chatId)) return true;
+  const u = telegramGetUser(chatId);
+  return !!(u && u.status === "approved");
+}
+// Yeni kullaniciyi 'pending' olarak kaydet (varsa dokunma).
+function telegramRegisterPending(chat, from) {
+  try {
+    db.prepare(
+      "INSERT OR IGNORE INTO telegram_users (chat_id, first_name, last_name, username, status, requested_at) VALUES (?, ?, ?, ?, 'pending', ?)"
+    ).run(String(chat.id), from.first_name || "", from.last_name || "", from.username || "", nowStamp());
+  } catch (e) { console.warn(`[Telegram] pending kayit hatasi: ${e.message}`); }
+}
+// Bildirim alicilari: adminler + onayli kullanicilar + (varsa) hatta tanimli ID'ler.
+function telegramNotifyChatIds(target) {
   const set = new Set(TELEGRAM_DEFAULT_CHAT_IDS.map(String));
   try {
-    const rows = db.prepare("SELECT telegram_chat_ids FROM obilet_targets WHERE telegram_chat_ids != ''").all();
-    for (const r of rows) {
-      for (const id of parseCsvList(r.telegram_chat_ids || "")) set.add(String(id));
-    }
+    const rows = db.prepare("SELECT chat_id FROM telegram_users WHERE status = 'approved'").all();
+    for (const r of rows) set.add(String(r.chat_id));
   } catch { /* yok say */ }
-  return set;
+  if (target && target.telegram_chat_ids) {
+    for (const id of parseCsvList(target.telegram_chat_ids)) set.add(String(id));
+  }
+  return [...set];
+}
+function tgFullName(u) {
+  return `${(u.first_name || "")} ${(u.last_name || "")}`.trim() || "(isimsiz)";
 }
 
 // ---- Komut cevaplari ----
-function tgCmdYardim() {
-  return (
+function tgCmdYardim(isAdmin) {
+  let t =
     "🤖 <b>Kamil Koç Fiyat Takip Botu</b>\n\n" +
     "Kullanabileceğin komutlar:\n\n" +
     "/durum — Sistem özeti (kaç hat, son değişiklik)\n" +
     "/hatlar — Takip edilen hatların listesi\n" +
     "/son — Son 10 fiyat değişikliği\n" +
     "/fiyatlar — Hat bazında güncel fiyat aralığı\n" +
-    "/yardim — Bu menü"
-  );
+    "/yardim — Bu menü";
+  if (isAdmin) {
+    t +=
+      "\n\n👑 <b>Yönetici komutları:</b>\n" +
+      "/bekleyenler — Onay bekleyen kullanıcılar\n" +
+      "/kullanicilar — Onaylı kullanıcılar\n" +
+      "/onayla &lt;id&gt; — Kullanıcıyı onayla\n" +
+      "/engelle &lt;id&gt; — Kullanıcıyı engelle";
+  }
+  return t;
+}
+
+// Onay bekleyenleri listele (admin).
+function tgListPending() {
+  const rows = db.prepare("SELECT chat_id, first_name, last_name, username, requested_at FROM telegram_users WHERE status = 'pending' ORDER BY requested_at").all();
+  if (!rows.length) return "✅ Onay bekleyen kullanıcı yok.";
+  return "⏳ <b>Onay Bekleyenler</b>\n\n" + rows.map((r) => {
+    const uname = r.username ? ` @${tgEscape(r.username)}` : "";
+    return `👤 ${tgEscape(tgFullName(r))}${uname}\n🆔 <code>${tgEscape(r.chat_id)}</code>\n   /onayla ${tgEscape(r.chat_id)}`;
+  }).join("\n\n");
+}
+
+// Onayli kullanicilari listele (admin).
+function tgListApproved() {
+  const rows = db.prepare("SELECT chat_id, first_name, last_name, username FROM telegram_users WHERE status = 'approved' ORDER BY approved_at").all();
+  const adminCount = TELEGRAM_DEFAULT_CHAT_IDS.length;
+  let t = `👥 <b>Onaylı Kullanıcılar (${rows.length} + ${adminCount} yönetici)</b>\n\n`;
+  if (rows.length) {
+    t += rows.map((r) => {
+      const uname = r.username ? ` @${tgEscape(r.username)}` : "";
+      return `✅ ${tgEscape(tgFullName(r))}${uname} — <code>${tgEscape(r.chat_id)}</code>`;
+    }).join("\n");
+  } else {
+    t += "(Henüz onaylı kullanıcı yok, sadece yöneticiler.)";
+  }
+  return t;
+}
+
+// Admin: kullaniciyi onayla. Telegram'a bildirim de gonderir.
+async function tgAdminApprove(adminChatId, targetIdRaw) {
+  const targetId = String(targetIdRaw || "").trim();
+  if (!targetId) return sendTelegramMessage(adminChatId, "Kullanım: /onayla &lt;chat_id&gt;");
+  const u = telegramGetUser(targetId);
+  if (!u) return sendTelegramMessage(adminChatId, `Kayıt bulunamadı: ${tgEscape(targetId)}`);
+  db.prepare("UPDATE telegram_users SET status = 'approved', approved_at = ?, approved_by = ? WHERE chat_id = ?")
+    .run(nowStamp(), String(adminChatId), targetId);
+  await sendTelegramMessage(adminChatId, `✅ Onaylandı: ${tgEscape(tgFullName(u))} (${tgEscape(targetId)})`);
+  await sendTelegramMessage(targetId, "✅ <b>Erişimin onaylandı!</b>\nArtık komutları kullanabilirsin. /yardim yazarak başla.");
+}
+
+// Admin: kullaniciyi engelle.
+async function tgAdminBlock(adminChatId, targetIdRaw) {
+  const targetId = String(targetIdRaw || "").trim();
+  if (!targetId) return sendTelegramMessage(adminChatId, "Kullanım: /engelle &lt;chat_id&gt;");
+  const u = telegramGetUser(targetId);
+  if (!u) {
+    // Kaydi yoksa engelli olarak ekle ki bir daha yazinca pending olmasin.
+    db.prepare("INSERT OR REPLACE INTO telegram_users (chat_id, status, requested_at) VALUES (?, 'blocked', ?)").run(targetId, nowStamp());
+  } else {
+    db.prepare("UPDATE telegram_users SET status = 'blocked' WHERE chat_id = ?").run(targetId);
+  }
+  await sendTelegramMessage(adminChatId, `⛔ Engellendi: ${tgEscape(targetId)}`);
+}
+
+// Yeni talebi adminlere butonlu mesajla bildir.
+function tgNotifyAdminsNewRequest(chat, from) {
+  const name = `${from.first_name || ""} ${from.last_name || ""}`.trim() || "(isimsiz)";
+  const uname = from.username ? `@${from.username}` : "(kullanıcı adı yok)";
+  const text =
+    "🔔 <b>Yeni erişim talebi</b>\n\n" +
+    `👤 ${tgEscape(name)} ${tgEscape(uname)}\n` +
+    `🆔 <code>${tgEscape(String(chat.id))}</code>\n\n` +
+    "Bu kişi botu kullanmak istiyor. Onaylıyor musun?";
+  const reply_markup = {
+    inline_keyboard: [[
+      { text: "✅ Onayla", callback_data: `approve:${chat.id}` },
+      { text: "⛔ Reddet", callback_data: `block:${chat.id}` },
+    ]],
+  };
+  for (const adminId of TELEGRAM_DEFAULT_CHAT_IDS) {
+    telegramPost("sendMessage", { chat_id: String(adminId), parse_mode: "HTML", text, reply_markup });
+  }
 }
 
 function tgCmdDurum() {
@@ -4961,31 +5083,73 @@ function tgCmdFiyatlar() {
   }
 }
 
-// Tek bir guncellemeyi isle.
+// Onayla/Reddet butonuna basilinca (callback_query) calisir.
+async function handleTelegramCallback(cb) {
+  const fromId = cb.from && cb.from.id;
+  // Spinner'i kapat.
+  await telegramPost("answerCallbackQuery", { callback_query_id: cb.id });
+  if (!telegramIsAdmin(fromId)) {
+    await telegramPost("answerCallbackQuery", { callback_query_id: cb.id, text: "Bu islem sadece yoneticiler icindir.", show_alert: true });
+    return;
+  }
+  const [action, targetId] = String(cb.data || "").split(":");
+  if (!targetId) return;
+  if (action === "approve") {
+    await tgAdminApprove(fromId, targetId);
+  } else if (action === "block") {
+    await tgAdminBlock(fromId, targetId);
+  }
+}
+
+// Tek bir guncellemeyi isle (mesaj veya buton).
 async function handleTelegramUpdate(update) {
+  if (update && update.callback_query) return handleTelegramCallback(update.callback_query);
+
   const msg = update && update.message;
   if (!msg || !msg.text) return;
-  const chatId = msg.chat && msg.chat.id;
+  const chat = msg.chat || {};
+  const chatId = chat.id;
   if (chatId == null) return;
+  const from = msg.from || {};
 
-  // Yetki kontrolu — sadece tanimli sohbetler cevap alir.
-  const authorized = telegramAuthorizedChatIds();
-  if (!authorized.has(String(chatId))) {
-    await sendTelegramMessage(chatId, "⛔ Bu bot özeldir. Yetkiniz yok.");
-    console.warn(`[Telegram] Yetkisiz erisim denemesi: chat ${chatId}`);
+  const parts = msg.text.trim().split(/\s+/);
+  const cmd = parts[0].toLowerCase().split("@")[0]; // "/komut@bot arg" -> "/komut"
+  const arg = parts[1] || "";
+  const isAdmin = telegramIsAdmin(chatId);
+
+  // Yonetici komutlari (sadece adminler).
+  if (isAdmin) {
+    if (cmd === "/bekleyenler") return sendTelegramMessage(chatId, tgListPending());
+    if (cmd === "/kullanicilar") return sendTelegramMessage(chatId, tgListApproved());
+    if (cmd === "/onayla") return tgAdminApprove(chatId, arg);
+    if (cmd === "/engelle" || cmd === "/reddet") return tgAdminBlock(chatId, arg);
+  }
+
+  // Yetki kontrolu — onaylanmamis kullanicilar komut kullanamaz.
+  if (!telegramCanUse(chatId)) {
+    const u = telegramGetUser(chatId);
+    if (!u) {
+      // Ilk temas: pending kaydet + adminlere butonlu bildirim gonder.
+      telegramRegisterPending(chat, from);
+      await sendTelegramMessage(chatId,
+        "👋 Merhaba! Bu özel bir bot.\nErişim talebin <b>yöneticiye iletildi</b>. Onaylandığında haber vereceğim. ⏳");
+      tgNotifyAdminsNewRequest(chat, from);
+      console.log(`[Telegram] Yeni erisim talebi: ${tgFullName(from)} (chat ${chatId})`);
+    } else if (u.status === "blocked") {
+      await sendTelegramMessage(chatId, "⛔ Erişimin engellenmiş.");
+    } else {
+      await sendTelegramMessage(chatId, "⏳ Onayın hâlâ bekleniyor. Yönetici onaylayınca haber vereceğim.");
+    }
     return;
   }
 
-  // "/komut@botadi arg" -> "/komut"
-  let cmd = msg.text.trim().split(/\s+/)[0].toLowerCase();
-  cmd = cmd.split("@")[0];
-
+  // Onayli/admin -> komutlar.
   let reply;
   switch (cmd) {
     case "/start":
     case "/yardim":
     case "/help":
-      reply = tgCmdYardim(); break;
+      reply = tgCmdYardim(isAdmin); break;
     case "/durum":
       reply = tgCmdDurum(); break;
     case "/hatlar":
@@ -5009,15 +5173,24 @@ async function startTelegramPolling() {
   telegramPollingStarted = true;
 
   // Telegram'a komut menusunu tanit (kullaniciya "/" yazinca liste cikar).
-  await telegramPost("setMyCommands", {
-    commands: [
-      { command: "durum", description: "Sistem özeti" },
-      { command: "hatlar", description: "Takip edilen hatlar" },
-      { command: "son", description: "Son 10 fiyat değişikliği" },
-      { command: "fiyatlar", description: "Güncel fiyat aralıkları" },
-      { command: "yardim", description: "Komut menüsü" },
-    ],
-  });
+  const userCommands = [
+    { command: "durum", description: "Sistem özeti" },
+    { command: "hatlar", description: "Takip edilen hatlar" },
+    { command: "son", description: "Son 10 fiyat değişikliği" },
+    { command: "fiyatlar", description: "Güncel fiyat aralıkları" },
+    { command: "yardim", description: "Komut menüsü" },
+  ];
+  await telegramPost("setMyCommands", { commands: userCommands });
+  // Yoneticilere ek komutlari sadece kendi sohbetlerinde goster (scope: chat).
+  const adminCommands = userCommands.concat([
+    { command: "bekleyenler", description: "Onay bekleyen kullanıcılar" },
+    { command: "kullanicilar", description: "Onaylı kullanıcılar" },
+    { command: "onayla", description: "Kullanıcı onayla: /onayla <id>" },
+    { command: "engelle", description: "Kullanıcı engelle: /engelle <id>" },
+  ]);
+  for (const adminId of TELEGRAM_DEFAULT_CHAT_IDS) {
+    await telegramPost("setMyCommands", { commands: adminCommands, scope: { type: "chat", chat_id: String(adminId) } });
+  }
 
   // Acilista eski/birikmis mesajlari atla: en son update_id'yi bul, sonrasini dinle.
   let offset = 0;
