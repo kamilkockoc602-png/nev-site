@@ -4917,7 +4917,9 @@ function tgCmdYardim(isAdmin) {
     "/durum — Sistem özeti (kaç hat, son değişiklik)\n" +
     "/hatlar — Takip edilen hatların listesi\n" +
     "/son — Son 30 fiyat değişikliği\n" +
+    "/dusenler — Sadece son fiyat düşüşleri\n" +
     "/fiyatlar — Hat bazında güncel fiyat aralığı\n" +
+    "/hat ADANA BURSA — Tek hattın firma fiyatları\n" +
     "/yardim — Bu menü";
   if (isAdmin) {
     t +=
@@ -5086,6 +5088,64 @@ function tgCmdFiyatlar() {
   }
 }
 
+// /hat <kalkis> <varis> — tek hattin firma bazinda guncel fiyatlari.
+function tgCmdHat(args) {
+  try {
+    if (!args || args.length < 2) {
+      return "Kullanım: <b>/hat &lt;kalkış&gt; &lt;varış&gt;</b>\nÖrnek: /hat ADANA BURSA";
+    }
+    const norm = (s) => String(s || "").toLocaleLowerCase("tr-TR").trim();
+    const origin = norm(args[0]);
+    const destination = norm(args[args.length - 1]);
+    const targets = db.prepare("SELECT id, origin, destination FROM obilet_targets").all();
+    const t =
+      targets.find((x) => norm(x.origin) === origin && norm(x.destination) === destination) ||
+      targets.find((x) => norm(x.origin).includes(origin) && norm(x.destination).includes(destination));
+    if (!t) {
+      return `"${tgEscape(args[0].toUpperCase())} → ${tgEscape(args[args.length - 1].toUpperCase())}" hattı takipte değil.\n/hatlar ile listeyi görebilirsin.`;
+    }
+    const rows = db.prepare("SELECT operator, price FROM obilet_prices WHERE target_id = ?").all(t.id);
+    const head = `🚌 <b>${tgEscape((t.origin || "").toUpperCase())} → ${tgEscape((t.destination || "").toUpperCase())}</b> — Güncel Fiyatlar\n\n`;
+    if (!rows.length) return head + "Henüz fiyat verisi yok.";
+    const byOp = new Map();
+    for (const r of rows) {
+      if (!byOp.has(r.operator)) byOp.set(r.operator, { min: r.price, max: r.price, n: 0 });
+      const g = byOp.get(r.operator);
+      g.min = Math.min(g.min, r.price);
+      g.max = Math.max(g.max, r.price);
+      g.n++;
+    }
+    const sorted = [...byOp.entries()].sort((a, b) => a[1].min - b[1].min); // ucuzdan pahaliya
+    const lines = sorted.map(([op, g]) => {
+      const range = g.min === g.max ? `${g.min} TL` : `${g.min}–${g.max} TL`;
+      return `🔹 <b>${tgEscape(op || "?")}</b>: ${range} <i>(${g.n} sefer)</i>`;
+    });
+    return head + lines.join("\n");
+  } catch (e) {
+    return "Hat detayı alınamadı: " + tgEscape(e.message);
+  }
+}
+
+// /dusenler — sadece son fiyat dususleri (rakip indirimi yakalamak icin).
+function tgCmdDusenler() {
+  try {
+    const rows = db.prepare(
+      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history WHERE new_price < old_price ORDER BY id DESC LIMIT 20"
+    ).all();
+    if (!rows.length) return "Son dönemde fiyat düşüşü kaydı yok.";
+    const lines = rows.map((r) => {
+      const diff = r.new_price - r.old_price;
+      const seferStr = `${tgDateDot(r.journey_date)}${r.departure_time ? " " + tgEscape(r.departure_time) : ""}`.trim();
+      return `🔻 <b>${tgEscape((r.origin || "").toUpperCase())} → ${tgEscape((r.destination || "").toUpperCase())}</b>\n` +
+        (seferStr ? `   🗓 Sefer: ${seferStr}\n` : "") +
+        `   ${tgEscape(r.operator || "")}: ${r.old_price} → <b>${r.new_price} TL</b> (${diff} TL)`;
+    });
+    return "🔻 <b>Son Fiyat Düşüşleri</b>\n\n" + lines.join("\n\n");
+  } catch (e) {
+    return "Düşüşler alınamadı: " + tgEscape(e.message);
+  }
+}
+
 // Onayla/Reddet butonuna basilinca (callback_query) calisir.
 async function handleTelegramCallback(cb) {
   const fromId = cb.from && cb.from.id;
@@ -5161,6 +5221,10 @@ async function handleTelegramUpdate(update) {
       reply = tgCmdSon(); break;
     case "/fiyatlar":
       reply = tgCmdFiyatlar(); break;
+    case "/hat":
+      reply = tgCmdHat(parts.slice(1)); break;
+    case "/dusenler":
+      reply = tgCmdDusenler(); break;
     default:
       reply = "Bilinmeyen komut. /yardim yazarak komutları görebilirsin.";
   }
@@ -5180,7 +5244,9 @@ async function startTelegramPolling() {
     { command: "durum", description: "Sistem özeti" },
     { command: "hatlar", description: "Takip edilen hatlar" },
     { command: "son", description: "Son 30 fiyat değişikliği" },
+    { command: "dusenler", description: "Son fiyat düşüşleri" },
     { command: "fiyatlar", description: "Güncel fiyat aralıkları" },
+    { command: "hat", description: "Hat detayı: /hat ADANA BURSA" },
     { command: "yardim", description: "Komut menüsü" },
   ];
   await telegramPost("setMyCommands", { commands: userCommands });
