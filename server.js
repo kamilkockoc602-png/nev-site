@@ -4915,6 +4915,7 @@ function tgCmdYardim(isAdmin) {
     "🤖 <b>Kamil Koç Fiyat Takip Botu</b>\n\n" +
     "Kullanabileceğin komutlar:\n\n" +
     "/durum — Sistem özeti (kaç hat, son değişiklik)\n" +
+    "/takip — Toplam izlenen sefer (hat bazında)\n" +
     "/hatlar — Takip edilen hatların listesi\n" +
     "/son — Son 30 fiyat değişikliği\n" +
     "/dusenler — Sadece son fiyat düşüşleri\n" +
@@ -5126,6 +5127,33 @@ function tgCmdHat(args) {
   }
 }
 
+// /takip — panel kartiyla ayni: aktif hat + toplam izlenen sefer + hat bazinda dagilim.
+function tgCmdTakip() {
+  try {
+    const activeTargets = db.prepare("SELECT COUNT(*) AS c FROM obilet_targets").get().c;
+    const totalJourneys = db.prepare("SELECT COUNT(*) AS c FROM obilet_prices").get().c;
+    const perRoute = db.prepare(`
+      SELECT t.origin, t.destination, COUNT(p.id) AS n
+        FROM obilet_targets t
+        LEFT JOIN obilet_prices p ON p.target_id = t.id
+       GROUP BY t.id
+       ORDER BY n DESC
+    `).all();
+    let t =
+      "📡 <b>Takip Özeti</b>\n\n" +
+      `🚌 Aktif hat: <b>${activeTargets}</b>\n` +
+      `🏷️ Toplam izlenen sefer: <b>${totalJourneys}</b>\n`;
+    if (perRoute.length) {
+      t += "\n<b>Hat bazında:</b>\n" + perRoute
+        .map((r) => `• ${tgEscape((r.origin || "").toUpperCase())} → ${tgEscape((r.destination || "").toUpperCase())}: <b>${r.n}</b> sefer`)
+        .join("\n");
+    }
+    return t;
+  } catch (e) {
+    return "Takip özeti alınamadı: " + tgEscape(e.message);
+  }
+}
+
 // /dusenler — sadece son fiyat dususleri (rakip indirimi yakalamak icin).
 function tgCmdDusenler() {
   try {
@@ -5225,6 +5253,8 @@ async function handleTelegramUpdate(update) {
       reply = tgCmdHat(parts.slice(1)); break;
     case "/dusenler":
       reply = tgCmdDusenler(); break;
+    case "/takip":
+      reply = tgCmdTakip(); break;
     default:
       reply = "Bilinmeyen komut. /yardim yazarak komutları görebilirsin.";
   }
@@ -5242,6 +5272,7 @@ async function startTelegramPolling() {
   // Telegram'a komut menusunu tanit (kullaniciya "/" yazinca liste cikar).
   const userCommands = [
     { command: "durum", description: "Sistem özeti" },
+    { command: "takip", description: "Toplam izlenen sefer (hat bazında)" },
     { command: "hatlar", description: "Takip edilen hatlar" },
     { command: "son", description: "Son 30 fiyat değişikliği" },
     { command: "dusenler", description: "Son fiyat düşüşleri" },
