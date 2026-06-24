@@ -5009,7 +5009,7 @@ function tgCmdDurum() {
   try {
     const targets = db.prepare("SELECT COUNT(*) AS c FROM obilet_targets").get().c;
     const prices = db.prepare("SELECT COUNT(*) AS c FROM obilet_prices").get().c;
-    const last = db.prepare("SELECT origin, destination, journey_date, departure_time, operator, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 1").get();
+    const lastRows = db.prepare("SELECT origin, destination, journey_date, departure_time, operator, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 10").all();
     const todayPrefix = (() => {
       try { return shiftIsoDate(todayIsoInIstanbul(), 0).split("-").reverse().join("."); } catch { return ""; }
     })();
@@ -5017,20 +5017,24 @@ function tgCmdDurum() {
     if (todayPrefix) {
       changesToday = db.prepare("SELECT COUNT(*) AS c FROM obilet_price_history WHERE substr(changed_at,1,10) = ?").get(todayPrefix).c;
     }
-    let lastLine = "Henüz değişiklik kaydı yok.";
-    if (last) {
-      const diff = last.new_price - last.old_price;
-      const icon = diff < 0 ? "🔻" : diff > 0 ? "🔺" : "▪️";
-      const seferStr = `${tgDateDot(last.journey_date)}${last.departure_time ? " " + tgEscape(last.departure_time) : ""}`.trim();
-      lastLine = `${icon} ${tgEscape(last.origin)} → ${tgEscape(last.destination)}: ${last.old_price} → ${last.new_price} TL` +
-        (seferStr ? `\n🗓 Sefer: <b>${seferStr}</b>` : "");
+    let lastBlock = "Henüz değişiklik kaydı yok.";
+    if (lastRows.length) {
+      lastBlock = lastRows.map((r) => {
+        const diff = r.new_price - r.old_price;
+        const icon = diff < 0 ? "🔻" : diff > 0 ? "🔺" : "▪️";
+        const sign = diff > 0 ? "+" : "";
+        const seferStr = `${tgDateDot(r.journey_date)}${r.departure_time ? " " + tgEscape(r.departure_time) : ""}`.trim();
+        return `${icon} <b>${tgEscape((r.origin || "").toUpperCase())} → ${tgEscape((r.destination || "").toUpperCase())}</b>` +
+          (seferStr ? ` <i>${seferStr}</i>` : "") +
+          `\n   ${r.old_price} → <b>${r.new_price} TL</b> (${sign}${diff})`;
+      }).join("\n\n");
     }
     return (
       "📊 <b>Sistem Durumu</b>\n\n" +
       `🚌 Takip edilen hat: <b>${targets}</b>\n` +
       `🏷️ İzlenen sefer/fiyat: <b>${prices}</b>\n` +
       `📅 Bugünkü değişiklik: <b>${changesToday}</b>\n\n` +
-      "Son değişiklik:\n" + lastLine
+      "🕒 <b>Son 10 değişiklik:</b>\n\n" + lastBlock
     );
   } catch (e) {
     return "Durum alınamadı: " + tgEscape(e.message);
