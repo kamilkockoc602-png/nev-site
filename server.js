@@ -5006,7 +5006,7 @@ function tgCmdDurum() {
   try {
     const targets = db.prepare("SELECT COUNT(*) AS c FROM obilet_targets").get().c;
     const prices = db.prepare("SELECT COUNT(*) AS c FROM obilet_prices").get().c;
-    const last = db.prepare("SELECT origin, destination, old_price, new_price, changed_at FROM obilet_price_history ORDER BY id DESC LIMIT 1").get();
+    const last = db.prepare("SELECT origin, destination, journey_date, departure_time, operator, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 1").get();
     const todayPrefix = (() => {
       try { return shiftIsoDate(todayIsoInIstanbul(), 0).split("-").reverse().join("."); } catch { return ""; }
     })();
@@ -5018,7 +5018,9 @@ function tgCmdDurum() {
     if (last) {
       const diff = last.new_price - last.old_price;
       const icon = diff < 0 ? "🔻" : diff > 0 ? "🔺" : "▪️";
-      lastLine = `${icon} ${tgEscape(last.origin)} → ${tgEscape(last.destination)}: ${last.old_price} → ${last.new_price} TL\n<i>${tgEscape(last.changed_at)}</i>`;
+      const seferStr = `${tgDateDot(last.journey_date)}${last.departure_time ? " " + tgEscape(last.departure_time) : ""}`.trim();
+      lastLine = `${icon} ${tgEscape(last.origin)} → ${tgEscape(last.destination)}: ${last.old_price} → ${last.new_price} TL` +
+        (seferStr ? `\n🗓 Sefer: <b>${seferStr}</b>` : "");
     }
     return (
       "📊 <b>Sistem Durumu</b>\n\n" +
@@ -5046,16 +5048,17 @@ function tgCmdHatlar() {
 function tgCmdSon() {
   try {
     const rows = db.prepare(
-      "SELECT origin, destination, operator, departure_time, old_price, new_price, changed_at FROM obilet_price_history ORDER BY id DESC LIMIT 10"
+      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 10"
     ).all();
     if (!rows.length) return "Henüz fiyat değişikliği kaydı yok.";
     const lines = rows.map((r) => {
       const diff = r.new_price - r.old_price;
       const icon = diff < 0 ? "🔻" : diff > 0 ? "🔺" : "▪️";
       const sign = diff > 0 ? "+" : "";
+      const seferStr = `${tgDateDot(r.journey_date)}${r.departure_time ? " " + tgEscape(r.departure_time) : ""}`.trim();
       return `${icon} <b>${tgEscape((r.origin || "").toUpperCase())} → ${tgEscape((r.destination || "").toUpperCase())}</b>\n` +
-        `   ${tgEscape(r.operator || "")} ${tgEscape(r.departure_time || "")}: ${r.old_price} → <b>${r.new_price} TL</b> (${sign}${diff})\n` +
-        `   <i>${tgEscape(r.changed_at || "")}</i>`;
+        (seferStr ? `   🗓 Sefer: ${seferStr}\n` : "") +
+        `   ${tgEscape(r.operator || "")}: ${r.old_price} → <b>${r.new_price} TL</b> (${sign}${diff})`;
     });
     return "🕒 <b>Son 10 Fiyat Değişikliği</b>\n\n" + lines.join("\n\n");
   } catch (e) {
