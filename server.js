@@ -4919,6 +4919,7 @@ function tgCmdYardim(isAdmin) {
     "/hatlar — Takip edilen hatların listesi\n" +
     "/son — Son 30 fiyat değişikliği\n" +
     "/dusenler — Sadece son fiyat düşüşleri\n" +
+    "/firma — Firmaya göre değişiklikler (listeden seç)\n" +
     "/fiyatlar — Hat bazında güncel fiyat aralığı\n" +
     "/hat ADANA BURSA — Tek hattın firma fiyatları\n" +
     "/yardim — Bu menü";
@@ -5178,16 +5179,86 @@ function tgCmdDusenler() {
   }
 }
 
+// Gecmiste degisikligi olan firmalarin listesi (buton secimi icin).
+function tgGetHistoryOperators() {
+  try {
+    return db.prepare("SELECT DISTINCT operator FROM obilet_price_history WHERE operator != '' ORDER BY operator").all()
+      .map((r) => r.operator).filter(Boolean);
+  } catch { return []; }
+}
+
+// /firma <isim> — sadece o firmanin fiyat degisikliklerini gosterir.
+function tgCmdFirma(name) {
+  try {
+    const q = String(name || "").toLocaleLowerCase("tr-TR").trim();
+    if (!q) return "Kullanım: <b>/firma &lt;firma adı&gt;</b>\nÖrnek: /firma Kamil Koç\n\nveya sadece /firma yazıp listeden seç.";
+    const rows = db.prepare(
+      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 1000"
+    ).all();
+    const matched = rows.filter((r) => String(r.operator || "").toLocaleLowerCase("tr-TR").includes(q));
+    if (!matched.length) return `"${tgEscape(name)}" için fiyat değişikliği bulunamadı.`;
+    const shown = matched.slice(0, 20);
+    const lines = shown.map((r) => {
+      const diff = r.new_price - r.old_price;
+      const icon = diff < 0 ? "🔻" : diff > 0 ? "🔺" : "▪️";
+      const sign = diff > 0 ? "+" : "";
+      const seferStr = `${tgDateDot(r.journey_date)}${r.departure_time ? " " + tgEscape(r.departure_time) : ""}`.trim();
+      return `${icon} <b>${tgEscape((r.origin || "").toUpperCase())} → ${tgEscape((r.destination || "").toUpperCase())}</b>` +
+        (seferStr ? ` <i>${seferStr}</i>` : "") +
+        `\n   ${r.old_price} → <b>${r.new_price} TL</b> (${sign}${diff})`;
+    });
+    const title = tgEscape((matched[0].operator || name));
+    return `🏢 <b>${title}</b> — Fiyat Değişiklikleri (${matched.length})\n\n` +
+      lines.join("\n\n") +
+      (matched.length > 20 ? "\n\n<i>… ilk 20 gösteriliyor</i>" : "");
+  } catch (e) {
+    return "Firma değişiklikleri alınamadı: " + tgEscape(e.message);
+  }
+}
+
+// /firma (argumansiz) — firma butonlarini gonderir, tiklayinca o firmanin degisiklikleri gelir.
+async function tgSendFirmaSecimi(chatId) {
+  const ops = tgGetHistoryOperators();
+  if (!ops.length) {
+    await sendTelegramMessage(chatId, "Henüz fiyat değişikliği kaydı yok.");
+    return;
+  }
+  const inline_keyboard = [];
+  for (const op of ops) {
+    const data = "f:" + op;
+    if (Buffer.byteLength(data) > 64) continue; // Telegram callback_data limiti
+    inline_keyboard.push([{ text: op, callback_data: data }]);
+  }
+  await telegramPost("sendMessage", {
+    chat_id: String(chatId),
+    parse_mode: "HTML",
+    text: "🏢 <b>Firma seç</b> — değişikliklerini görmek istediğin firmaya dokun:",
+    reply_markup: { inline_keyboard },
+  });
+}
+
 // Onayla/Reddet butonuna basilinca (callback_query) calisir.
 async function handleTelegramCallback(cb) {
   const fromId = cb.from && cb.from.id;
   // Spinner'i kapat.
   await telegramPost("answerCallbackQuery", { callback_query_id: cb.id });
+  const data = String(cb.data || "");
+
+  // Firma secimi butonu — tum onayli kullanicilar kullanabilir.
+  if (data.startsWith("f:")) {
+    if (!telegramCanUse(fromId)) return;
+    const op = data.slice(2);
+    const targetChat = (cb.message && cb.message.chat && cb.message.chat.id) || fromId;
+    await sendTelegramMessage(targetChat, tgCmdFirma(op));
+    return;
+  }
+
+  // Onayla/Reddet — sadece yoneticiler.
   if (!telegramIsAdmin(fromId)) {
     await telegramPost("answerCallbackQuery", { callback_query_id: cb.id, text: "Bu islem sadece yoneticiler icindir.", show_alert: true });
     return;
   }
-  const [action, targetId] = String(cb.data || "").split(":");
+  const [action, targetId] = data.split(":");
   if (!targetId) return;
   if (action === "approve") {
     await tgAdminApprove(fromId, targetId);
@@ -5238,6 +5309,19 @@ async function handleTelegramUpdate(update) {
     return;
   }
 
+  // /firma — argumanli ise direkt sonuc, argumansiz ise firma secim butonlari.
+  if (cmd === "/firma") {
+    const rest = parts.slice(1).join(" ").trim();
+    if (rest) {
+      let r = tgCmdFirma(rest);
+      if (r.length > 4000) r = r.slice(0, 3990) + "\n…";
+      await sendTelegramMessage(chatId, r);
+    } else {
+      await tgSendFirmaSecimi(chatId);
+    }
+    return;
+  }
+
   // Onayli/admin -> komutlar.
   let reply;
   switch (cmd) {
@@ -5280,6 +5364,7 @@ async function startTelegramPolling() {
     { command: "hatlar", description: "Takip edilen hatlar" },
     { command: "son", description: "Son 30 fiyat değişikliği" },
     { command: "dusenler", description: "Son fiyat düşüşleri" },
+    { command: "firma", description: "Firmaya göre değişiklikler" },
     { command: "fiyatlar", description: "Güncel fiyat aralıkları" },
     { command: "hat", description: "Hat detayı: /hat ADANA BURSA" },
     { command: "yardim", description: "Komut menüsü" },
