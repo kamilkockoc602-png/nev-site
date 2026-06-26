@@ -5263,10 +5263,26 @@ function tgCmdDusenler() {
 }
 
 // Gecmiste degisikligi olan firmalarin listesi (buton secimi icin).
-function tgGetHistoryOperators() {
+// Firma butonlari icin kaynak: sistemde TAKIP EDILEN hatlarda secilen firmalar.
+// "Tum firmalar" (*) secili hat varsa, o rotalarda gercekten gozuken firmalar da eklenir.
+function tgGetTrackedOperators() {
   try {
-    return db.prepare("SELECT DISTINCT operator FROM obilet_price_history WHERE operator != '' ORDER BY operator").all()
-      .map((r) => r.operator).filter(Boolean);
+    const set = new Set();
+    let hasWildcard = false;
+    const rows = db.prepare("SELECT operators FROM obilet_targets").all();
+    for (const r of rows) {
+      const list = parseCsvList(r.operators || "");
+      if (list.length === 0 || list.includes("*")) hasWildcard = true;
+      for (const op of list) {
+        if (op && op !== "*") set.add(normalizeObiletOperatorName(op) || op);
+      }
+    }
+    // "*" (tum firmalar) secili ise, takip edilen seferlerde gozuken gercek firmalari da ekle.
+    if (hasWildcard) {
+      const opRows = db.prepare("SELECT DISTINCT operator FROM obilet_prices WHERE operator != ''").all();
+      for (const o of opRows) if (o.operator) set.add(o.operator);
+    }
+    return [...set].sort((a, b) => String(a).localeCompare(String(b), "tr"));
   } catch { return []; }
 }
 
@@ -5292,9 +5308,9 @@ function tgCmdFirma(name) {
 
 // /firma (argumansiz) — firma butonlarini gonderir, tiklayinca o firmanin degisiklikleri gelir.
 async function tgSendFirmaSecimi(chatId) {
-  const ops = tgGetHistoryOperators();
+  const ops = tgGetTrackedOperators();
   if (!ops.length) {
-    await sendTelegramMessage(chatId, "Henüz fiyat değişikliği kaydı yok.");
+    await sendTelegramMessage(chatId, "Takip edilen hatlarda seçili firma bulunamadı.");
     return;
   }
   const inline_keyboard = [];
