@@ -4775,12 +4775,8 @@ function tgTable(cols, rows) {
   const head = rowLine(cols.map((c) => c.label));
   const mid = border("├", "┼", "┤");
   const bottom = border("└", "┴", "┘");
-  // Her satir arasina yatay cizgi (tam izgara).
-  const body = [];
-  rows.forEach((r, i) => {
-    body.push(rowLine(cols.map((c) => r[c.key])));
-    if (i < rows.length - 1) body.push(mid);
-  });
+  // Dis cerceve + baslik cizgisi (satir arasi cizgi yok — 50 satir tek mesaja sigsin).
+  const body = rows.map((r) => rowLine(cols.map((c) => r[c.key])));
   return "<pre>" + tgEscape([top, head, mid, ...body, bottom].join("\n")) + "</pre>";
 }
 
@@ -4811,7 +4807,7 @@ function tgChangesGrouped(rows) {
     { key: "yeni", label: "Yeni", align: "r" },
     { key: "fark", label: "Fark", align: "r" },
   ];
-  const MAX_ROWS = 40; // tek tablo blogu ~3500 karakter -> 4096 limit altinda kalir
+  const MAX_ROWS = 60; // 50 satirlik liste tek blokta kalsin (satir arasi cizgi yok)
   const blocks = [];
   for (const g of ordered) {
     // Grup ici: sefer tarih+saatine gore artan sira.
@@ -5022,7 +5018,7 @@ function tgCmdYardim(isAdmin) {
     "/durum — Sistem özeti (kaç hat, son değişiklik)\n" +
     "/takip — Toplam izlenen sefer (hat bazında)\n" +
     "/hatlar — Takip edilen hatların listesi\n" +
-    "/son — Son 30 fiyat değişikliği\n" +
+    "/son — Son 50 fiyat değişikliği\n" +
     "/dusenler — Sadece son fiyat düşüşleri\n" +
     "/firma — Firmaya göre değişiklikler (listeden seç)\n" +
     "/fiyatlar — Hat bazında güncel fiyat aralığı\n" +
@@ -5152,10 +5148,10 @@ function tgCmdHatlar() {
 function tgCmdSon() {
   try {
     const rows = db.prepare(
-      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 30"
+      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 50"
     ).all();
     if (!rows.length) return "Henüz fiyat değişikliği kaydı yok.";
-    return "🕒 <b>Son 30 Fiyat Değişikliği</b>\n\n" + tgChangesGrouped(rows);
+    return "🕒 <b>Son 50 Fiyat Değişikliği</b>\n\n" + tgChangesGrouped(rows);
   } catch (e) {
     return "Kayıtlar alınamadı: " + tgEscape(e.message);
   }
@@ -5196,7 +5192,7 @@ function tgCmdHatChangesByTarget(targetId) {
     if (!t) return "Hat bulunamadı.";
     const head = `🚌 <b>${tgEscape((t.origin || "").toUpperCase())} → ${tgEscape((t.destination || "").toUpperCase())}</b> — Fiyat Değişiklikleri`;
     const rows = db.prepare(
-      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history WHERE target_id = ? ORDER BY id DESC LIMIT 500"
+      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history WHERE target_id = ? ORDER BY id DESC LIMIT 50"
     ).all(targetId);
     if (!rows.length) return head + "\n\nBu hatta kayıtlı fiyat değişikliği yok.";
     return `${head} (${rows.length})\n\n` + tgChangesGrouped(rows);
@@ -5277,7 +5273,7 @@ function tgCmdTakip() {
 function tgCmdDusenler() {
   try {
     const rows = db.prepare(
-      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history WHERE new_price < old_price ORDER BY id DESC LIMIT 20"
+      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history WHERE new_price < old_price ORDER BY id DESC LIMIT 50"
     ).all();
     if (!rows.length) return "Son dönemde fiyat düşüşü kaydı yok.";
     return "🔻 <b>Son Fiyat Düşüşleri</b>\n\n" + tgChangesGrouped(rows);
@@ -5321,8 +5317,10 @@ function tgCmdFirma(name) {
     const matched = rows.filter((r) => String(r.operator || "").toLocaleLowerCase("tr-TR").includes(q));
     if (!matched.length) return `"${tgEscape(name)}" için fiyat değişikliği bulunamadı.`;
     const title = tgEscape((matched[0].operator || name));
-    return `🏢 <b>${title}</b> — Fiyat Değişiklikleri (${matched.length})\n\n` +
-      tgChangesGrouped(matched);
+    const shown = matched.slice(0, 50); // son 50 (tek mesaja sigsin)
+    const countLabel = matched.length > 50 ? `son 50 / ${matched.length}` : `${matched.length}`;
+    return `🏢 <b>${title}</b> — Fiyat Değişiklikleri (${countLabel})\n\n` +
+      tgChangesGrouped(shown);
   } catch (e) {
     return "Firma değişiklikleri alınamadı: " + tgEscape(e.message);
   }
@@ -5487,7 +5485,7 @@ async function startTelegramPolling() {
     { command: "durum", description: "Sistem özeti" },
     { command: "takip", description: "Toplam izlenen sefer (hat bazında)" },
     { command: "hatlar", description: "Takip edilen hatlar" },
-    { command: "son", description: "Son 30 fiyat değişikliği" },
+    { command: "son", description: "Son 50 fiyat değişikliği" },
     { command: "dusenler", description: "Son fiyat düşüşleri" },
     { command: "firma", description: "Firmaya göre değişiklikler" },
     { command: "fiyatlar", description: "Güncel fiyat aralıkları" },
