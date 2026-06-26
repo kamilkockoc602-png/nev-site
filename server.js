@@ -4995,7 +4995,7 @@ function tgCmdYardim(isAdmin) {
     "/dusenler — Sadece son fiyat düşüşleri\n" +
     "/firma — Firmaya göre değişiklikler (listeden seç)\n" +
     "/fiyatlar — Hat bazında güncel fiyat aralığı\n" +
-    "/hat ADANA BURSA — Tek hattın firma fiyatları\n" +
+    "/hat — Hata göre değişiklikler (listeden seç)\n" +
     "/yardim — Bu menü";
   if (isAdmin) {
     t +=
@@ -5158,11 +5158,27 @@ function tgCmdFiyatlar() {
   }
 }
 
-// /hat <kalkis> <varis> — tek hattin firma bazinda guncel fiyatlari.
+// Bir hattin (target) fiyat degisikliklerini gosterir — firma bazinda gruplu tablo.
+function tgCmdHatChangesByTarget(targetId) {
+  try {
+    const t = db.prepare("SELECT id, origin, destination FROM obilet_targets WHERE id = ?").get(targetId);
+    if (!t) return "Hat bulunamadı.";
+    const head = `🚌 <b>${tgEscape((t.origin || "").toUpperCase())} → ${tgEscape((t.destination || "").toUpperCase())}</b> — Fiyat Değişiklikleri`;
+    const rows = db.prepare(
+      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history WHERE target_id = ? ORDER BY id DESC LIMIT 50"
+    ).all(targetId);
+    if (!rows.length) return head + "\n\nBu hatta kayıtlı fiyat değişikliği yok.";
+    return `${head} (${rows.length})\n\n` + tgChangesGrouped(rows);
+  } catch (e) {
+    return "Hat değişiklikleri alınamadı: " + tgEscape(e.message);
+  }
+}
+
+// /hat <kalkis> <varis> — yazarak hat secimi; eslesirse o hattin degisikliklerini gosterir.
 function tgCmdHat(args) {
   try {
     if (!args || args.length < 2) {
-      return "Kullanım: <b>/hat &lt;kalkış&gt; &lt;varış&gt;</b>\nÖrnek: /hat ADANA BURSA";
+      return "Kullanım: <b>/hat &lt;kalkış&gt; &lt;varış&gt;</b>\nÖrnek: /hat ADANA BURSA\n\nveya sadece /hat yazıp listeden seç.";
     }
     const norm = (s) => String(s || "").toLocaleLowerCase("tr-TR").trim();
     const origin = norm(args[0]);
@@ -5174,34 +5190,29 @@ function tgCmdHat(args) {
     if (!t) {
       return `"${tgEscape(args[0].toUpperCase())} → ${tgEscape(args[args.length - 1].toUpperCase())}" hattı takipte değil.\n/hatlar ile listeyi görebilirsin.`;
     }
-    const rows = db.prepare("SELECT operator, price FROM obilet_prices WHERE target_id = ?").all(t.id);
-    const head = `🚌 <b>${tgEscape((t.origin || "").toUpperCase())} → ${tgEscape((t.destination || "").toUpperCase())}</b> — Güncel Fiyatlar\n`;
-    if (!rows.length) return head + "\nHenüz fiyat verisi yok.";
-    const byOp = new Map();
-    for (const r of rows) {
-      if (!byOp.has(r.operator)) byOp.set(r.operator, { min: r.price, max: r.price, n: 0 });
-      const g = byOp.get(r.operator);
-      g.min = Math.min(g.min, r.price);
-      g.max = Math.max(g.max, r.price);
-      g.n++;
-    }
-    const sorted = [...byOp.entries()].sort((a, b) => a[1].min - b[1].min); // ucuzdan pahaliya
-    const tableRows = sorted.map(([op, g]) => ({
-      firma: op || "?",
-      fiyat: g.min === g.max ? `${g.min}` : `${g.min}-${g.max}`,
-      sefer: String(g.n),
-    }));
-    return head + tgTable(
-      [
-        { key: "firma", label: "Firma", align: "l", max: 16 },
-        { key: "fiyat", label: "Fiyat", align: "r" },
-        { key: "sefer", label: "Sefer", align: "r" },
-      ],
-      tableRows
-    );
+    return tgCmdHatChangesByTarget(t.id);
   } catch (e) {
     return "Hat detayı alınamadı: " + tgEscape(e.message);
   }
+}
+
+// /hat (argumansiz) — hat butonlarini gonderir, tiklayinca o hattin degisiklikleri gelir.
+async function tgSendHatSecimi(chatId) {
+  const routes = db.prepare("SELECT id, origin, destination FROM obilet_targets ORDER BY origin, destination").all();
+  if (!routes.length) {
+    await sendTelegramMessage(chatId, "Takip edilen hat yok.");
+    return;
+  }
+  const inline_keyboard = routes.map((r) => [{
+    text: `${(r.origin || "").toUpperCase()} → ${(r.destination || "").toUpperCase()}`,
+    callback_data: "h:" + r.id,
+  }]);
+  await telegramPost("sendMessage", {
+    chat_id: String(chatId),
+    parse_mode: "HTML",
+    text: "🚌 <b>Hat seç</b> — değişikliklerini görmek istediğin hatta dokun:",
+    reply_markup: { inline_keyboard },
+  });
 }
 
 // /takip — panel kartiyla ayni: aktif hat + toplam izlenen sefer + hat bazinda dagilim.
@@ -5300,12 +5311,19 @@ async function handleTelegramCallback(cb) {
   await telegramPost("answerCallbackQuery", { callback_query_id: cb.id });
   const data = String(cb.data || "");
 
+  const targetChat = (cb.message && cb.message.chat && cb.message.chat.id) || fromId;
+
   // Firma secimi butonu — tum onayli kullanicilar kullanabilir.
   if (data.startsWith("f:")) {
     if (!telegramCanUse(fromId)) return;
-    const op = data.slice(2);
-    const targetChat = (cb.message && cb.message.chat && cb.message.chat.id) || fromId;
-    await sendTelegramMessage(targetChat, tgCmdFirma(op));
+    await sendTelegramMessage(targetChat, tgCmdFirma(data.slice(2)));
+    return;
+  }
+  // Hat secimi butonu — o hattin degisikliklerini gosterir.
+  if (data.startsWith("h:")) {
+    if (!telegramCanUse(fromId)) return;
+    const id = parseInt(data.slice(2), 10);
+    await sendTelegramMessage(targetChat, tgCmdHatChangesByTarget(id));
     return;
   }
 
@@ -5378,6 +5396,19 @@ async function handleTelegramUpdate(update) {
     return;
   }
 
+  // /hat — argumanli ise o hattin degisiklikleri, argumansiz ise hat secim butonlari.
+  if (cmd === "/hat") {
+    const rest = parts.slice(1);
+    if (rest.length >= 2) {
+      let r = tgCmdHat(rest);
+      if (r.length > 4000) r = r.slice(0, 3990) + "\n…";
+      await sendTelegramMessage(chatId, r);
+    } else {
+      await tgSendHatSecimi(chatId);
+    }
+    return;
+  }
+
   // Onayli/admin -> komutlar.
   let reply;
   switch (cmd) {
@@ -5393,8 +5424,6 @@ async function handleTelegramUpdate(update) {
       reply = tgCmdSon(); break;
     case "/fiyatlar":
       reply = tgCmdFiyatlar(); break;
-    case "/hat":
-      reply = tgCmdHat(parts.slice(1)); break;
     case "/dusenler":
       reply = tgCmdDusenler(); break;
     case "/takip":
@@ -5422,7 +5451,7 @@ async function startTelegramPolling() {
     { command: "dusenler", description: "Son fiyat düşüşleri" },
     { command: "firma", description: "Firmaya göre değişiklikler" },
     { command: "fiyatlar", description: "Güncel fiyat aralıkları" },
-    { command: "hat", description: "Hat detayı: /hat ADANA BURSA" },
+    { command: "hat", description: "Hata göre değişiklikler" },
     { command: "yardim", description: "Komut menüsü" },
   ];
   await telegramPost("setMyCommands", { commands: userCommands });
