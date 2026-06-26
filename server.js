@@ -4805,7 +4805,15 @@ function tgChangesGrouped(rows) {
   }
   // Gruplar: en son degisen grup ustte (rows zaten id DESC geldigi icin order = ilk gorulme).
   const ordered = [...groups.values()].sort((a, b) => a.order - b.order);
-  const blocks = ordered.map((g) => {
+  const cols = [
+    { key: "sefer", label: "Sefer", align: "l", max: 14 },
+    { key: "eski", label: "Eski", align: "r" },
+    { key: "yeni", label: "Yeni", align: "r" },
+    { key: "fark", label: "Fark", align: "r" },
+  ];
+  const MAX_ROWS = 25; // tek tablo blogu limit altinda kalsin (sendTelegramLong burdan boler)
+  const blocks = [];
+  for (const g of ordered) {
     // Grup ici: sefer tarih+saatine gore artan sira.
     g.items.sort((a, b) => {
       const ka = `${a.journey_date || ""} ${a.departure_time || ""}`;
@@ -4821,18 +4829,14 @@ function tgChangesGrouped(rows) {
         fark: (diff > 0 ? "+" : "") + diff,
       };
     });
-    const header = `🚌 <b>${tgEscape(g.route)}</b> · ${tgEscape(g.operator)}`;
-    const table = tgTable(
-      [
-        { key: "sefer", label: "Sefer", align: "l", max: 14 },
-        { key: "eski", label: "Eski", align: "r" },
-        { key: "yeni", label: "Yeni", align: "r" },
-        { key: "fark", label: "Fark", align: "r" },
-      ],
-      tableRows
-    );
-    return header + "\n" + table;
-  });
+    const partCount = Math.ceil(tableRows.length / MAX_ROWS);
+    for (let i = 0; i < tableRows.length; i += MAX_ROWS) {
+      const slice = tableRows.slice(i, i + MAX_ROWS);
+      const partLabel = partCount > 1 ? ` (${Math.floor(i / MAX_ROWS) + 1}/${partCount})` : "";
+      const header = `🚌 <b>${tgEscape(g.route)}</b> · ${tgEscape(g.operator)}${partLabel}`;
+      blocks.push(header + "\n" + tgTable(cols, slice));
+    }
+  }
   return blocks.join("\n\n");
 }
 
@@ -4877,6 +4881,26 @@ function sendTelegramMessage(chatId, htmlText) {
   });
 }
 
+// Uzun metni Telegram limitine gore birden fazla mesaja bolup sirayla gonderir.
+// Blok (\n\n) sinirlarindan boler; tgChangesGrouped her blogu limit altinda tuttugu icin
+// hicbir <pre> tablosu ortadan bolunmez.
+async function sendTelegramLong(chatId, text, limit = 3800) {
+  if (!text) return;
+  if (text.length <= limit) { await sendTelegramMessage(chatId, text); return; }
+  const blocks = String(text).split("\n\n");
+  let buf = "";
+  for (const block of blocks) {
+    const piece = buf ? buf + "\n\n" + block : block;
+    if (piece.length > limit && buf) {
+      await sendTelegramMessage(chatId, buf);
+      buf = block;
+    } else {
+      buf = piece;
+    }
+  }
+  if (buf) await sendTelegramMessage(chatId, buf);
+}
+
 // Bir hattaki fiyat degisikliklerini Telegram'a bildirir.
 // Hedefe ozel telegram_chat_ids varsa onlar, yoksa global TELEGRAM_CHAT_ID kullanilir.
 async function sendObiletTelegramAlert(target, changes) {
@@ -4900,7 +4924,7 @@ async function sendObiletTelegramAlert(target, changes) {
     tgChangesGrouped(rows);
 
   for (const chatId of chatIds) {
-    await sendTelegramMessage(chatId, text);
+    await sendTelegramLong(chatId, text);
   }
 }
 
@@ -5172,7 +5196,7 @@ function tgCmdHatChangesByTarget(targetId) {
     if (!t) return "Hat bulunamadı.";
     const head = `🚌 <b>${tgEscape((t.origin || "").toUpperCase())} → ${tgEscape((t.destination || "").toUpperCase())}</b> — Fiyat Değişiklikleri`;
     const rows = db.prepare(
-      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history WHERE target_id = ? ORDER BY id DESC LIMIT 50"
+      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history WHERE target_id = ? ORDER BY id DESC LIMIT 500"
     ).all(targetId);
     if (!rows.length) return head + "\n\nBu hatta kayıtlı fiyat değişikliği yok.";
     return `${head} (${rows.length})\n\n` + tgChangesGrouped(rows);
@@ -5296,11 +5320,9 @@ function tgCmdFirma(name) {
     ).all();
     const matched = rows.filter((r) => String(r.operator || "").toLocaleLowerCase("tr-TR").includes(q));
     if (!matched.length) return `"${tgEscape(name)}" için fiyat değişikliği bulunamadı.`;
-    const shown = matched.slice(0, 20);
     const title = tgEscape((matched[0].operator || name));
     return `🏢 <b>${title}</b> — Fiyat Değişiklikleri (${matched.length})\n\n` +
-      tgChangesGrouped(shown) +
-      (matched.length > 20 ? "\n<i>… ilk 20 gösteriliyor</i>" : "");
+      tgChangesGrouped(matched);
   } catch (e) {
     return "Firma değişiklikleri alınamadı: " + tgEscape(e.message);
   }
@@ -5339,14 +5361,14 @@ async function handleTelegramCallback(cb) {
   // Firma secimi butonu — tum onayli kullanicilar kullanabilir.
   if (data.startsWith("f:")) {
     if (!telegramCanUse(fromId)) return;
-    await sendTelegramMessage(targetChat, tgCmdFirma(data.slice(2)));
+    await sendTelegramLong(targetChat, tgCmdFirma(data.slice(2)));
     return;
   }
   // Hat secimi butonu — o hattin degisikliklerini gosterir.
   if (data.startsWith("h:")) {
     if (!telegramCanUse(fromId)) return;
     const id = parseInt(data.slice(2), 10);
-    await sendTelegramMessage(targetChat, tgCmdHatChangesByTarget(id));
+    await sendTelegramLong(targetChat, tgCmdHatChangesByTarget(id));
     return;
   }
 
@@ -5410,9 +5432,7 @@ async function handleTelegramUpdate(update) {
   if (cmd === "/firma") {
     const rest = parts.slice(1).join(" ").trim();
     if (rest) {
-      let r = tgCmdFirma(rest);
-      if (r.length > 4000) r = r.slice(0, 3990) + "\n…";
-      await sendTelegramMessage(chatId, r);
+      await sendTelegramLong(chatId, tgCmdFirma(rest));
     } else {
       await tgSendFirmaSecimi(chatId);
     }
@@ -5423,9 +5443,7 @@ async function handleTelegramUpdate(update) {
   if (cmd === "/hat") {
     const rest = parts.slice(1);
     if (rest.length >= 2) {
-      let r = tgCmdHat(rest);
-      if (r.length > 4000) r = r.slice(0, 3990) + "\n…";
-      await sendTelegramMessage(chatId, r);
+      await sendTelegramLong(chatId, tgCmdHat(rest));
     } else {
       await tgSendHatSecimi(chatId);
     }
@@ -5454,9 +5472,8 @@ async function handleTelegramUpdate(update) {
     default:
       reply = "Bilinmeyen komut. /yardim yazarak komutları görebilirsin.";
   }
-  // Telegram mesaj limiti 4096 karakter — uzunsa kirp.
-  if (reply.length > 4000) reply = reply.slice(0, 3990) + "\n…";
-  await sendTelegramMessage(chatId, reply);
+  // Uzun cevaplari otomatik birden fazla mesaja bol (kirpma yok).
+  await sendTelegramLong(chatId, reply);
 }
 
 // Polling dongusu — tek instance icin guvenli.
