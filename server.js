@@ -4755,15 +4755,10 @@ function tgDateDot(s) {
   return m ? `${m[3]}.${m[2]}.${m[1]}` : String(s || "");
 }
 
-// YYYY-MM-DD -> DD.MM (kisa, tablo icin).
-function tgDateShort(s) {
-  const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  return m ? `${m[3]}.${m[2]}` : String(s || "");
-}
-
 // Monospace hizali tablo (<pre> icinde). cols: [{key,label,align:'l'|'r',max?}].
-// Hizalama satir uzunluguna gore yapilir; sonra HTML kacisi uygulanir (gorsel hiza bozulmaz).
-function tgTable(cols, rows) {
+// opts.gap: kolonlar arasi bosluk sayisi (varsayilan 2). Dar tablolar icin 1 kullan.
+function tgTable(cols, rows, opts = {}) {
+  const gap = " ".repeat(opts.gap == null ? 2 : opts.gap);
   const widths = cols.map((c) => {
     let w = c.label.length;
     for (const r of rows) w = Math.max(w, String(r[c.key] == null ? "" : r[c.key]).length);
@@ -4775,37 +4770,63 @@ function tgTable(cols, rows) {
     if (s.length > w) s = s.slice(0, w);
     return cols[i].align === "r" ? s.padStart(w) : s.padEnd(w);
   };
-  const head = cols.map((c, i) => cell(c.label, i)).join("  ");
-  const sep = widths.map((w) => "-".repeat(w)).join("  ");
-  const body = rows.map((r) => cols.map((c, i) => cell(r[c.key], i)).join("  "));
+  const head = cols.map((c, i) => cell(c.label, i)).join(gap);
+  const sep = widths.map((w) => "-".repeat(w)).join(gap);
+  const body = rows.map((r) => cols.map((c, i) => cell(r[c.key], i)).join(gap));
   return "<pre>" + tgEscape([head, sep, ...body].join("\n")) + "</pre>";
 }
 
-// Bir fiyat gecmisi satirini tablo satirina cevirir (degisiklik komutlari icin).
-function tgChangeRow(r) {
-  const diff = r.new_price - r.old_price;
-  const sefer = `${tgDateShort(r.journey_date)}${r.departure_time ? " " + r.departure_time : ""}`.trim();
-  return {
-    hat: `${(r.origin || "").toUpperCase()}>${(r.destination || "").toUpperCase()}`,
-    firma: r.operator || "",
-    sefer,
-    eski: String(r.old_price),
-    yeni: String(r.new_price),
-    fark: (diff > 0 ? "+" : "") + diff,
-  };
+// YYYY-MM-DD -> DD.MM.YY (kisa ama yilli).
+function tgDate2(s) {
+  const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}.${m[2]}.${m[1].slice(2)}` : String(s || "");
 }
 
-// Degisiklik listesi tablosu — komutlar arasinda ortak kolon seti.
-function tgChangesTable(rows, { withFirma = true } = {}) {
-  const cols = [{ key: "hat", label: "Hat", align: "l", max: 15 }];
-  if (withFirma) cols.push({ key: "firma", label: "Firma", align: "l", max: 13 });
-  cols.push(
-    { key: "sefer", label: "Sefer", align: "l", max: 11 },
-    { key: "eski", label: "Eski", align: "r" },
-    { key: "yeni", label: "Yeni", align: "r" },
-    { key: "fark", label: "Fark", align: "r" }
-  );
-  return tgTable(cols, rows.map(tgChangeRow));
+// Degisiklikleri Hat+Firma'ya gore gruplar; her grup icinde sefer tarih+saatine gore siralar.
+// Genis tek tablo yerine dar, telefona sigan bloklar uretir.
+function tgChangesGrouped(rows) {
+  const groups = new Map();
+  let order = 0;
+  for (const r of rows) {
+    const route = `${(r.origin || "").toUpperCase()}>${(r.destination || "").toUpperCase()}`;
+    const key = route + "|" + (r.operator || "");
+    if (!groups.has(key)) {
+      groups.set(key, { route, operator: r.operator || "", order: order++, items: [] });
+    }
+    groups.get(key).items.push(r);
+  }
+  // Gruplar: en son degisen grup ustte (rows zaten id DESC geldigi icin order = ilk gorulme).
+  const ordered = [...groups.values()].sort((a, b) => a.order - b.order);
+  const blocks = ordered.map((g) => {
+    // Grup ici: sefer tarih+saatine gore artan sira.
+    g.items.sort((a, b) => {
+      const ka = `${a.journey_date || ""} ${a.departure_time || ""}`;
+      const kb = `${b.journey_date || ""} ${b.departure_time || ""}`;
+      return ka < kb ? -1 : ka > kb ? 1 : 0;
+    });
+    const tableRows = g.items.map((r) => {
+      const diff = r.new_price - r.old_price;
+      return {
+        sefer: `${tgDate2(r.journey_date)}${r.departure_time ? " " + r.departure_time : ""}`.trim(),
+        eski: String(r.old_price),
+        yeni: String(r.new_price),
+        fark: (diff > 0 ? "+" : "") + diff,
+      };
+    });
+    const header = `🚌 <b>${tgEscape(g.route)}</b> · ${tgEscape(g.operator)}`;
+    const table = tgTable(
+      [
+        { key: "sefer", label: "Sefer", align: "l", max: 14 },
+        { key: "eski", label: "Eski", align: "r" },
+        { key: "yeni", label: "Yeni", align: "r" },
+        { key: "fark", label: "Fark", align: "r" },
+      ],
+      tableRows,
+      { gap: 1 }
+    );
+    return header + "\n" + table;
+  });
+  return blocks.join("\n\n");
 }
 
 // Telegram'a tek bir mesaj gonderir. Hata olsa bile uygulamayi dusurmez (resolve(false)).
@@ -5072,7 +5093,7 @@ function tgCmdDurum() {
       changesToday = db.prepare("SELECT COUNT(*) AS c FROM obilet_price_history WHERE substr(changed_at,1,10) = ?").get(todayPrefix).c;
     }
     const lastBlock = lastRows.length
-      ? tgChangesTable(lastRows)
+      ? tgChangesGrouped(lastRows)
       : "Henüz değişiklik kaydı yok.";
     return (
       "📊 <b>Sistem Durumu</b>\n\n" +
@@ -5103,7 +5124,7 @@ function tgCmdSon() {
       "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 30"
     ).all();
     if (!rows.length) return "Henüz fiyat değişikliği kaydı yok.";
-    return "🕒 <b>Son 30 Fiyat Değişikliği</b>\n" + tgChangesTable(rows);
+    return "🕒 <b>Son 30 Fiyat Değişikliği</b>\n\n" + tgChangesGrouped(rows);
   } catch (e) {
     return "Kayıtlar alınamadı: " + tgEscape(e.message);
   }
@@ -5217,7 +5238,7 @@ function tgCmdDusenler() {
       "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history WHERE new_price < old_price ORDER BY id DESC LIMIT 20"
     ).all();
     if (!rows.length) return "Son dönemde fiyat düşüşü kaydı yok.";
-    return "🔻 <b>Son Fiyat Düşüşleri</b>\n" + tgChangesTable(rows);
+    return "🔻 <b>Son Fiyat Düşüşleri</b>\n\n" + tgChangesGrouped(rows);
   } catch (e) {
     return "Düşüşler alınamadı: " + tgEscape(e.message);
   }
@@ -5243,8 +5264,8 @@ function tgCmdFirma(name) {
     if (!matched.length) return `"${tgEscape(name)}" için fiyat değişikliği bulunamadı.`;
     const shown = matched.slice(0, 20);
     const title = tgEscape((matched[0].operator || name));
-    return `🏢 <b>${title}</b> — Fiyat Değişiklikleri (${matched.length})\n` +
-      tgChangesTable(shown, { withFirma: false }) +
+    return `🏢 <b>${title}</b> — Fiyat Değişiklikleri (${matched.length})\n\n` +
+      tgChangesGrouped(shown) +
       (matched.length > 20 ? "\n<i>… ilk 20 gösteriliyor</i>" : "");
   } catch (e) {
     return "Firma değişiklikleri alınamadı: " + tgEscape(e.message);
