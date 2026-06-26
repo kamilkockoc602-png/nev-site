@@ -5023,7 +5023,7 @@ function tgCmdYardim(isAdmin) {
     "/firma — Firmaya göre değişiklikler (listeden seç)\n" +
     "/fiyatlar — Hat bazında güncel fiyat aralığı\n" +
     "/hat — Hata göre değişiklikler (listeden seç)\n" +
-    "/guncel — Hattın güncel tüm fiyatları (listeden seç)\n" +
+    "/guncel — Hattın değişmeyen fiyatları (listeden seç)\n" +
     "/yardim — Bu menü";
   if (isAdmin) {
     t +=
@@ -5243,38 +5243,68 @@ async function tgSendHatSecimi(chatId) {
   });
 }
 
-// Bir hattin GUNCEL fiyatlari (degismis/degismemis fark etmez) — firma ozeti.
-// Ayni firma+fiyat birlestirilir, kac seferde gecerli oldugu gosterilir.
+// Bir hattin DEGISMEYEN seferleri — fiyati hic degismemis (gecmiste kaydi olmayan) seferler.
+// Degisen seferler /hat ve bildirimle zaten geliyor; burada sadece "degismedi" olanlar.
 function tgCmdGuncelByTarget(targetId) {
   try {
     const t = db.prepare("SELECT id, origin, destination FROM obilet_targets WHERE id = ?").get(targetId);
     if (!t) return "Hat bulunamadı.";
-    const head = `🚌 <b>${tgEscape((t.origin || "").toUpperCase())} → ${tgEscape((t.destination || "").toUpperCase())}</b> — Güncel Fiyatlar`;
-    const rows = db.prepare(
-      "SELECT operator, price, COUNT(*) AS n FROM obilet_prices WHERE target_id = ? GROUP BY operator, price ORDER BY operator, price"
-    ).all(targetId);
-    if (!rows.length) return head + "\n\nBu hatta güncel fiyat verisi yok.";
-    // Firma adina gore Turkce siralama, ayni firmada fiyata gore.
-    rows.sort((a, b) => {
-      const c = String(a.operator || "").localeCompare(String(b.operator || ""), "tr");
-      return c !== 0 ? c : a.price - b.price;
-    });
-    const total = rows.reduce((s, r) => s + r.n, 0);
-    const tableRows = rows.map((r) => ({
-      firma: r.operator || "?",
-      fiyat: String(r.price),
-      sefer: String(r.n),
-    }));
-    return `${head} (${total} sefer)\n\n` + tgTable(
-      [
-        { key: "firma", label: "Firma", align: "l", max: 20 },
-        { key: "fiyat", label: "Fiyat", align: "r" },
-        { key: "sefer", label: "Sefer", align: "r" },
-      ],
-      tableRows
+    const routeUp = `${(t.origin || "").toUpperCase()} → ${(t.destination || "").toUpperCase()}`;
+    const head = `🚌 <b>${tgEscape(routeUp)}</b> — Değişmeyen Fiyatlar`;
+
+    // Fiyati degismis sefer kimlikleri (gecmiste kaydi olanlar).
+    const changedKeys = new Set(
+      db.prepare("SELECT DISTINCT operator, journey_date, departure_time FROM obilet_price_history WHERE target_id = ?")
+        .all(targetId)
+        .map((r) => `${r.operator}|${r.journey_date}|${r.departure_time}`)
     );
+
+    // Tum guncel seferler; degismeyenleri (gecmiste olmayan) ayikla.
+    const prices = db.prepare(
+      "SELECT operator, journey_date, departure_time, price FROM obilet_prices WHERE target_id = ?"
+    ).all(targetId);
+    const unchanged = prices.filter(
+      (p) => !changedKeys.has(`${p.operator}|${p.journey_date}|${p.departure_time}`)
+    );
+    if (!unchanged.length) return head + "\n\nBu hatta değişmemiş sefer yok (hepsinin fiyatı değişmiş).";
+
+    // Firma bazinda grupla.
+    const groups = new Map();
+    for (const p of unchanged) {
+      if (!groups.has(p.operator)) groups.set(p.operator, []);
+      groups.get(p.operator).push(p);
+    }
+    const operators = [...groups.keys()].sort((a, b) => String(a).localeCompare(String(b), "tr"));
+
+    const CAP = 50;
+    const total = unchanged.length;
+    let shown = 0;
+    const cols = [
+      { key: "sefer", label: "Sefer", align: "l", max: 14 },
+      { key: "fiyat", label: "Fiyat", align: "r" },
+      { key: "not", label: "Durum", align: "l" },
+    ];
+    const blocks = [];
+    for (const op of operators) {
+      if (shown >= CAP) break;
+      const items = groups.get(op).sort((a, b) => {
+        const ka = `${a.journey_date} ${a.departure_time}`;
+        const kb = `${b.journey_date} ${b.departure_time}`;
+        return ka < kb ? -1 : ka > kb ? 1 : 0;
+      });
+      const slice = items.slice(0, CAP - shown);
+      shown += slice.length;
+      const tableRows = slice.map((p) => ({
+        sefer: `${tgDate2(p.journey_date)}${p.departure_time ? " " + p.departure_time : ""}`.trim(),
+        fiyat: String(p.price),
+        not: "değişmedi",
+      }));
+      blocks.push(`👤 <b>${tgEscape(op)}</b>\n` + tgTable(cols, tableRows));
+    }
+    const countLabel = total > CAP ? `${CAP}/${total}` : `${total}`;
+    return `${head} (${countLabel} sefer)\n\n` + blocks.join("\n\n");
   } catch (e) {
-    return "Güncel fiyatlar alınamadı: " + tgEscape(e.message);
+    return "Değişmeyen fiyatlar alınamadı: " + tgEscape(e.message);
   }
 }
 
@@ -5314,7 +5344,7 @@ async function tgSendGuncelSecimi(chatId) {
   await telegramPost("sendMessage", {
     chat_id: String(chatId),
     parse_mode: "HTML",
-    text: "🚌 <b>Hat seç</b> — güncel fiyatlarını görmek istediğin hatta dokun:",
+    text: "🚌 <b>Hat seç</b> — değişmeyen fiyatlarını görmek istediğin hatta dokun:",
     reply_markup: { inline_keyboard },
   });
 }
@@ -5585,7 +5615,7 @@ async function startTelegramPolling() {
     { command: "firma", description: "Firmaya göre değişiklikler" },
     { command: "fiyatlar", description: "Güncel fiyat aralıkları" },
     { command: "hat", description: "Hata göre değişiklikler" },
-    { command: "guncel", description: "Hattın güncel tüm fiyatları" },
+    { command: "guncel", description: "Hattın değişmeyen fiyatları" },
     { command: "yardim", description: "Komut menüsü" },
   ];
   await telegramPost("setMyCommands", { commands: userCommands });
