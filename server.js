@@ -4878,19 +4878,19 @@ async function sendObiletTelegramAlert(target, changes) {
   const chatIds = telegramNotifyChatIds(target);
   if (chatIds.length === 0) return;
 
-  const route = `${tgEscape((target.origin || "").toUpperCase())} → ${tgEscape((target.destination || "").toUpperCase())}`;
-  const lines = changes.map((c) => {
-    const diff = (c.newPrice || 0) - (c.oldPrice || 0);
-    const icon = diff < 0 ? "🔻" : diff > 0 ? "🔺" : "▪️";
-    const sign = diff > 0 ? "+" : "";
-    const op = tgEscape(c.operator || "");
-    const timeStr = c.departure_time ? ` ${tgEscape(c.departure_time)}` : "";
-    const dateStr = c.journey_date ? ` <i>${tgEscape(tgDateDot(c.journey_date))}</i>` : "";
-    return `${icon} <b>${op}</b>${timeStr}${dateStr}\n   ${c.oldPrice} → <b>${c.newPrice} TL</b> (${sign}${diff} TL)`;
-  });
+  // changes camelCase (oldPrice/newPrice) -> tgChangesGrouped'in bekledigi sekle cevir.
+  const rows = changes.map((c) => ({
+    origin: target.origin,
+    destination: target.destination,
+    journey_date: c.journey_date,
+    operator: c.operator,
+    departure_time: c.departure_time,
+    old_price: c.oldPrice,
+    new_price: c.newPrice,
+  }));
   const text =
-    `🚌 <b>${route}</b>\n<i>${changes.length} fiyat değişikliği</i>\n\n` +
-    lines.join("\n\n");
+    `🔔 <b>Fiyat Değişikliği</b> · ${changes.length} değişim\n\n` +
+    tgChangesGrouped(rows);
 
   for (const chatId of chatIds) {
     await sendTelegramMessage(chatId, text);
