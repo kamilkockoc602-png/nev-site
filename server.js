@@ -4811,7 +4811,7 @@ function tgChangesGrouped(rows) {
     { key: "yeni", label: "Yeni", align: "r" },
     { key: "fark", label: "Fark", align: "r" },
   ];
-  const MAX_ROWS = 25; // tek tablo blogu limit altinda kalsin (sendTelegramLong burdan boler)
+  const MAX_ROWS = 40; // tek tablo blogu ~3500 karakter -> 4096 limit altinda kalir
   const blocks = [];
   for (const g of ordered) {
     // Grup ici: sefer tarih+saatine gore artan sira.
@@ -4884,7 +4884,7 @@ function sendTelegramMessage(chatId, htmlText) {
 // Uzun metni Telegram limitine gore birden fazla mesaja bolup sirayla gonderir.
 // Blok (\n\n) sinirlarindan boler; tgChangesGrouped her blogu limit altinda tuttugu icin
 // hicbir <pre> tablosu ortadan bolunmez.
-async function sendTelegramLong(chatId, text, limit = 3800) {
+async function sendTelegramLong(chatId, text, limit = 4090) {
   if (!text) return;
   if (text.length <= limit) { await sendTelegramMessage(chatId, text); return; }
   const blocks = String(text).split("\n\n");
