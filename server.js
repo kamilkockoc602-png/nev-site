@@ -4755,10 +4755,9 @@ function tgDateDot(s) {
   return m ? `${m[3]}.${m[2]}.${m[1]}` : String(s || "");
 }
 
-// Monospace hizali tablo (<pre> icinde). cols: [{key,label,align:'l'|'r',max?}].
-// opts.gap: kolonlar arasi bosluk sayisi (varsayilan 2). Dar tablolar icin 1 kullan.
-function tgTable(cols, rows, opts = {}) {
-  const gap = " ".repeat(opts.gap == null ? 2 : opts.gap);
+// Cerceveli (Excel hucresi gibi) monospace tablo (<pre> icinde).
+// cols: [{key,label,align:'l'|'r',max?}]. Box-drawing karakterleriyle cizgili kutular.
+function tgTable(cols, rows) {
   const widths = cols.map((c) => {
     let w = c.label.length;
     for (const r of rows) w = Math.max(w, String(r[c.key] == null ? "" : r[c.key]).length);
@@ -4770,10 +4769,14 @@ function tgTable(cols, rows, opts = {}) {
     if (s.length > w) s = s.slice(0, w);
     return cols[i].align === "r" ? s.padStart(w) : s.padEnd(w);
   };
-  const head = cols.map((c, i) => cell(c.label, i)).join(gap);
-  const sep = widths.map((w) => "-".repeat(w)).join(gap);
-  const body = rows.map((r) => cols.map((c, i) => cell(r[c.key], i)).join(gap));
-  return "<pre>" + tgEscape([head, sep, ...body].join("\n")) + "</pre>";
+  const border = (l, m, r) => l + widths.map((w) => "─".repeat(w + 2)).join(m) + r;
+  const rowLine = (vals) => "│" + vals.map((v, i) => " " + cell(v, i) + " ").join("│") + "│";
+  const top = border("┌", "┬", "┐");
+  const head = rowLine(cols.map((c) => c.label));
+  const mid = border("├", "┼", "┤");
+  const body = rows.map((r) => rowLine(cols.map((c) => r[c.key])));
+  const bottom = border("└", "┴", "┘");
+  return "<pre>" + tgEscape([top, head, mid, ...body, bottom].join("\n")) + "</pre>";
 }
 
 // YYYY-MM-DD -> DD.MM.YY (kisa ama yilli).
@@ -4821,8 +4824,7 @@ function tgChangesGrouped(rows) {
         { key: "yeni", label: "Yeni", align: "r" },
         { key: "fark", label: "Fark", align: "r" },
       ],
-      tableRows,
-      { gap: 1 }
+      tableRows
     );
     return header + "\n" + table;
   });
