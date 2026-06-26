@@ -4774,8 +4774,13 @@ function tgTable(cols, rows) {
   const top = border("┌", "┬", "┐");
   const head = rowLine(cols.map((c) => c.label));
   const mid = border("├", "┼", "┤");
-  const body = rows.map((r) => rowLine(cols.map((c) => r[c.key])));
   const bottom = border("└", "┴", "┘");
+  // Her satir arasina yatay cizgi (tam izgara).
+  const body = [];
+  rows.forEach((r, i) => {
+    body.push(rowLine(cols.map((c) => r[c.key])));
+    if (i < rows.length - 1) body.push(mid);
+  });
   return "<pre>" + tgEscape([top, head, mid, ...body, bottom].join("\n")) + "</pre>";
 }
 
