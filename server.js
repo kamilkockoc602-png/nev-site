@@ -5023,6 +5023,7 @@ function tgCmdYardim(isAdmin) {
     "/firma — Firmaya göre değişiklikler (listeden seç)\n" +
     "/fiyatlar — Hat bazında güncel fiyat aralığı\n" +
     "/hat — Hata göre değişiklikler (listeden seç)\n" +
+    "/guncel — Hattın güncel tüm fiyatları (listeden seç)\n" +
     "/yardim — Bu menü";
   if (isAdmin) {
     t +=
@@ -5242,6 +5243,82 @@ async function tgSendHatSecimi(chatId) {
   });
 }
 
+// Bir hattin GUNCEL fiyatlari (degismis/degismemis fark etmez) — firma ozeti.
+// Ayni firma+fiyat birlestirilir, kac seferde gecerli oldugu gosterilir.
+function tgCmdGuncelByTarget(targetId) {
+  try {
+    const t = db.prepare("SELECT id, origin, destination FROM obilet_targets WHERE id = ?").get(targetId);
+    if (!t) return "Hat bulunamadı.";
+    const head = `🚌 <b>${tgEscape((t.origin || "").toUpperCase())} → ${tgEscape((t.destination || "").toUpperCase())}</b> — Güncel Fiyatlar`;
+    const rows = db.prepare(
+      "SELECT operator, price, COUNT(*) AS n FROM obilet_prices WHERE target_id = ? GROUP BY operator, price ORDER BY operator, price"
+    ).all(targetId);
+    if (!rows.length) return head + "\n\nBu hatta güncel fiyat verisi yok.";
+    // Firma adina gore Turkce siralama, ayni firmada fiyata gore.
+    rows.sort((a, b) => {
+      const c = String(a.operator || "").localeCompare(String(b.operator || ""), "tr");
+      return c !== 0 ? c : a.price - b.price;
+    });
+    const total = rows.reduce((s, r) => s + r.n, 0);
+    const tableRows = rows.map((r) => ({
+      firma: r.operator || "?",
+      fiyat: String(r.price),
+      sefer: String(r.n),
+    }));
+    return `${head} (${total} sefer)\n\n` + tgTable(
+      [
+        { key: "firma", label: "Firma", align: "l", max: 20 },
+        { key: "fiyat", label: "Fiyat", align: "r" },
+        { key: "sefer", label: "Sefer", align: "r" },
+      ],
+      tableRows
+    );
+  } catch (e) {
+    return "Güncel fiyatlar alınamadı: " + tgEscape(e.message);
+  }
+}
+
+// /guncel <kalkis> <varis> — yazarak hat secimi; eslesirse o hattin guncel fiyatlari.
+function tgCmdGuncel(args) {
+  try {
+    if (!args || args.length < 2) {
+      return "Kullanım: <b>/guncel &lt;kalkış&gt; &lt;varış&gt;</b>\nÖrnek: /guncel ADANA BURSA\n\nveya sadece /guncel yazıp listeden seç.";
+    }
+    const norm = (s) => String(s || "").toLocaleLowerCase("tr-TR").trim();
+    const origin = norm(args[0]);
+    const destination = norm(args[args.length - 1]);
+    const targets = db.prepare("SELECT id, origin, destination FROM obilet_targets").all();
+    const t =
+      targets.find((x) => norm(x.origin) === origin && norm(x.destination) === destination) ||
+      targets.find((x) => norm(x.origin).includes(origin) && norm(x.destination).includes(destination));
+    if (!t) {
+      return `"${tgEscape(args[0].toUpperCase())} → ${tgEscape(args[args.length - 1].toUpperCase())}" hattı takipte değil.\n/hatlar ile listeyi görebilirsin.`;
+    }
+    return tgCmdGuncelByTarget(t.id);
+  } catch (e) {
+    return "Güncel fiyatlar alınamadı: " + tgEscape(e.message);
+  }
+}
+
+// /guncel (argumansiz) — hat butonlarini gonderir, tiklayinca o hattin guncel fiyatlari gelir.
+async function tgSendGuncelSecimi(chatId) {
+  const routes = db.prepare("SELECT id, origin, destination FROM obilet_targets ORDER BY origin, destination").all();
+  if (!routes.length) {
+    await sendTelegramMessage(chatId, "Takip edilen hat yok.");
+    return;
+  }
+  const inline_keyboard = routes.map((r) => [{
+    text: `${(r.origin || "").toUpperCase()} → ${(r.destination || "").toUpperCase()}`,
+    callback_data: "g:" + r.id,
+  }]);
+  await telegramPost("sendMessage", {
+    chat_id: String(chatId),
+    parse_mode: "HTML",
+    text: "🚌 <b>Hat seç</b> — güncel fiyatlarını görmek istediğin hatta dokun:",
+    reply_markup: { inline_keyboard },
+  });
+}
+
 // /takip — panel kartiyla ayni: aktif hat + toplam izlenen sefer + hat bazinda dagilim.
 function tgCmdTakip() {
   try {
@@ -5369,6 +5446,13 @@ async function handleTelegramCallback(cb) {
     await sendTelegramLong(targetChat, tgCmdHatChangesByTarget(id));
     return;
   }
+  // Guncel fiyat butonu — o hattin anlik tum fiyatlari (firma ozeti).
+  if (data.startsWith("g:")) {
+    if (!telegramCanUse(fromId)) return;
+    const id = parseInt(data.slice(2), 10);
+    await sendTelegramLong(targetChat, tgCmdGuncelByTarget(id));
+    return;
+  }
 
   // Onayla/Reddet — sadece yoneticiler.
   if (!telegramIsAdmin(fromId)) {
@@ -5448,6 +5532,17 @@ async function handleTelegramUpdate(update) {
     return;
   }
 
+  // /guncel — argumanli ise o hattin guncel fiyatlari, argumansiz ise hat secim butonlari.
+  if (cmd === "/guncel") {
+    const rest = parts.slice(1);
+    if (rest.length >= 2) {
+      await sendTelegramLong(chatId, tgCmdGuncel(rest));
+    } else {
+      await tgSendGuncelSecimi(chatId);
+    }
+    return;
+  }
+
   // Onayli/admin -> komutlar.
   let reply;
   switch (cmd) {
@@ -5490,6 +5585,7 @@ async function startTelegramPolling() {
     { command: "firma", description: "Firmaya göre değişiklikler" },
     { command: "fiyatlar", description: "Güncel fiyat aralıkları" },
     { command: "hat", description: "Hata göre değişiklikler" },
+    { command: "guncel", description: "Hattın güncel tüm fiyatları" },
     { command: "yardim", description: "Komut menüsü" },
   ];
   await telegramPost("setMyCommands", { commands: userCommands });
