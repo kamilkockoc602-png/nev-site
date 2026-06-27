@@ -570,6 +570,45 @@
           </section>
         </div>
 
+        <div id="panelOccupancy" class="panel-block hidden" data-menu="occupancy">
+          <h4>Doluluk Oranı Takip</h4>
+          <p class="subtle">oBilet'te takip edilen hatların seferlerinin anlık doluluk oranı. Veri, fiyat takibiyle aynı taramadan gelir; oBilet Takip menüsünü etkilemez.</p>
+
+          <div class="ph-toolbar">
+            <label>
+              <span>Hat</span>
+              <select id="occTargetSelect">
+                <option value="">Tüm hatlar</option>
+              </select>
+            </label>
+            <div class="ph-toolbar-actions">
+              <button id="occRefreshBtn" class="btn btn-primary" type="button">Yükle</button>
+              <button id="occExportBtn" class="btn btn-ghost" type="button">📥 Excel</button>
+            </div>
+          </div>
+
+          <div id="occSummary" class="dash-cards" style="margin:1rem 0;"></div>
+
+          <p id="occStatusMsg" class="subtle">Hat seçip Yükle'ye basın.</p>
+
+          <div class="ph-table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Hat</th>
+                  <th>Sefer Tarihi</th>
+                  <th>Saat</th>
+                  <th>Firma</th>
+                  <th>Doluluk</th>
+                  <th>Dolu / Toplam</th>
+                  <th>Boş</th>
+                </tr>
+              </thead>
+              <tbody id="occTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
         <div id="panelOcr" class="panel-block hidden" data-menu="ocr">
           <section class="ocr-tool">
             <h3>Fotograftan Excel Ciktisi</h3>

@@ -14,6 +14,7 @@ const MENUS = [
   { key: "reporting", label: "Raporlama" },
   { key: "oneops", label: "Hatali Islemler" },
   { key: "obilet_tracker", label: "oBilet Takip" },
+  { key: "occupancy", label: "Doluluk Takip" },
   { key: "ocr", label: "Foto Tarama" },
   { key: "permissions", label: "Yetki Menusu" },
   { key: "logs", label: "Giris Kayitlari" },
@@ -2924,6 +2925,10 @@ async function activatePanel(menuKey) {
       }
     });
   }
+
+  if (menuKey === "occupancy") {
+    setupOccupancyPanel();
+  }
 }
 
 async function handleLogin(username, password) {
@@ -4583,6 +4588,142 @@ async function initPriceHistoryPanel() {
   setupPriceHistoryPanel();
   await populatePriceHistoryTargetSelect();
   await loadPriceHistory();
+}
+
+// ============================================================
+// DOLULUK TAKIP (oBilet Takip'ten bagimsiz)
+// ============================================================
+const occupancyState = { wired: false, rows: [] };
+
+function occEsc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+function occToDot(iso) {
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : iso || "";
+}
+function occColor(p) {
+  if (p >= 80) return "#e74c3c";
+  if (p >= 50) return "#e67e22";
+  return "#27ae60";
+}
+
+function setupOccupancyPanel() {
+  const refreshBtn = document.getElementById("occRefreshBtn");
+  if (!refreshBtn) return;
+  if (!occupancyState.wired) {
+    occupancyState.wired = true;
+    refreshBtn.addEventListener("click", () => loadOccupancy());
+    const exportBtn = document.getElementById("occExportBtn");
+    if (exportBtn) exportBtn.addEventListener("click", exportOccupancyCsv);
+    const sel = document.getElementById("occTargetSelect");
+    if (sel) sel.addEventListener("change", () => loadOccupancy());
+  }
+  populateOccupancyTargetSelect().then(() => loadOccupancy());
+}
+
+async function populateOccupancyTargetSelect() {
+  const sel = document.getElementById("occTargetSelect");
+  if (!sel) return;
+  try {
+    const data = await apiFetch("/api/obilet/targets");
+    const targets = Array.isArray(data?.targets) ? data.targets : [];
+    const cur = sel.value;
+    sel.innerHTML = `<option value="">Tüm hatlar</option>` +
+      targets.map((t) => `<option value="${t.id}">${occEsc((t.origin || "").toUpperCase())} → ${occEsc((t.destination || "").toUpperCase())}</option>`).join("");
+    if (cur) sel.value = cur;
+  } catch (e) { /* sessiz */ }
+}
+
+async function loadOccupancy() {
+  const body = document.getElementById("occTableBody");
+  const statusEl = document.getElementById("occStatusMsg");
+  if (!body) return;
+  const targetId = document.getElementById("occTargetSelect")?.value || "";
+  if (statusEl) statusEl.textContent = "Doluluk yükleniyor...";
+  try {
+    const params = new URLSearchParams();
+    if (targetId) params.set("targetId", targetId);
+    const data = await apiFetch(`/api/obilet/occupancy?${params.toString()}`);
+    occupancyState.rows = Array.isArray(data?.rows) ? data.rows : [];
+    renderOccupancy(data);
+    if (statusEl) {
+      statusEl.textContent = occupancyState.rows.length
+        ? `${occupancyState.rows.length} sefer · ortalama doluluk %${data.avgOccupancy}`
+        : "Henüz doluluk verisi yok. Tarama bir tur dönünce (~10 dk) dolacak.";
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = `Hata: ${err.message}`;
+  }
+}
+
+function renderOccupancy(data) {
+  const summary = document.getElementById("occSummary");
+  const body = document.getElementById("occTableBody");
+  if (!body) return;
+
+  if (summary) {
+    if (!data || !data.count) {
+      summary.innerHTML = "";
+    } else {
+      const card = (label, value, sub, color) =>
+        `<div style="flex:1;min-width:150px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:0.8rem 1rem;">
+          <div style="font-size:0.75rem;opacity:0.7;">${label}</div>
+          <div style="font-size:1.5rem;font-weight:700;${color ? `color:${color};` : ""}">${value}</div>
+          ${sub ? `<div style="font-size:0.75rem;opacity:0.6;">${sub}</div>` : ""}
+        </div>`;
+      const f = data.fullest || {};
+      summary.style.display = "flex";
+      summary.style.flexWrap = "wrap";
+      summary.style.gap = "0.7rem";
+      summary.innerHTML =
+        card("Sefer", data.count) +
+        card("Ortalama Doluluk", `%${data.avgOccupancy}`, null, occColor(data.avgOccupancy)) +
+        card("Satılan / Toplam", `${data.soldSeats} / ${data.totalSeats}`) +
+        card("En Dolu Sefer", `%${f.occupancy_percent || 0}`, occEsc(f.operator || ""), occColor(f.occupancy_percent || 0));
+    }
+  }
+
+  const rows = occupancyState.rows;
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#888;">Kayıt yok</td></tr>`;
+    return;
+  }
+  body.innerHTML = rows.map((r) => {
+    const sold = (r.total_seats || 0) - (r.available_seats || 0);
+    const p = r.occupancy_percent || 0;
+    return `<tr>
+      <td>${occEsc((r.origin || "").toUpperCase())} → ${occEsc((r.destination || "").toUpperCase())}</td>
+      <td>${occToDot(r.journey_date)}</td>
+      <td>${occEsc(r.departure_time || "")}</td>
+      <td>${occEsc(r.operator || "")}</td>
+      <td><b style="color:${occColor(p)}">%${p}</b></td>
+      <td>${sold} / ${r.total_seats || 0}</td>
+      <td>${r.available_seats || 0}</td>
+    </tr>`;
+  }).join("");
+}
+
+function exportOccupancyCsv() {
+  const rows = occupancyState.rows;
+  if (!rows.length) { alert("Aktarılacak veri yok."); return; }
+  const headers = ["Kalkis", "Varis", "Sefer Tarihi", "Saat", "Firma", "Doluluk %", "Dolu", "Toplam", "Bos"];
+  const csvRows = rows.map((r) => {
+    const sold = (r.total_seats || 0) - (r.available_seats || 0);
+    return [r.origin || "", r.destination || "", occToDot(r.journey_date), r.departure_time || "", r.operator || "", r.occupancy_percent || 0, sold, r.total_seats || 0, r.available_seats || 0]
+      .map((v) => String(v).replace(/;/g, ",")).join(";");
+  });
+  const csv = "﻿" + [headers.join(";"), ...csvRows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `doluluk-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 async function renderObiletTargets() {

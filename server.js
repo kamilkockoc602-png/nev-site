@@ -379,6 +379,7 @@ const MENUS = [
   "oneops",
   "ocr",
   "obilet_tracker",
+  "occupancy",
   "permissions",
   "logs",
 ];
@@ -586,6 +587,25 @@ CREATE TABLE IF NOT EXISTS telegram_users (
   approved_at TEXT NOT NULL DEFAULT '',
   approved_by TEXT NOT NULL DEFAULT ''
 );
+`);
+
+// Doluluk takibi (oBilet Takip'ten BAGIMSIZ ayri tablo). Her sefer icin anlik koltuk durumu.
+// total-seats/available-seats oBilet sefer listesinde dogrudan geliyor (piggyback ile yazilir).
+db.exec(`
+CREATE TABLE IF NOT EXISTS obilet_occupancy (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  target_id INTEGER NOT NULL,
+  journey_date TEXT NOT NULL,
+  operator TEXT NOT NULL,
+  departure_time TEXT NOT NULL,
+  departure_stop TEXT NOT NULL DEFAULT '',
+  total_seats INTEGER,
+  available_seats INTEGER,
+  occupancy_percent INTEGER,
+  last_updated TEXT NOT NULL,
+  UNIQUE(target_id, journey_date, operator, departure_time, departure_stop)
+);
+CREATE INDEX IF NOT EXISTS idx_obilet_occupancy_target ON obilet_occupancy(target_id);
 `);
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN journey_date TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN departure_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
@@ -4478,10 +4498,15 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
         if (oLoc && oLocId) learnObiletStationId(oLoc, oLocId);
         if (dLoc && dLocId) learnObiletStationId(dLoc, dLocId);
 
+        // DOLULUK (piggyback): oBilet sefer listesi total-seats/available-seats'i dogrudan veriyor.
+        // Fiyat mantigini etkilemez — sadece sefer nesnesine ek alan; takip dongusu ayri tabloya yazar.
+        const totalSeats = toFiniteNumber(item?.["total-seats"] ?? item?.total_seats ?? item?.totalSeats);
+        const availableSeats = toFiniteNumber(item?.["available-seats"] ?? item?.available_seats ?? item?.availableSeats);
+
         const key = `${toObiletOperatorMatchKey(operator)}|${tm[0]}`;
         if (seenKeys.has(key)) continue;
         seenKeys.add(key);
-        capturedJourneys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop });
+        capturedJourneys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop, totalSeats, availableSeats });
         parsed++;
       }
       if (list.length > 0) {
@@ -5887,6 +5912,26 @@ async function processObiletTarget(target) {
 
         trackedJourneys.push(...dayTracked);
 
+        // DOLULUK (piggyback) — her seferin anlik koltuk durumunu AYRI tabloya yazar.
+        // Tamamen izole: hata olsa bile fiyat takibini etkilemez.
+        for (const j of dayTracked) {
+          try {
+            const total = Number(j.totalSeats);
+            const avail = Number(j.availableSeats);
+            if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(avail)) continue;
+            const occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100)));
+            const occOp = normalizeObiletOperatorName(j.operator) || j.operator;
+            db.prepare(`
+              INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT(target_id, journey_date, operator, departure_time, departure_stop)
+              DO UPDATE SET total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated
+            `).run(target.id, j.journey_date, occOp, j.time, j.departureStop || "", total, avail, occ, now);
+          } catch (occErr) {
+            if (DEBUG_OBILET_PRICE) console.warn(`[Doluluk] yazma hatasi: ${occErr.message}`);
+          }
+        }
+
         // YENI/MEVCUT SEFERLER: fiyat değişimi, yeni ekleme tespiti
         for (const journey of dayTracked) {
           const normalizedOperator = normalizeObiletOperatorName(journey.operator) || journey.operator;
@@ -6431,6 +6476,38 @@ app.delete("/api/obilet/station-ids/:cityKey", requireAuth, (req, res) => {
 // Eski yanlis fiyatlar DB'de kalmissa, bunu cagirip bir sonraki taramada temiz baslarsiniz.
 // API: Fiyat degisiklik gecmisi (Raporlama sayfasi icin).
 // Filtreler: hat (targetId), tarih araligi (from/to), arama (firma/sehir), limit.
+// DOLULUK TAKIP — bir hattin (veya tum hatlarin) gelecek seferlerinin anlik doluluk durumu.
+app.get("/api/obilet/occupancy", requireAuth, (req, res) => {
+  try {
+    const targetId = parseInt(req.query.targetId || "0", 10);
+    const today = todayIsoInIstanbul();
+    // Gecmis tarihli doluluk kayitlarini temizle (birikmesin).
+    try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(today); } catch (e) {}
+    const conditions = ["o.journey_date >= ?"];
+    const params = [today];
+    if (targetId) { conditions.push("o.target_id = ?"); params.push(targetId); }
+    const rows = db.prepare(`
+      SELECT o.target_id, t.origin, t.destination, o.journey_date, o.operator, o.departure_time,
+             o.departure_stop, o.total_seats, o.available_seats, o.occupancy_percent, o.last_updated
+        FROM obilet_occupancy o
+        LEFT JOIN obilet_targets t ON t.id = o.target_id
+       WHERE ${conditions.join(" AND ")}
+       ORDER BY o.occupancy_percent DESC, o.journey_date, o.departure_time
+    `).all(...params);
+
+    const count = rows.length;
+    const avgOccupancy = count ? Math.round(rows.reduce((s, r) => s + (r.occupancy_percent || 0), 0) / count) : 0;
+    const totalSeats = rows.reduce((s, r) => s + (r.total_seats || 0), 0);
+    const soldSeats = rows.reduce((s, r) => s + ((r.total_seats || 0) - (r.available_seats || 0)), 0);
+    const fullest = count ? rows[0] : null;
+    const emptiest = count ? rows[rows.length - 1] : null;
+
+    res.json({ ok: true, count, avgOccupancy, totalSeats, soldSeats, fullest, emptiest, rows });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Doluluk alınamadı." });
+  }
+});
+
 app.get("/api/obilet/price-history", requireAuth, (req, res) => {
   try {
     const targetId = parseInt(req.query.targetId || "0", 10);
