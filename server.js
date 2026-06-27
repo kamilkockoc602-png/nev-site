@@ -4811,8 +4811,25 @@ function tgDate2(s) {
   return m ? `${m[3]}.${m[2]}.${m[1].slice(2)}` : String(s || "");
 }
 
+// Degisiklik/sefer satirlarini DOLULUK ile zenginlestir (obilet_occupancy tablosundan).
+// Satirlarda target_id, operator, journey_date, departure_time olmali.
+function tgAttachOccupancy(rows) {
+  try {
+    if (!rows || !rows.length) return rows;
+    const occ = db.prepare("SELECT target_id, operator, journey_date, departure_time, total_seats, available_seats FROM obilet_occupancy").all();
+    if (!occ.length) return rows;
+    const map = new Map();
+    for (const o of occ) map.set(`${o.target_id}|${o.operator}|${o.journey_date}|${o.departure_time}`, o);
+    for (const r of rows) {
+      const m = map.get(`${r.target_id}|${r.operator}|${r.journey_date}|${r.departure_time}`);
+      if (m) { r.total_seats = m.total_seats; r.available_seats = m.available_seats; }
+    }
+  } catch (e) { /* yok say */ }
+  return rows;
+}
+
 // Degisiklikleri Hat+Firma'ya gore gruplar; her grup icinde sefer tarih+saatine gore siralar.
-// Genis tek tablo yerine dar, telefona sigan bloklar uretir.
+// Satirlarda doluluk varsa (total_seats) "Boş/Top" kolonu eklenir.
 function tgChangesGrouped(rows) {
   const groups = new Map();
   let order = 0;
@@ -4826,12 +4843,6 @@ function tgChangesGrouped(rows) {
   }
   // Gruplar: en son degisen grup ustte (rows zaten id DESC geldigi icin order = ilk gorulme).
   const ordered = [...groups.values()].sort((a, b) => a.order - b.order);
-  const cols = [
-    { key: "sefer", label: "Sefer", align: "l", max: 14 },
-    { key: "eski", label: "Eski", align: "r" },
-    { key: "yeni", label: "Yeni", align: "r" },
-    { key: "fark", label: "Fark", align: "r" },
-  ];
   const MAX_ROWS = 60; // 50 satirlik liste tek blokta kalsin (satir arasi cizgi yok)
   const blocks = [];
   for (const g of ordered) {
@@ -4841,14 +4852,25 @@ function tgChangesGrouped(rows) {
       const kb = `${b.journey_date || ""} ${b.departure_time || ""}`;
       return ka < kb ? -1 : ka > kb ? 1 : 0;
     });
+    const hasOcc = g.items.some((r) => r.total_seats != null);
+    const cols = [
+      { key: "sefer", label: "Sefer", align: "l", max: 14 },
+      { key: "eski", label: "Eski", align: "r" },
+      { key: "yeni", label: "Yeni", align: "r" },
+      { key: "fark", label: "Fark", align: "r" },
+    ];
+    if (hasOcc) cols.push({ key: "dol", label: "Boş/Top", align: "r" });
+
     const tableRows = g.items.map((r) => {
       const diff = r.new_price - r.old_price;
-      return {
+      const row = {
         sefer: `${tgDate2(r.journey_date)}${r.departure_time ? " " + r.departure_time : ""}`.trim(),
         eski: String(r.old_price),
         yeni: String(r.new_price),
         fark: (diff > 0 ? "+" : "") + diff,
       };
+      if (hasOcc) row.dol = (r.total_seats != null) ? `${r.available_seats != null ? r.available_seats : "?"}/${r.total_seats}` : "—";
+      return row;
     });
     const partCount = Math.ceil(tableRows.length / MAX_ROWS);
     for (let i = 0; i < tableRows.length; i += MAX_ROWS) {
@@ -4932,6 +4954,7 @@ async function sendObiletTelegramAlert(target, changes) {
 
   // changes camelCase (oldPrice/newPrice) -> tgChangesGrouped'in bekledigi sekle cevir.
   const rows = changes.map((c) => ({
+    target_id: target.id,
     origin: target.origin,
     destination: target.destination,
     journey_date: c.journey_date,
@@ -4940,6 +4963,7 @@ async function sendObiletTelegramAlert(target, changes) {
     old_price: c.oldPrice,
     new_price: c.newPrice,
   }));
+  tgAttachOccupancy(rows); // her degisikligin yanina bos/dolu koltuk
   const text =
     `🔔 <b>Fiyat Değişikliği</b> · ${changes.length} değişim\n\n` +
     tgChangesGrouped(rows);
@@ -5137,7 +5161,8 @@ function tgCmdDurum() {
   try {
     const targets = db.prepare("SELECT COUNT(*) AS c FROM obilet_targets").get().c;
     const prices = db.prepare("SELECT COUNT(*) AS c FROM obilet_prices").get().c;
-    const lastRows = db.prepare("SELECT origin, destination, journey_date, departure_time, operator, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 10").all();
+    const lastRows = db.prepare("SELECT target_id, origin, destination, journey_date, departure_time, operator, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 10").all();
+    tgAttachOccupancy(lastRows);
     const todayPrefix = (() => {
       try { return shiftIsoDate(todayIsoInIstanbul(), 0).split("-").reverse().join("."); } catch { return ""; }
     })();
@@ -5174,9 +5199,10 @@ function tgCmdHatlar() {
 function tgCmdSon() {
   try {
     const rows = db.prepare(
-      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 50"
+      "SELECT target_id, origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 50"
     ).all();
     if (!rows.length) return "Henüz fiyat değişikliği kaydı yok.";
+    tgAttachOccupancy(rows);
     return "🕒 <b>Son 50 Fiyat Değişikliği</b>\n\n" + tgChangesGrouped(rows);
   } catch (e) {
     return "Kayıtlar alınamadı: " + tgEscape(e.message);
@@ -5218,9 +5244,10 @@ function tgCmdHatChangesByTarget(targetId) {
     if (!t) return "Hat bulunamadı.";
     const head = `🚌 <b>${tgEscape((t.origin || "").toUpperCase())} → ${tgEscape((t.destination || "").toUpperCase())}</b> — Fiyat Değişiklikleri`;
     const rows = db.prepare(
-      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history WHERE target_id = ? ORDER BY id DESC LIMIT 50"
+      "SELECT target_id, origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history WHERE target_id = ? ORDER BY id DESC LIMIT 50"
     ).all(targetId);
     if (!rows.length) return head + "\n\nBu hatta kayıtlı fiyat değişikliği yok.";
+    tgAttachOccupancy(rows);
     return `${head} (${rows.length})\n\n` + tgChangesGrouped(rows);
   } catch (e) {
     return "Hat değişiklikleri alınamadı: " + tgEscape(e.message);
@@ -5405,9 +5432,10 @@ function tgCmdTakip() {
 function tgCmdDusenler() {
   try {
     const rows = db.prepare(
-      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history WHERE new_price < old_price ORDER BY id DESC LIMIT 50"
+      "SELECT target_id, origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history WHERE new_price < old_price ORDER BY id DESC LIMIT 50"
     ).all();
     if (!rows.length) return "Son dönemde fiyat düşüşü kaydı yok.";
+    tgAttachOccupancy(rows);
     return "🔻 <b>Son Fiyat Düşüşleri</b>\n\n" + tgChangesGrouped(rows);
   } catch (e) {
     return "Düşüşler alınamadı: " + tgEscape(e.message);
@@ -5444,12 +5472,13 @@ function tgCmdFirma(name) {
     const q = String(name || "").toLocaleLowerCase("tr-TR").trim();
     if (!q) return "Kullanım: <b>/firma &lt;firma adı&gt;</b>\nÖrnek: /firma Kamil Koç\n\nveya sadece /firma yazıp listeden seç.";
     const rows = db.prepare(
-      "SELECT origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 1000"
+      "SELECT target_id, origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 1000"
     ).all();
     const matched = rows.filter((r) => String(r.operator || "").toLocaleLowerCase("tr-TR").includes(q));
     if (!matched.length) return `"${tgEscape(name)}" için fiyat değişikliği bulunamadı.`;
     const title = tgEscape((matched[0].operator || name));
     const shown = matched.slice(0, 50); // son 50 (tek mesaja sigsin)
+    tgAttachOccupancy(shown);
     const countLabel = matched.length > 50 ? `son 50 / ${matched.length}` : `${matched.length}`;
     return `🏢 <b>${title}</b> — Fiyat Değişiklikleri (${countLabel})\n\n` +
       tgChangesGrouped(shown);
