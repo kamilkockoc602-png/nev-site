@@ -5191,6 +5191,29 @@ async function tgAdminBlock(adminChatId, targetIdRaw) {
   await sendTelegramMessage(adminChatId, `⛔ Engellendi: ${tgEscape(targetId)}`);
 }
 
+// Admin: /duyuru <metin> — mesaji TUM onayli kullanicilara (+ adminlere) gonderir.
+async function tgAdminBroadcast(adminChatId, fullText) {
+  const text = String(fullText || "").replace(/^\/duyuru(@\S+)?\s*/i, "").trim();
+  if (!text) {
+    return sendTelegramMessage(adminChatId,
+      "Kullanım: <b>/duyuru</b> sonrasına mesajını yaz.\nÖrnek:\n/duyuru Merhaba, bildirim sistemi değişti...\n\n(Mesaj tüm onaylı kullanıcılara gider.)");
+  }
+  // Alicilar: adminler + onayli kullanicilar (engelliler haric).
+  const recipients = new Set(TELEGRAM_DEFAULT_CHAT_IDS.map(String));
+  try {
+    const rows = db.prepare("SELECT chat_id FROM telegram_users WHERE status = 'approved'").all();
+    for (const r of rows) recipients.add(String(r.chat_id));
+  } catch { /* yok say */ }
+
+  let sent = 0, failed = 0;
+  for (const cid of recipients) {
+    const ok = await sendTelegramMessage(cid, text);
+    if (ok) sent++; else failed++;
+    await new Promise((r) => setTimeout(r, 50)); // Telegram rate-limit dostu
+  }
+  await sendTelegramMessage(adminChatId, `📢 Duyuru gönderildi: <b>${sent}</b> kişi${failed ? ` (${failed} başarısız)` : ""}.`);
+}
+
 // Yeni talebi adminlere butonlu mesajla bildir.
 function tgNotifyAdminsNewRequest(chat, from) {
   const name = `${from.first_name || ""} ${from.last_name || ""}`.trim() || "(isimsiz)";
@@ -5649,6 +5672,7 @@ async function handleTelegramUpdate(update) {
     if (cmd === "/kullanicilar") return sendTelegramMessage(chatId, tgListApproved());
     if (cmd === "/onayla") return tgAdminApprove(chatId, arg);
     if (cmd === "/engelle" || cmd === "/reddet") return tgAdminBlock(chatId, arg);
+    if (cmd === "/duyuru") return tgAdminBroadcast(chatId, msg.text);
   }
 
   // Yetki kontrolu — onaylanmamis kullanicilar komut kullanamaz.
@@ -5781,6 +5805,7 @@ async function startTelegramPolling() {
     { command: "kullanicilar", description: "Onaylı kullanıcılar" },
     { command: "onayla", description: "Kullanıcı onayla: /onayla <id>" },
     { command: "engelle", description: "Kullanıcı engelle: /engelle <id>" },
+    { command: "duyuru", description: "Tüm kullanıcılara duyuru gönder" },
   ]);
   for (const adminId of TELEGRAM_DEFAULT_CHAT_IDS) {
     await telegramPost("setMyCommands", { commands: adminCommands, scope: { type: "chat", chat_id: String(adminId) } });
