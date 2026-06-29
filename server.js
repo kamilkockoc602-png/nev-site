@@ -143,6 +143,12 @@ const OBILET_OPERATOR_CATALOG = [
   "Yeşil Artvin Ekspres",
   "Yeşil Muş Ovası",
   "Yüksekova Seyahat",
+  // Sonradan eklenenler (liste runtime'da alfabetik siralanir):
+  "Villa Seyahat",
+  "Niğde İnan Turizm",
+  "Lüks Mersin",
+  "Mersin Sahil Seyahat",
+  "Noktadan Noktaya Seyahat",
 ].sort((a, b) => a.localeCompare(b, "tr-TR"));
 const PRICE_SOURCE_URL = process.env.PRICE_SOURCE_URL || "";
 const ADMIN_USERNAME = (process.env.ADMIN_USERNAME || "admin").trim();
