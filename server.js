@@ -589,6 +589,18 @@ CREATE TABLE IF NOT EXISTS telegram_users (
 );
 `);
 
+// Telegram bildirim abonelikleri: kullanici hangi hatlarin (target) bildirimini alacak.
+// Abonelik yoksa bildirim gitmez (adminler haric — onlar her zaman alir).
+db.exec(`
+CREATE TABLE IF NOT EXISTS telegram_subscriptions (
+  chat_id TEXT NOT NULL,
+  target_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT '',
+  UNIQUE(chat_id, target_id)
+);
+CREATE INDEX IF NOT EXISTS idx_telegram_subs_target ON telegram_subscriptions(target_id);
+`);
+
 // Doluluk takibi (oBilet Takip'ten BAGIMSIZ ayri tablo). Her sefer icin anlik koltuk durumu.
 // total-seats/available-seats oBilet sefer listesinde dogrudan geliyor (piggyback ile yazilir).
 db.exec(`
@@ -5063,15 +5075,37 @@ function telegramRegisterPending(chat, from) {
 }
 // Bildirim alicilari: adminler + onayli kullanicilar + (varsa) hatta tanimli ID'ler.
 function telegramNotifyChatIds(target) {
+  // Adminler her zaman tum bildirimleri alir.
   const set = new Set(TELEGRAM_DEFAULT_CHAT_IDS.map(String));
   try {
-    const rows = db.prepare("SELECT chat_id FROM telegram_users WHERE status = 'approved'").all();
-    for (const r of rows) set.add(String(r.chat_id));
+    // Bu hatta ABONE olan onayli kullanicilar.
+    if (target && target.id != null) {
+      const rows = db.prepare("SELECT chat_id FROM telegram_subscriptions WHERE target_id = ?").all(target.id);
+      for (const r of rows) {
+        const cid = String(r.chat_id);
+        if (telegramIsAdmin(cid)) { set.add(cid); continue; }
+        const u = telegramGetUser(cid);
+        if (u && u.status === "approved") set.add(cid);
+      }
+    }
   } catch { /* yok say */ }
   if (target && target.telegram_chat_ids) {
     for (const id of parseCsvList(target.telegram_chat_ids)) set.add(String(id));
   }
   return [...set];
+}
+// Abonelik klavyesi: her hat icin ✅ (abone) / ⬜ (degil) butonu.
+function tgBuildAboneKeyboard(chatId) {
+  const routes = db.prepare("SELECT id, origin, destination FROM obilet_targets ORDER BY origin, destination").all();
+  const subs = new Set(
+    db.prepare("SELECT target_id FROM telegram_subscriptions WHERE chat_id = ?").all(String(chatId)).map((r) => r.target_id)
+  );
+  return {
+    inline_keyboard: routes.map((r) => [{
+      text: `${subs.has(r.id) ? "✅" : "⬜"} ${(r.origin || "").toUpperCase()} → ${(r.destination || "").toUpperCase()}`,
+      callback_data: "sub:" + r.id,
+    }]),
+  };
 }
 function tgFullName(u) {
   return `${(u.first_name || "")} ${(u.last_name || "")}`.trim() || "(isimsiz)";
@@ -5091,6 +5125,8 @@ function tgCmdYardim(isAdmin) {
     "/fiyatlar — Hat bazında güncel fiyat aralığı\n" +
     "/hat — Hata göre değişiklikler (listeden seç)\n" +
     "/guncel — Hattın değişmeyen fiyatları (listeden seç)\n" +
+    "/abone — Bildirim almak istediğin hatları seç\n" +
+    "/aboneliklerim — Abone olduğun hatlar\n" +
     "/yardim — Bu menü";
   if (isAdmin) {
     t +=
@@ -5138,7 +5174,7 @@ async function tgAdminApprove(adminChatId, targetIdRaw) {
   db.prepare("UPDATE telegram_users SET status = 'approved', approved_at = ?, approved_by = ? WHERE chat_id = ?")
     .run(nowStamp(), String(adminChatId), targetId);
   await sendTelegramMessage(adminChatId, `✅ Onaylandı: ${tgEscape(tgFullName(u))} (${tgEscape(targetId)})`);
-  await sendTelegramMessage(targetId, "✅ <b>Erişimin onaylandı!</b>\nArtık komutları kullanabilirsin. /yardim yazarak başla.");
+  await sendTelegramMessage(targetId, "✅ <b>Erişimin onaylandı!</b>\n\n🔔 Bildirim almak için <b>/abone</b> yazıp hatlarını seç (seçmezsen bildirim gelmez).\n\nKomutlar için /yardim.");
 }
 
 // Admin: kullaniciyi engelle.
@@ -5555,6 +5591,27 @@ async function handleTelegramCallback(cb) {
     await sendTelegramLong(targetChat, tgCmdGuncelByTarget(id));
     return;
   }
+  // Abonelik toggle butonu — bu hatta abone ol/cik, klavyeyi guncelle.
+  if (data.startsWith("sub:")) {
+    if (!telegramCanUse(fromId)) return;
+    const tid = parseInt(data.slice(4), 10);
+    try {
+      const exists = db.prepare("SELECT 1 FROM telegram_subscriptions WHERE chat_id = ? AND target_id = ?").get(String(fromId), tid);
+      if (exists) {
+        db.prepare("DELETE FROM telegram_subscriptions WHERE chat_id = ? AND target_id = ?").run(String(fromId), tid);
+      } else {
+        db.prepare("INSERT OR IGNORE INTO telegram_subscriptions (chat_id, target_id, created_at) VALUES (?, ?, ?)").run(String(fromId), tid, nowStamp());
+      }
+      if (cb.message) {
+        await telegramPost("editMessageReplyMarkup", {
+          chat_id: cb.message.chat.id,
+          message_id: cb.message.message_id,
+          reply_markup: tgBuildAboneKeyboard(fromId),
+        });
+      }
+    } catch (e) { console.warn(`[Telegram] abonelik hatasi: ${e.message}`); }
+    return;
+  }
 
   // Onayla/Reddet — sadece yoneticiler.
   if (!telegramIsAdmin(fromId)) {
@@ -5645,6 +5702,31 @@ async function handleTelegramUpdate(update) {
     return;
   }
 
+  // /abone — bildirim almak istedigi hatlari sec (✅/⬜ toggle).
+  if (cmd === "/abone") {
+    await telegramPost("sendMessage", {
+      chat_id: String(chatId),
+      parse_mode: "HTML",
+      text: "🔔 <b>Bildirim Aboneliği</b>\nFiyat değişikliği bildirimi almak istediğin hatlara dokun (✅ açık, ⬜ kapalı):",
+      reply_markup: tgBuildAboneKeyboard(chatId),
+    });
+    return;
+  }
+
+  // /aboneliklerim — abone olunan hatlarin listesi.
+  if (cmd === "/aboneliklerim") {
+    const subs = db.prepare(`
+      SELECT t.origin, t.destination FROM telegram_subscriptions s
+        JOIN obilet_targets t ON t.id = s.target_id
+       WHERE s.chat_id = ? ORDER BY t.origin, t.destination
+    `).all(String(chatId));
+    const reply = subs.length
+      ? "🔔 <b>Aboneliklerin</b>\n\n" + subs.map((r) => `• ${tgEscape((r.origin || "").toUpperCase())} → ${tgEscape((r.destination || "").toUpperCase())}`).join("\n") + "\n\nDeğiştirmek için /abone"
+      : "Henüz hiçbir hatta abone değilsin, bu yüzden bildirim almıyorsun.\n/abone ile hat seç.";
+    await sendTelegramMessage(chatId, reply);
+    return;
+  }
+
   // Onayli/admin -> komutlar.
   let reply;
   switch (cmd) {
@@ -5688,6 +5770,8 @@ async function startTelegramPolling() {
     { command: "fiyatlar", description: "Güncel fiyat aralıkları" },
     { command: "hat", description: "Hata göre değişiklikler" },
     { command: "guncel", description: "Hattın değişmeyen fiyatları" },
+    { command: "abone", description: "Bildirim hatlarını seç" },
+    { command: "aboneliklerim", description: "Abone olduğun hatlar" },
     { command: "yardim", description: "Komut menüsü" },
   ];
   await telegramPost("setMyCommands", { commands: userCommands });
