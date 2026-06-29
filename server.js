@@ -5174,7 +5174,17 @@ async function tgAdminApprove(adminChatId, targetIdRaw) {
   db.prepare("UPDATE telegram_users SET status = 'approved', approved_at = ?, approved_by = ? WHERE chat_id = ?")
     .run(nowStamp(), String(adminChatId), targetId);
   await sendTelegramMessage(adminChatId, `✅ Onaylandı: ${tgEscape(tgFullName(u))} (${tgEscape(targetId)})`);
-  await sendTelegramMessage(targetId, "✅ <b>Erişimin onaylandı!</b>\n\n🔔 Bildirim almak için <b>/abone</b> yazıp hatlarını seç (seçmezsen bildirim gelmez).\n\nKomutlar için /yardim.");
+  await sendTelegramMessage(targetId,
+    "✅ <b>Erişimin onaylandı!</b>\n\n" +
+    "🔔 Şimdi hangi hatların fiyat değişikliklerinde bildirim almak istediğini seç. <b>Seçmezsen bildirim gelmez.</b>\n\n" +
+    "Aşağıdaki listeden hatlara dokun (✅ açık / ⬜ kapalı). İstediğin zaman /abone ile değiştirebilirsin. Komutlar: /yardim");
+  // Onay sonrasi dogrudan abonelik klavyesini gonder — kisi elle yazmadan secsin.
+  await telegramPost("sendMessage", {
+    chat_id: String(targetId),
+    parse_mode: "HTML",
+    text: "🔔 <b>Bildirim almak istediğin hatları seç:</b>",
+    reply_markup: tgBuildAboneKeyboard(targetId),
+  });
 }
 
 // Admin: kullaniciyi engelle.
@@ -5682,7 +5692,9 @@ async function handleTelegramUpdate(update) {
       // Ilk temas: pending kaydet + adminlere butonlu bildirim gonder.
       telegramRegisterPending(chat, from);
       await sendTelegramMessage(chatId,
-        "👋 Merhaba! Bu özel bir bot.\nErişim talebin <b>yöneticiye iletildi</b>. Onaylandığında haber vereceğim. ⏳");
+        "👋 <b>Merhaba!</b> Burası Kamil Koç oBilet fiyat takip botu.\n\n" +
+        "Bu bot özeldir; kullanabilmen için önce <b>yönetici onayı</b> gerekiyor. Talebin <b>iletildi</b> ✅\n\n" +
+        "Onaylanınca sana haber vereceğim ve hangi hatların bildirimini almak istediğini seçeceksin. ⏳");
       tgNotifyAdminsNewRequest(chat, from);
       console.log(`[Telegram] Yeni erisim talebi: ${tgFullName(from)} (chat ${chatId})`);
     } else if (u.status === "blocked") {
@@ -5799,6 +5811,13 @@ async function startTelegramPolling() {
     { command: "yardim", description: "Komut menüsü" },
   ];
   await telegramPost("setMyCommands", { commands: userCommands });
+  // Bot acilis aciklamasi (kisi botu ilk actiginda gorur).
+  await telegramPost("setMyDescription", {
+    description: "Kamil Koç oBilet fiyat takip botu. Kullanmak için /start yaz, yönetici onayından sonra /abone ile hatlarını seçip fiyat değişikliği bildirimleri al.",
+  });
+  await telegramPost("setMyShortDescription", {
+    short_description: "Kamil Koç oBilet fiyat takip botu — /start ile başla.",
+  });
   // Yoneticilere ek komutlari sadece kendi sohbetlerinde goster (scope: chat).
   const adminCommands = userCommands.concat([
     { command: "bekleyenler", description: "Onay bekleyen kullanıcılar" },
