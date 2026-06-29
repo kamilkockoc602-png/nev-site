@@ -6304,7 +6304,16 @@ async function refreshObiletPricesTask() {
   try {
     console.log(`[Takip Görevi] oBilet fiyat kontrolü başlatılıyor: ${nowStamp()}`);
     
-    const targets = db.prepare("SELECT * FROM obilet_targets WHERE is_active = 1").all();
+    // EN UZUN SUREDIR TARANMAYAN HAT ONCE. Boylece surec restart olsa (deploy/crash) bile
+    // yarim kalan turdaki atlanan/eski hatlar bir sonraki turda ILK sirada taranir — hicbir hat ac kalmaz.
+    // last_sync_at "DD.MM.YYYY HH:mm:ss" -> kronolojik sortable hale cevrilir; bos (hic taranmamis) en basta.
+    const targets = db.prepare(`
+      SELECT * FROM obilet_targets WHERE is_active = 1
+      ORDER BY (
+        substr(last_sync_at, 7, 4) || substr(last_sync_at, 4, 2) ||
+        substr(last_sync_at, 1, 2) || substr(last_sync_at, 12, 8)
+      ) ASC, id ASC
+    `).all();
     if (targets.length === 0) {
       console.log("[Takip Görevi] Aktif takip edilecek hat bulunamadi.");
       return;
