@@ -4781,8 +4781,10 @@ function tgDateDot(s) {
 }
 
 // Cerceveli (Excel hucresi gibi) monospace tablo (<pre> icinde).
-// cols: [{key,label,align:'l'|'r',max?}]. Box-drawing karakterleriyle cizgili kutular.
-function tgTable(cols, rows) {
+// cols: [{key,label,align:'l'|'r',max?}]. opts.compact: kolon ici bosluk yok (dar, telefona sigsin).
+function tgTable(cols, rows, opts = {}) {
+  const padN = opts.compact ? 0 : 1;
+  const pad = " ".repeat(padN);
   const widths = cols.map((c) => {
     let w = c.label.length;
     for (const r of rows) w = Math.max(w, String(r[c.key] == null ? "" : r[c.key]).length);
@@ -4794,8 +4796,8 @@ function tgTable(cols, rows) {
     if (s.length > w) s = s.slice(0, w);
     return cols[i].align === "r" ? s.padStart(w) : s.padEnd(w);
   };
-  const border = (l, m, r) => l + widths.map((w) => "─".repeat(w + 2)).join(m) + r;
-  const rowLine = (vals) => "│" + vals.map((v, i) => " " + cell(v, i) + " ").join("│") + "│";
+  const border = (l, m, r) => l + widths.map((w) => "─".repeat(w + padN * 2)).join(m) + r;
+  const rowLine = (vals) => "│" + vals.map((v, i) => pad + cell(v, i) + pad).join("│") + "│";
   const top = border("┌", "┬", "┐");
   const head = rowLine(cols.map((c) => c.label));
   const mid = border("├", "┼", "┤");
@@ -4854,30 +4856,46 @@ function tgChangesGrouped(rows) {
     });
     const hasOcc = g.items.some((r) => r.total_seats != null);
     const cols = [
-      { key: "sefer", label: "Sefer", align: "l", max: 14 },
+      { key: "sefer", label: "Sefer", align: "l", max: 11 },
       { key: "eski", label: "Eski", align: "r" },
       { key: "yeni", label: "Yeni", align: "r" },
       { key: "fark", label: "Fark", align: "r" },
     ];
-    if (hasOcc) cols.push({ key: "dol", label: "Boş/Top", align: "r" });
+    if (hasOcc) cols.push({ key: "dol", label: "Dolu", align: "r" });
 
+    // Sefer: yil olmadan "DD.MM HH:MM" (yer kazanir, telefona sigsin).
+    const dm = (s) => { const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? `${m[3]}.${m[2]}` : String(s || ""); };
     const tableRows = g.items.map((r) => {
       const diff = r.new_price - r.old_price;
       const row = {
-        sefer: `${tgDate2(r.journey_date)}${r.departure_time ? " " + r.departure_time : ""}`.trim(),
+        sefer: `${dm(r.journey_date)}${r.departure_time ? " " + r.departure_time : ""}`.trim(),
         eski: String(r.old_price),
         yeni: String(r.new_price),
         fark: (diff > 0 ? "+" : "") + diff,
       };
-      if (hasOcc) row.dol = (r.total_seats != null) ? `${r.available_seats != null ? r.available_seats : "?"}/${r.total_seats}` : "—";
+      // Dolu = araçtaki yolcu (total - available). "38/41" => 41 koltukta 38 dolu.
+      if (hasOcc) {
+        if (r.total_seats != null && r.available_seats != null) {
+          row.dol = `${Math.max(0, r.total_seats - r.available_seats)}/${r.total_seats}`;
+        } else { row.dol = "—"; }
+      }
       return row;
     });
+    // Grup ortalama dolulugu — basliga kalin yazilir (tablo icinde kalin mumkun degil).
+    let occLabel = "";
+    if (hasOcc) {
+      const wo = g.items.filter((r) => r.total_seats != null && r.available_seats != null && r.total_seats > 0);
+      if (wo.length) {
+        const avg = Math.round(wo.reduce((s, r) => s + ((r.total_seats - r.available_seats) / r.total_seats) * 100, 0) / wo.length);
+        occLabel = ` · <b>%${avg} dolu</b>`;
+      }
+    }
     const partCount = Math.ceil(tableRows.length / MAX_ROWS);
     for (let i = 0; i < tableRows.length; i += MAX_ROWS) {
       const slice = tableRows.slice(i, i + MAX_ROWS);
       const partLabel = partCount > 1 ? ` (${Math.floor(i / MAX_ROWS) + 1}/${partCount})` : "";
-      const header = `🚌 <b>${tgEscape(g.route)}</b> · ${tgEscape(g.operator)}${partLabel}`;
-      blocks.push(header + "\n" + tgTable(cols, slice));
+      const header = `🚌 <b>${tgEscape(g.route)}</b> · ${tgEscape(g.operator)}${partLabel}${occLabel}`;
+      blocks.push(header + "\n" + tgTable(cols, slice, { compact: true }));
     }
   }
   return blocks.join("\n\n");
