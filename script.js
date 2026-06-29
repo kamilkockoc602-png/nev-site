@@ -4726,6 +4726,64 @@ function exportOccupancyCsv() {
   URL.revokeObjectURL(url);
 }
 
+function openObiletEditModal(t) {
+  document.getElementById("obiletEditBackdrop")?.remove();
+  const esc = (s) => String(s == null ? "" : s).replace(/"/g, "&quot;");
+  const backdrop = document.createElement("div");
+  backdrop.id = "obiletEditBackdrop";
+  backdrop.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;padding:1rem;";
+  backdrop.innerHTML = `
+    <div style="background:#1c2530;border:1px solid rgba(255,255,255,0.12);border-radius:14px;max-width:560px;width:100%;max-height:90vh;overflow:auto;padding:1.4rem;">
+      <h4 style="margin:0 0 1rem;">✏️ Hat Düzenle — ${esc((t.origin || "").toUpperCase())} → ${esc((t.destination || "").toUpperCase())}</h4>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.8rem;">
+        <label style="display:flex;flex-direction:column;gap:0.3rem;"><span>Kalkış</span><input id="oeOrigin" type="text" value="${esc(t.origin)}" /></label>
+        <label style="display:flex;flex-direction:column;gap:0.3rem;"><span>Varış</span><input id="oeDest" type="text" value="${esc(t.destination)}" /></label>
+        <label style="display:flex;flex-direction:column;gap:0.3rem;"><span>Başlangıç Tarihi</span><input id="oeDate" type="date" value="${esc(t.date)}" /></label>
+        <label style="display:flex;flex-direction:column;gap:0.3rem;"><span>Bitiş Tarihi</span><input id="oeEndDate" type="date" value="${esc(t.end_date || t.date)}" /></label>
+        <label style="display:flex;flex-direction:column;gap:0.3rem;grid-column:1/3;"><span>Firmalar (virgülle ayır)</span><input id="oeOperators" type="text" value="${esc(t.operators)}" placeholder="Enver Geçgel Turizm, Kamil Koç" /></label>
+        <label style="display:flex;flex-direction:column;gap:0.3rem;grid-column:1/3;"><span>Kalkış Durağı Filtresi (opsiyonel)</span><input id="oeStop" type="text" value="${esc(t.departure_stop_filter)}" /></label>
+        <label style="display:flex;flex-direction:column;gap:0.3rem;grid-column:1/3;"><span>E-posta Bildirimleri (virgülle)</span><input id="oeEmail" type="text" value="${esc(t.email_notifications)}" /></label>
+        <label style="display:flex;flex-direction:column;gap:0.3rem;"><span>oBilet Route ID (opsiyonel)</span><input id="oeRouteId" type="text" value="${esc(t.route_id)}" placeholder="595-356" /></label>
+        <label style="display:flex;align-items:center;gap:0.5rem;align-self:end;"><input id="oeActive" type="checkbox" ${t.is_active ? "checked" : ""} /> Aktif</label>
+      </div>
+      <p id="oeMsg" style="min-height:1.2em;margin:0.6rem 0;"></p>
+      <div style="display:flex;gap:0.6rem;justify-content:flex-end;">
+        <button id="oeCancel" class="btn btn-ghost" type="button">İptal</button>
+        <button id="oeSave" class="btn btn-primary" type="button">Kaydet</button>
+      </div>
+    </div>`;
+  document.body.appendChild(backdrop);
+  const close = () => backdrop.remove();
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  document.getElementById("oeCancel").addEventListener("click", close);
+  document.getElementById("oeSave").addEventListener("click", async () => {
+    const val = (id) => document.getElementById(id).value.trim();
+    const body = {
+      origin: val("oeOrigin"),
+      destination: val("oeDest"),
+      date: document.getElementById("oeDate").value,
+      endDate: document.getElementById("oeEndDate").value,
+      operators: val("oeOperators"),
+      departureStopFilter: val("oeStop"),
+      emailNotifications: val("oeEmail"),
+      routeId: val("oeRouteId"),
+      isActive: document.getElementById("oeActive").checked,
+    };
+    const msg = document.getElementById("oeMsg");
+    msg.style.color = "#e0796f";
+    msg.textContent = "Kaydediliyor...";
+    try {
+      await apiFetch(`/api/obilet/targets/${t.id}`, { method: "PATCH", body: JSON.stringify(body) });
+      msg.style.color = "#27ae60";
+      msg.textContent = "✅ Kaydedildi. Fiyatlar arka planda güncelleniyor...";
+      setTimeout(async () => { close(); await renderObiletTargets(); }, 700);
+    } catch (err) {
+      msg.style.color = "#e0796f";
+      msg.textContent = "Hata: " + err.message;
+    }
+  });
+}
+
 async function renderObiletTargets() {
   const listEl = document.getElementById("obiletTargetsList");
   if (!listEl) return;
@@ -4773,6 +4831,7 @@ function renderObiletTargetCards(listEl) {
           </div>
           <div class="obilet-card-actions">
             <button class="btn btn-sm btn-ghost obilet-refresh-btn" data-id="${t.id}" title="Güncelle">🔄</button>
+            <button class="btn btn-sm btn-ghost obilet-edit-btn" data-id="${t.id}" title="Düzenle">✏️ Düzenle</button>
             <button class="btn btn-sm btn-success obilet-excel-btn" data-id="${t.id}" title="Excel İndir">📥 Excel</button>
             <button class="btn btn-sm btn-ghost obilet-expand-btn" data-id="${t.id}" title="Fiyatları Göster">📊 Fiyatlar</button>
             <button class="btn btn-sm btn-danger obilet-delete-btn" data-id="${t.id}" title="Sil">🗑</button>
@@ -4807,6 +4866,14 @@ function renderObiletTargetCards(listEl) {
       } catch (err) {
         alert("Silme işlemi başarısız: " + err.message);
       }
+    });
+  });
+
+  listEl.querySelectorAll(".obilet-edit-btn").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const t = (obiletState.targets || []).find(x => String(x.id) === String(btn.dataset.id));
+      if (t) openObiletEditModal(t);
     });
   });
 

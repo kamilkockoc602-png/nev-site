@@ -6402,6 +6402,57 @@ app.post("/api/obilet/targets", requireAuth, (req, res) => {
   }
 });
 
+// API: Takip Hattını Düzenle (tarih, firmalar, durak filtresi, e-posta, aktiflik, route_id)
+app.patch("/api/obilet/targets/:id", requireAuth, (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const existing = db.prepare("SELECT * FROM obilet_targets WHERE id = ?").get(id);
+  if (!existing) return res.status(404).json({ message: "Hat bulunamadi." });
+
+  const pick = (v, fallback) => (v != null ? String(v).trim() : fallback);
+  const origin = pick(req.body.origin, existing.origin);
+  const destination = pick(req.body.destination, existing.destination);
+  const date = pick(req.body.date, existing.date);
+  const endDate = pick(req.body.endDate, existing.end_date || existing.date);
+  const departureStopFilter = pick(req.body.departureStopFilter, existing.departure_stop_filter || "");
+  const operators = pick(req.body.operators, existing.operators);
+  let emailNotifications = pick(req.body.emailNotifications, existing.email_notifications || "");
+  let routeId = pick(req.body.routeId != null ? req.body.routeId : req.body.route_id, existing.route_id || "");
+  const isActive = req.body.isActive != null ? (req.body.isActive ? 1 : 0) : existing.is_active;
+
+  if (!origin || !destination || !date || !operators) {
+    return res.status(400).json({ message: "Kalkis, Varis, Tarih ve Firmalar alanlari zorunludur." });
+  }
+  const normalizedEndDate = endDate || date;
+  if (!isIsoDate(date) || !isIsoDate(normalizedEndDate)) {
+    return res.status(400).json({ message: "Tarih formati gecersiz. YYYY-MM-DD kullanin." });
+  }
+  if (normalizedEndDate < date) {
+    return res.status(400).json({ message: "Bitis tarihi baslangic tarihinden once olamaz." });
+  }
+  if (buildIsoDateRange(date, normalizedEndDate).length > 45) {
+    return res.status(400).json({ message: "Tarih araligi en fazla 45 gun olabilir." });
+  }
+  if (routeId && !/^\d+-\d+$/.test(routeId)) {
+    return res.status(400).json({ message: "oBilet Route ID formati gecersiz. Ornek: 595-356" });
+  }
+  // Kalkis/varis degistiyse ve route_id elle verilmediyse otomatik yeniden bul.
+  if ((origin !== existing.origin || destination !== existing.destination) && !req.body.routeId && !req.body.route_id) {
+    const auto = buildObiletRouteIdLocal(origin, destination);
+    routeId = auto || "";
+  }
+
+  try {
+    db.prepare(
+      "UPDATE obilet_targets SET origin = ?, destination = ?, date = ?, end_date = ?, departure_stop_filter = ?, operators = ?, email_notifications = ?, route_id = ?, is_active = ? WHERE id = ?"
+    ).run(origin, destination, date, normalizedEndDate, departureStopFilter, operators, emailNotifications, routeId, isActive, id);
+
+    setTimeout(() => { refreshObiletPricesTask().catch(() => null); }, 1000);
+    res.json({ ok: true, id, routeId });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Guncelleme basarisiz." });
+  }
+});
+
 // API: Takip Hattını Sil
 app.delete("/api/obilet/targets/:id", requireAuth, (req, res) => {
   const id = Number(req.params.id);
