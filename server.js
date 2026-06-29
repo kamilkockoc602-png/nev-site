@@ -5114,7 +5114,7 @@ function tgFullName(u) {
 // ---- Komut cevaplari ----
 function tgCmdYardim(isAdmin) {
   let t =
-    "🤖 <b>Kamil Koç Fiyat Takip Botu</b>\n\n" +
+    "🤖 <b>KK oBilet Fiyat Takip Botu</b>\n\n" +
     "Kullanabileceğin komutlar:\n\n" +
     "/durum — Sistem özeti (kaç hat, son değişiklik)\n" +
     "/takip — Toplam izlenen sefer (hat bazında)\n" +
@@ -5557,7 +5557,7 @@ function tgGetTrackedOperators() {
 function tgCmdFirma(name) {
   try {
     const q = String(name || "").toLocaleLowerCase("tr-TR").trim();
-    if (!q) return "Kullanım: <b>/firma &lt;firma adı&gt;</b>\nÖrnek: /firma Kamil Koç\n\nveya sadece /firma yazıp listeden seç.";
+    if (!q) return "Kullanım: <b>/firma &lt;firma adı&gt;</b>\nÖrnek: /firma Has Karayolu\n\nveya sadece /firma yazıp listeden seç.";
     const rows = db.prepare(
       "SELECT target_id, origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history ORDER BY id DESC LIMIT 1000"
     ).all();
@@ -5692,7 +5692,7 @@ async function handleTelegramUpdate(update) {
       // Ilk temas: pending kaydet + adminlere butonlu bildirim gonder.
       telegramRegisterPending(chat, from);
       await sendTelegramMessage(chatId,
-        "👋 <b>Merhaba!</b> Burası Kamil Koç oBilet fiyat takip botu.\n\n" +
+        "👋 <b>Merhaba!</b> Burası KK oBilet fiyat takip botu.\n\n" +
         "Bu bot özeldir; kullanabilmen için önce <b>yönetici onayı</b> gerekiyor. Talebin <b>iletildi</b> ✅\n\n" +
         "Onaylanınca sana haber vereceğim ve hangi hatların bildirimini almak istediğini seçeceksin. ⏳");
       tgNotifyAdminsNewRequest(chat, from);
@@ -5813,10 +5813,10 @@ async function startTelegramPolling() {
   await telegramPost("setMyCommands", { commands: userCommands });
   // Bot acilis aciklamasi (kisi botu ilk actiginda gorur).
   await telegramPost("setMyDescription", {
-    description: "Kamil Koç oBilet fiyat takip botu. Kullanmak için /start yaz, yönetici onayından sonra /abone ile hatlarını seçip fiyat değişikliği bildirimleri al.",
+    description: "KK oBilet fiyat takip botu. Kullanmak için /start yaz, yönetici onayından sonra /abone ile hatlarını seçip fiyat değişikliği bildirimleri al.",
   });
   await telegramPost("setMyShortDescription", {
-    short_description: "Kamil Koç oBilet fiyat takip botu — /start ile başla.",
+    short_description: "KK oBilet fiyat takip botu — /start ile başla.",
   });
   // Yoneticilere ek komutlari sadece kendi sohbetlerinde goster (scope: chat).
   const adminCommands = userCommands.concat([
@@ -7070,7 +7070,7 @@ app.post("/api/telegram/test", requireAuth, async (req, res) => {
   }
   const text =
     "✅ <b>Test bildirimi</b>\n" +
-    "Kamil Koç Fiyat Takip botu çalışıyor. Fiyat değişikliklerinde bildirim buraya gelecek. 🚌";
+    "KK oBilet fiyat takip botu çalışıyor. Fiyat değişikliklerinde bildirim buraya gelecek. 🚌";
   let sent = 0;
   for (const chatId of TELEGRAM_DEFAULT_CHAT_IDS) {
     if (await sendTelegramMessage(chatId, text)) sent++;
