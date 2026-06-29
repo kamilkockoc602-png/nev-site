@@ -3938,6 +3938,60 @@ function setupObiletOperatorPicker(root) {
 async function initObiletPanel() {
   await renderObiletTargets();
   setupObiletForm();
+  const bulkBtn = document.getElementById("obiletBulkDatesBtn");
+  if (bulkBtn && !bulkBtn.dataset.wired) {
+    bulkBtn.dataset.wired = "1";
+    bulkBtn.addEventListener("click", openBulkDatesModal);
+  }
+}
+
+function openBulkDatesModal() {
+  document.getElementById("obiletBulkBackdrop")?.remove();
+  const targets = obiletState.targets || [];
+  // Varsayilan: ilk hattin mevcut tarihleri, yoksa bugun.
+  const first = targets[0] || {};
+  const today = new Date().toISOString().slice(0, 10);
+  const defStart = first.date || today;
+  const defEnd = first.end_date || first.date || today;
+  const backdrop = document.createElement("div");
+  backdrop.id = "obiletBulkBackdrop";
+  backdrop.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;padding:1rem;";
+  backdrop.innerHTML = `
+    <div style="background:#1c2530;border:1px solid rgba(255,255,255,0.12);border-radius:14px;max-width:460px;width:100%;padding:1.4rem;">
+      <h4 style="margin:0 0 0.6rem;">📅 Toplu Tarih Güncelle</h4>
+      <p class="subtle" style="margin:0 0 1rem;">Aşağıdaki tarih aralığı <b>tüm aktif hatlara</b> uygulanacak (${targets.length} hat).</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.8rem;">
+        <label style="display:flex;flex-direction:column;gap:0.3rem;"><span>Başlangıç</span><input id="obDateStart" type="date" value="${defStart}" /></label>
+        <label style="display:flex;flex-direction:column;gap:0.3rem;"><span>Bitiş</span><input id="obDateEnd" type="date" value="${defEnd}" /></label>
+      </div>
+      <p id="obBulkMsg" style="min-height:1.2em;margin:0.7rem 0;"></p>
+      <div style="display:flex;gap:0.6rem;justify-content:flex-end;">
+        <button id="obBulkCancel" class="btn btn-ghost" type="button">İptal</button>
+        <button id="obBulkSave" class="btn btn-primary" type="button">Tümüne Uygula</button>
+      </div>
+    </div>`;
+  document.body.appendChild(backdrop);
+  const close = () => backdrop.remove();
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  document.getElementById("obBulkCancel").addEventListener("click", close);
+  document.getElementById("obBulkSave").addEventListener("click", async () => {
+    const date = document.getElementById("obDateStart").value;
+    const endDate = document.getElementById("obDateEnd").value;
+    const msg = document.getElementById("obBulkMsg");
+    if (!date || !endDate) { msg.style.color = "#e0796f"; msg.textContent = "Her iki tarihi de gir."; return; }
+    if (!confirm(`Tüm hatların tarihi ${date} - ${endDate} olarak güncellenecek. Onaylıyor musun?`)) return;
+    msg.style.color = "#e0796f";
+    msg.textContent = "Güncelleniyor...";
+    try {
+      const r = await apiFetch("/api/obilet/targets/bulk-dates", { method: "POST", body: JSON.stringify({ date, endDate }) });
+      msg.style.color = "#27ae60";
+      msg.textContent = `✅ ${r.updated} hat güncellendi. Fiyatlar arka planda çekiliyor...`;
+      setTimeout(async () => { close(); await renderObiletTargets(); }, 800);
+    } catch (err) {
+      msg.style.color = "#e0796f";
+      msg.textContent = "Hata: " + err.message;
+    }
+  });
 }
 
 // CSV formatına çevir (Excel'de açılabilir - Türkiye için noktalı virgül delimiter)

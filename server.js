@@ -6461,6 +6461,30 @@ app.post("/api/obilet/targets", requireAuth, (req, res) => {
   }
 });
 
+// API: TUM hatlarin tarih araligini toplu guncelle
+app.post("/api/obilet/targets/bulk-dates", requireAuth, (req, res) => {
+  const date = String(req.body.date || "").trim();
+  const endDate = String(req.body.endDate || "").trim();
+  if (!date) return res.status(400).json({ message: "Baslangic tarihi zorunlu." });
+  const normalizedEndDate = endDate || date;
+  if (!isIsoDate(date) || !isIsoDate(normalizedEndDate)) {
+    return res.status(400).json({ message: "Tarih formati gecersiz. YYYY-MM-DD kullanin." });
+  }
+  if (normalizedEndDate < date) {
+    return res.status(400).json({ message: "Bitis tarihi baslangic tarihinden once olamaz." });
+  }
+  if (buildIsoDateRange(date, normalizedEndDate).length > 45) {
+    return res.status(400).json({ message: "Tarih araligi en fazla 45 gun olabilir." });
+  }
+  try {
+    const info = db.prepare("UPDATE obilet_targets SET date = ?, end_date = ? WHERE is_active = 1").run(date, normalizedEndDate);
+    setTimeout(() => { refreshObiletPricesTask().catch(() => null); }, 1000);
+    res.json({ ok: true, updated: info.changes, date, endDate: normalizedEndDate });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Toplu guncelleme basarisiz." });
+  }
+});
+
 // API: Takip Hattını Düzenle (tarih, firmalar, durak filtresi, e-posta, aktiflik, route_id)
 app.patch("/api/obilet/targets/:id", requireAuth, (req, res) => {
   const id = parseInt(req.params.id, 10);
