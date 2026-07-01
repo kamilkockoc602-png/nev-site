@@ -6773,6 +6773,73 @@ app.get("/api/obilet/occupancy", requireAuth, (req, res) => {
   }
 });
 
+// PAZAR PAYI ANALIZI — hat + firma bazinda: sefer sayisi, kapasite, yolcu, doluluk, fiyat min/max.
+// ?date=YYYY-MM-DD verilirse o gune, verilmezse tum takip edilen (gelecek) seferlere gore.
+app.get("/api/obilet/market-share", requireAuth, (req, res) => {
+  try {
+    const today = todayIsoInIstanbul();
+    try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(today); } catch (e) {}
+    const date = String(req.query.date || "").trim();
+
+    // Secilebilecek tarihler (dropdown icin).
+    const availableDates = db.prepare(
+      "SELECT DISTINCT journey_date FROM obilet_occupancy WHERE journey_date >= ? ORDER BY journey_date"
+    ).all(today).map((r) => r.journey_date);
+
+    const dateOk = date && /^\d{4}-\d{2}-\d{2}$/.test(date);
+    const occWhere = dateOk ? "AND o.journey_date = ?" : "AND o.journey_date >= ?";
+    const occParam = dateOk ? date : today;
+    const occ = db.prepare(`
+      SELECT o.target_id, t.origin, t.destination, o.operator,
+             COUNT(*) AS sefer,
+             SUM(o.total_seats) AS kapasite,
+             SUM(o.total_seats - o.available_seats) AS yolcu
+        FROM obilet_occupancy o
+        JOIN obilet_targets t ON t.id = o.target_id
+       WHERE o.total_seats > 0 ${occWhere}
+       GROUP BY o.target_id, o.operator
+    `).all(occParam);
+
+    const prWhere = dateOk ? "AND journey_date = ?" : "AND journey_date >= ?";
+    const prices = db.prepare(`
+      SELECT target_id, operator, MIN(price) AS fmin, MAX(price) AS fmax
+        FROM obilet_prices
+       WHERE price > 0 ${prWhere}
+       GROUP BY target_id, operator
+    `).all(occParam);
+    const priceMap = new Map();
+    for (const p of prices) priceMap.set(`${p.target_id}|${p.operator}`, p);
+
+    const routes = new Map();
+    for (const r of occ) {
+      if (!routes.has(r.target_id)) {
+        routes.set(r.target_id, {
+          route: `${(r.origin || "").toUpperCase()}-${(r.destination || "").toUpperCase()}`,
+          firms: [],
+        });
+      }
+      const pm = priceMap.get(`${r.target_id}|${r.operator}`) || {};
+      const doluluk = r.kapasite ? Math.round((r.yolcu / r.kapasite) * 10000) / 100 : 0;
+      routes.get(r.target_id).firms.push({
+        operator: r.operator,
+        sefer: r.sefer,
+        kapasite: r.kapasite || 0,
+        yolcu: r.yolcu || 0,
+        doluluk,
+        fiyatMin: pm.fmin != null ? pm.fmin : null,
+        fiyatMax: pm.fmax != null ? pm.fmax : null,
+      });
+    }
+    const result = [...routes.values()]
+      .map((rt) => ({ ...rt, firms: rt.firms.sort((a, b) => b.sefer - a.sefer) }))
+      .sort((a, b) => a.route.localeCompare(b.route, "tr"));
+
+    res.json({ ok: true, date: dateOk ? date : null, availableDates, routes: result });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Analiz alınamadı." });
+  }
+});
+
 app.get("/api/obilet/price-history", requireAuth, (req, res) => {
   try {
     const targetId = parseInt(req.query.targetId || "0", 10);
