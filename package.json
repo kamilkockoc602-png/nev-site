@@ -11,6 +11,7 @@
     "better-sqlite3": "^11.8.1",
     "cheerio": "^1.2.0",
     "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
     "express": "^4.21.2",
     "nodemailer": "^6.9.13",
     "puppeteer": "^22.10.0",

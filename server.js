@@ -6773,70 +6773,124 @@ app.get("/api/obilet/occupancy", requireAuth, (req, res) => {
   }
 });
 
-// PAZAR PAYI ANALIZI — hat + firma bazinda: sefer sayisi, kapasite, yolcu, doluluk, fiyat min/max.
-// ?date=YYYY-MM-DD verilirse o gune, verilmezse tum takip edilen (gelecek) seferlere gore.
-app.get("/api/obilet/market-share", requireAuth, (req, res) => {
-  try {
-    const today = todayIsoInIstanbul();
-    try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(today); } catch (e) {}
-    const date = String(req.query.date || "").trim();
+// Pazar payi verisini hesaplar (hat + firma bazinda). date bos ise tum gelecek seferler.
+function computeMarketShare(date) {
+  const today = todayIsoInIstanbul();
+  try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(today); } catch (e) {}
+  const availableDates = db.prepare(
+    "SELECT DISTINCT journey_date FROM obilet_occupancy WHERE journey_date >= ? ORDER BY journey_date"
+  ).all(today).map((r) => r.journey_date);
 
-    // Secilebilecek tarihler (dropdown icin).
-    const availableDates = db.prepare(
-      "SELECT DISTINCT journey_date FROM obilet_occupancy WHERE journey_date >= ? ORDER BY journey_date"
-    ).all(today).map((r) => r.journey_date);
+  const dateOk = date && /^\d{4}-\d{2}-\d{2}$/.test(date);
+  const occWhere = dateOk ? "AND o.journey_date = ?" : "AND o.journey_date >= ?";
+  const occParam = dateOk ? date : today;
+  const occ = db.prepare(`
+    SELECT o.target_id, t.origin, t.destination, o.operator,
+           COUNT(*) AS sefer,
+           SUM(o.total_seats) AS kapasite,
+           SUM(o.total_seats - o.available_seats) AS yolcu
+      FROM obilet_occupancy o
+      JOIN obilet_targets t ON t.id = o.target_id
+     WHERE o.total_seats > 0 ${occWhere}
+     GROUP BY o.target_id, o.operator
+  `).all(occParam);
 
-    const dateOk = date && /^\d{4}-\d{2}-\d{2}$/.test(date);
-    const occWhere = dateOk ? "AND o.journey_date = ?" : "AND o.journey_date >= ?";
-    const occParam = dateOk ? date : today;
-    const occ = db.prepare(`
-      SELECT o.target_id, t.origin, t.destination, o.operator,
-             COUNT(*) AS sefer,
-             SUM(o.total_seats) AS kapasite,
-             SUM(o.total_seats - o.available_seats) AS yolcu
-        FROM obilet_occupancy o
-        JOIN obilet_targets t ON t.id = o.target_id
-       WHERE o.total_seats > 0 ${occWhere}
-       GROUP BY o.target_id, o.operator
-    `).all(occParam);
+  const prWhere = dateOk ? "AND journey_date = ?" : "AND journey_date >= ?";
+  const prices = db.prepare(`
+    SELECT target_id, operator, MIN(price) AS fmin, MAX(price) AS fmax
+      FROM obilet_prices WHERE price > 0 ${prWhere}
+     GROUP BY target_id, operator
+  `).all(occParam);
+  const priceMap = new Map();
+  for (const p of prices) priceMap.set(`${p.target_id}|${p.operator}`, p);
 
-    const prWhere = dateOk ? "AND journey_date = ?" : "AND journey_date >= ?";
-    const prices = db.prepare(`
-      SELECT target_id, operator, MIN(price) AS fmin, MAX(price) AS fmax
-        FROM obilet_prices
-       WHERE price > 0 ${prWhere}
-       GROUP BY target_id, operator
-    `).all(occParam);
-    const priceMap = new Map();
-    for (const p of prices) priceMap.set(`${p.target_id}|${p.operator}`, p);
-
-    const routes = new Map();
-    for (const r of occ) {
-      if (!routes.has(r.target_id)) {
-        routes.set(r.target_id, {
-          route: `${(r.origin || "").toUpperCase()}-${(r.destination || "").toUpperCase()}`,
-          firms: [],
-        });
-      }
-      const pm = priceMap.get(`${r.target_id}|${r.operator}`) || {};
-      const doluluk = r.kapasite ? Math.round((r.yolcu / r.kapasite) * 10000) / 100 : 0;
-      routes.get(r.target_id).firms.push({
-        operator: r.operator,
-        sefer: r.sefer,
-        kapasite: r.kapasite || 0,
-        yolcu: r.yolcu || 0,
-        doluluk,
-        fiyatMin: pm.fmin != null ? pm.fmin : null,
-        fiyatMax: pm.fmax != null ? pm.fmax : null,
+  const routes = new Map();
+  for (const r of occ) {
+    if (!routes.has(r.target_id)) {
+      routes.set(r.target_id, {
+        route: `${(r.origin || "").toUpperCase()}-${(r.destination || "").toUpperCase()}`,
+        firms: [],
       });
     }
-    const result = [...routes.values()]
-      .map((rt) => ({ ...rt, firms: rt.firms.sort((a, b) => b.sefer - a.sefer) }))
-      .sort((a, b) => a.route.localeCompare(b.route, "tr"));
+    const pm = priceMap.get(`${r.target_id}|${r.operator}`) || {};
+    const doluluk = r.kapasite ? Math.round((r.yolcu / r.kapasite) * 10000) / 100 : 0;
+    routes.get(r.target_id).firms.push({
+      operator: r.operator, sefer: r.sefer, kapasite: r.kapasite || 0, yolcu: r.yolcu || 0,
+      doluluk, fiyatMin: pm.fmin != null ? pm.fmin : null, fiyatMax: pm.fmax != null ? pm.fmax : null,
+    });
+  }
+  const result = [...routes.values()]
+    .map((rt) => ({ ...rt, firms: rt.firms.sort((a, b) => b.sefer - a.sefer) }))
+    .sort((a, b) => a.route.localeCompare(b.route, "tr"));
+  return { date: dateOk ? date : null, availableDates, routes: result };
+}
 
-    res.json({ ok: true, date: dateOk ? date : null, availableDates, routes: result });
+// PAZAR PAYI ANALIZI (JSON) — dropdown tarihleri + veri.
+app.get("/api/obilet/market-share", requireAuth, (req, res) => {
+  try {
+    const { date, availableDates, routes } = computeMarketShare(String(req.query.date || "").trim());
+    res.json({ ok: true, date, availableDates, routes });
   } catch (error) {
     res.status(500).json({ message: error.message || "Analiz alınamadı." });
+  }
+});
+
+// PAZAR PAYI ANALIZI (stilli Excel) — yesil basliklar + doluluk barlari.
+app.get("/api/obilet/market-share.xlsx", requireAuth, async (req, res) => {
+  try {
+    const ExcelJS = require("exceljs");
+    const date = String(req.query.date || "").trim();
+    const { date: resolvedDate, routes } = computeMarketShare(date);
+    const dot = (iso) => { const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? `${m[3]}.${m[2]}.${m[1]}` : iso; };
+
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet("Pazar Payı");
+    ws.columns = [{ width: 28 }, { width: 12 }, { width: 11 }, { width: 13 }, { width: 15 }, { width: 13 }, { width: 13 }];
+    const thin = { top: { style: "thin" }, left: { style: "thin" }, bottom: { style: "thin" }, right: { style: "thin" } };
+    const headers = ["Firma", "Sefer Sayısı", "Kapasite", "Yolcu Sayısı", "Doluluk Oranı%", "Fiyat Minimum", "Fiyat Maximum"];
+
+    ws.mergeCells(1, 1, 1, 7);
+    const tcell = ws.getCell(1, 1);
+    tcell.value = resolvedDate ? `${dot(resolvedDate)} Pazar Payı Analizi` : "Pazar Payı Analizi (Tüm Dönem)";
+    tcell.font = { bold: true, size: 14 };
+
+    let row = 3;
+    for (const rt of routes) {
+      const rc = ws.getCell(row, 1); rc.value = rt.route; rc.font = { bold: true, size: 12 }; row++;
+      headers.forEach((h, i) => {
+        const c = ws.getCell(row, i + 1);
+        c.value = h; c.font = { bold: true };
+        c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFC6E0B4" } };
+        c.border = thin; c.alignment = { horizontal: i === 0 ? "left" : "center", wrapText: true };
+      });
+      row++;
+      const dolStart = row;
+      for (const f of rt.firms) {
+        const vals = [f.operator, f.sefer, f.kapasite, f.yolcu, (f.doluluk != null ? f.doluluk / 100 : null), f.fiyatMin, f.fiyatMax];
+        vals.forEach((v, i) => {
+          const c = ws.getCell(row, i + 1);
+          c.value = v; c.border = thin;
+          if (i > 0) c.alignment = { horizontal: "center" };
+          if (i === 4 && v != null) c.numFmt = "0.00%";
+        });
+        row++;
+      }
+      const dolEnd = row - 1;
+      if (dolEnd >= dolStart) {
+        ws.addConditionalFormatting({
+          ref: `E${dolStart}:E${dolEnd}`,
+          rules: [{ type: "dataBar", cfvo: [{ type: "num", value: 0 }, { type: "num", value: 1 }], color: { argb: "FFFFC000" } }],
+        });
+      }
+      row++; // hatlar arasi bos satir
+    }
+
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="pazar-payi${resolvedDate ? "-" + resolvedDate : "-tum-donem"}.xlsx"`);
+    await wb.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Excel oluşturulamadı." });
   }
 });
 

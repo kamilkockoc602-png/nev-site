@@ -4664,8 +4664,7 @@ async function setupMarketShare() {
 }
 
 async function exportMarketShareExcel() {
-  const sel = document.getElementById("msDateSelect");
-  const date = sel?.value || "";
+  const date = document.getElementById("msDateSelect")?.value || "";
   const btn = document.getElementById("msExportBtn");
   const oldText = btn.textContent;
   btn.textContent = "Hazırlanıyor...";
@@ -4673,43 +4672,30 @@ async function exportMarketShareExcel() {
   try {
     const params = new URLSearchParams();
     if (date) params.set("date", date);
-    const data = await apiFetch(`/api/obilet/market-share?${params.toString()}`);
-    const routes = data.routes || [];
-    if (!routes.length) {
+    // Stilli Excel sunucuda uretiliyor (ExcelJS) — blob olarak indir.
+    const res = await fetch(`/api/obilet/market-share.xlsx?${params.toString()}`, {
+      headers: state.token ? { Authorization: `Bearer ${state.token}` } : {},
+    });
+    if (!res.ok) {
+      let m = "Analiz oluşturulamadı.";
+      try { const j = await res.json(); m = j.message || m; } catch { /* */ }
+      throw new Error(m);
+    }
+    const blob = await res.blob();
+    if (blob.size < 200) {
       alert("Analiz için veri yok. Doluluk taraması bir tur dönünce (~10 dk) dolar.");
       return;
     }
-    const XLSX = window.XLSX;
-    if (!XLSX) { alert("Excel kütüphanesi yüklenemedi."); return; }
-
-    const title = date ? `${occToDot(date)} Pazar Payı Analizi` : "Pazar Payı Analizi (Tüm Dönem)";
-    const headers = ["Firma", "Sefer Sayısı", "Kapasite", "Yolcu Sayısı", "Doluluk %", "Fiyat Min", "Fiyat Max"];
-    const aoa = [[title], []];
-    for (const rt of routes) {
-      aoa.push([rt.route]);
-      aoa.push(headers);
-      for (const f of rt.firms) {
-        aoa.push([
-          f.operator, f.sefer, f.kapasite, f.yolcu,
-          (f.doluluk != null ? f.doluluk / 100 : null), // yuzde formati icin oran
-          f.fiyatMin, f.fiyatMax,
-        ]);
-      }
-      aoa.push([]);
-    }
-    const ws = XLSX.utils.aoa_to_sheet(aoa);
-    ws["!cols"] = [{ wch: 26 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 11 }, { wch: 10 }, { wch: 10 }];
-    // Doluluk kolonunu (E) yuzde formatina cevir.
-    const range = XLSX.utils.decode_range(ws["!ref"]);
-    for (let r = range.s.r; r <= range.e.r; r++) {
-      const cell = ws[XLSX.utils.encode_cell({ r, c: 4 })];
-      if (cell && typeof cell.v === "number") cell.z = "0.00%";
-    }
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Pazar Payı");
-    XLSX.writeFile(wb, date ? `pazar-payi-${date}.xlsx` : "pazar-payi-tum-donem.xlsx");
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = date ? `pazar-payi-${date}.xlsx` : "pazar-payi-tum-donem.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   } catch (err) {
-    alert("Analiz oluşturulamadı: " + err.message);
+    alert(err.message);
   } finally {
     btn.textContent = oldText;
     btn.disabled = false;
