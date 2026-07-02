@@ -4731,8 +4731,20 @@ function setupOccupancyPanel() {
     if (exportBtn) exportBtn.addEventListener("click", exportOccupancyCsv);
     const sel = document.getElementById("occTargetSelect");
     if (sel) sel.addEventListener("change", () => loadOccupancy());
+    const opSel = document.getElementById("occOperatorSelect");
+    if (opSel) opSel.addEventListener("change", () => loadOccupancy());
   }
   populateOccupancyTargetSelect().then(() => loadOccupancy());
+}
+
+function populateOccupancyOperatorSelect(operators) {
+  const sel = document.getElementById("occOperatorSelect");
+  if (!sel || !Array.isArray(operators)) return;
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">Tüm firmalar</option>` +
+    operators.map((op) => `<option value="${occEsc(op)}">${occEsc(op)}</option>`).join("");
+  // Onceki secim hala listede varsa koru.
+  if (cur && operators.includes(cur)) sel.value = cur;
 }
 
 async function populateOccupancyTargetSelect() {
@@ -4753,12 +4765,15 @@ async function loadOccupancy() {
   const statusEl = document.getElementById("occStatusMsg");
   if (!body) return;
   const targetId = document.getElementById("occTargetSelect")?.value || "";
+  const operator = document.getElementById("occOperatorSelect")?.value || "";
   if (statusEl) statusEl.textContent = "Doluluk yükleniyor...";
   try {
     const params = new URLSearchParams();
     if (targetId) params.set("targetId", targetId);
+    if (operator) params.set("operator", operator);
     const data = await apiFetch(`/api/obilet/occupancy?${params.toString()}`);
     occupancyState.rows = Array.isArray(data?.rows) ? data.rows : [];
+    populateOccupancyOperatorSelect(data.operators);
     renderOccupancy(data);
     if (statusEl) {
       statusEl.textContent = occupancyState.rows.length

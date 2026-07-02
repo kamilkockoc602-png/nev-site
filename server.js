@@ -6745,12 +6745,20 @@ app.delete("/api/obilet/station-ids/:cityKey", requireAuth, (req, res) => {
 app.get("/api/obilet/occupancy", requireAuth, (req, res) => {
   try {
     const targetId = parseInt(req.query.targetId || "0", 10);
+    const operator = String(req.query.operator || "").trim();
     const today = todayIsoInIstanbul();
     // Gecmis tarihli doluluk kayitlarini temizle (birikmesin).
     try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(today); } catch (e) {}
+
+    // Firma dropdown'i icin: doluluk verisi olan tum firmalar (filtreden bagimsiz).
+    const operators = db.prepare(
+      "SELECT DISTINCT operator FROM obilet_occupancy WHERE journey_date >= ? AND operator != '' ORDER BY operator"
+    ).all(today).map((r) => r.operator);
+
     const conditions = ["o.journey_date >= ?"];
     const params = [today];
     if (targetId) { conditions.push("o.target_id = ?"); params.push(targetId); }
+    if (operator) { conditions.push("o.operator = ?"); params.push(operator); }
     const rows = db.prepare(`
       SELECT o.target_id, t.origin, t.destination, o.journey_date, o.operator, o.departure_time,
              o.departure_stop, o.total_seats, o.available_seats, o.occupancy_percent, o.last_updated
@@ -6767,7 +6775,7 @@ app.get("/api/obilet/occupancy", requireAuth, (req, res) => {
     const fullest = count ? rows[0] : null;
     const emptiest = count ? rows[rows.length - 1] : null;
 
-    res.json({ ok: true, count, avgOccupancy, totalSeats, soldSeats, fullest, emptiest, rows });
+    res.json({ ok: true, count, avgOccupancy, totalSeats, soldSeats, fullest, emptiest, operators, rows });
   } catch (error) {
     res.status(500).json({ message: error.message || "Doluluk alınamadı." });
   }
