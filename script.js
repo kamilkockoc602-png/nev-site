@@ -4921,6 +4921,8 @@ function setupSeferTakipPanel() {
     attachCityAutocomplete(document.getElementById("stOrigin"));
     attachCityAutocomplete(document.getElementById("stDestination"));
     btn.addEventListener("click", () => searchSeferTakip());
+    const exportBtn = document.getElementById("stExportBtn");
+    if (exportBtn) exportBtn.addEventListener("click", exportSeferTakipExcel);
     const reset = document.getElementById("stResetBtn");
     if (reset) reset.addEventListener("click", () => {
       ["stOrigin", "stDestination"].forEach((id) => { const el = document.getElementById(id); if (el) el.value = ""; });
@@ -4961,10 +4963,11 @@ async function searchSeferTakip(initial = false) {
         data.operators.map((op) => `<option value="${occEsc(op)}">${occEsc(op)}</option>`).join("");
       if (cur && data.operators.includes(cur)) opSel.value = cur;
     }
-    renderSeferTakip(data.journeys || []);
+    seferTakipState.journeys = data.journeys || [];
+    renderSeferTakip(seferTakipState.journeys);
     if (statusEl) {
-      statusEl.textContent = (data.journeys || []).length
-        ? `${data.journeys.length} sefer bulundu (son 3 günün fiyat değişiklikleri).`
+      statusEl.textContent = seferTakipState.journeys.length
+        ? `${seferTakipState.journeys.length} sefer bulundu (son 3 günün fiyat değişiklikleri).`
         : "Bu kritere uygun fiyat değişikliği yok. (Not: sadece son 3 gün tutulur.)";
     }
   } catch (err) {
@@ -5008,6 +5011,45 @@ function renderSeferTakip(journeys) {
       <td style="font-size:0.82rem;opacity:0.8;">${occEsc(j.lastChangedAt || "")}</td>
     </tr>`;
   }).join("");
+}
+
+function exportSeferTakipExcel() {
+  const journeys = seferTakipState.journeys || [];
+  if (!journeys.length) { alert("Aktarılacak veri yok. Önce Ara'ya basın."); return; }
+  const XLSX = window.XLSX;
+  if (!XLSX) { alert("Excel kütüphanesi yüklenemedi."); return; }
+  const aoa = [[
+    "Sefer Tarihi", "Saat", "Firma", "Güzergah", "Kalkış Durağı",
+    "Değişiklik", "Fiyat Geçmişi", "Güncel (TL)", "Yolcu", "Koltuk", "Doluluk %", "Son Değişiklik",
+  ]];
+  for (const j of journeys) {
+    const pct = (j.totalSeats && j.yolcu != null) ? Math.round((j.yolcu / j.totalSeats) * 100) : "";
+    aoa.push([
+      occToDot(j.journey_date),
+      j.departure_time || "",
+      j.operator || "",
+      `${(j.origin || "").toUpperCase()} → ${(j.destination || "").toUpperCase()}`,
+      j.departure_stop || "",
+      `${j.changeCount}x`,
+      (j.prices || []).join(" → "),
+      j.currentPrice != null ? j.currentPrice : "",
+      j.yolcu != null ? j.yolcu : "",
+      j.totalSeats != null ? j.totalSeats : "",
+      pct === "" ? "" : pct / 100,
+      j.lastChangedAt || "",
+    ]);
+  }
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 12 }, { wch: 7 }, { wch: 22 }, { wch: 20 }, { wch: 16 }, { wch: 10 }, { wch: 30 }, { wch: 11 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 20 }];
+  // Doluluk % kolonunu (K) yuzde formatina cevir.
+  const range = XLSX.utils.decode_range(ws["!ref"]);
+  for (let r = 1; r <= range.e.r; r++) {
+    const cell = ws[XLSX.utils.encode_cell({ r, c: 10 })];
+    if (cell && typeof cell.v === "number") cell.z = "0%";
+  }
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Sefer Takip");
+  XLSX.writeFile(wb, `sefer-takip-${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
 function openObiletEditModal(t) {

@@ -5504,7 +5504,7 @@ function tgCmdSeferTakip(firmaQuery) {
     if (!q) {
       return "Kullanım: <b>/sefer &lt;firma&gt;</b>\nÖrnek: /sefer Enver Geçgel\n\nveya sadece /sefer yazıp listeden seç.";
     }
-    const ops = db.prepare("SELECT DISTINCT operator FROM obilet_price_history WHERE operator != '' ORDER BY operator").all().map((r) => r.operator);
+    const ops = db.prepare("SELECT DISTINCT operator FROM obilet_prices WHERE operator != '' ORDER BY operator").all().map((r) => r.operator);
     const matched = ops.find((o) => norm(o) === q) || ops.find((o) => norm(o).includes(q));
     if (!matched) return `"${tgEscape(firmaQuery)}" için sefer takip verisi yok.`;
 
@@ -5542,7 +5542,7 @@ function tgCmdSeferTakip(firmaQuery) {
 
 // /sefer (argumansiz) — firma butonlari; tiklayinca o firmanin sefer takibi.
 async function tgSendSeferSecimi(chatId) {
-  const ops = db.prepare("SELECT DISTINCT operator FROM obilet_price_history WHERE operator != '' ORDER BY operator").all().map((r) => r.operator);
+  const ops = db.prepare("SELECT DISTINCT operator FROM obilet_prices WHERE operator != '' ORDER BY operator").all().map((r) => r.operator);
   if (!ops.length) {
     await sendTelegramMessage(chatId, "Henüz sefer takip verisi yok.");
     return;
@@ -6873,61 +6873,73 @@ function computeJourneyTracking({ date, origin, destination, operator } = {}) {
   const destQ = norm(destination);
   const op = String(operator || "").trim();
 
+  // Firma listesi: TUM takip edilen firmalar (guncel seferlerden).
   const operators = db.prepare(
-    "SELECT DISTINCT operator FROM obilet_price_history WHERE operator != '' ORDER BY operator"
+    "SELECT DISTINCT operator FROM obilet_prices WHERE operator != '' ORDER BY operator"
   ).all().map((r) => r.operator);
 
-  const conditions = [];
+  // 1) ANA LISTE = guncel seferler (obilet_prices) — oBilet Takip'in gosterdigi seferlerin aynisi.
+  const conds = ["p.price > 0"];
   const params = [];
-  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) { conditions.push("journey_date = ?"); params.push(date); }
-  if (op) { conditions.push("operator = ?"); params.push(op); }
-  const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
-  const rows = db.prepare(`
-    SELECT id, target_id, origin, destination, journey_date, operator, departure_time, departure_stop, old_price, new_price, changed_at
-      FROM obilet_price_history ${where} ORDER BY id ASC
+  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) { conds.push("p.journey_date = ?"); params.push(date); }
+  if (op) { conds.push("p.operator = ?"); params.push(op); }
+  const priceRows = db.prepare(`
+    SELECT p.target_id, t.origin, t.destination, p.journey_date, p.operator, p.departure_time, p.departure_stop, p.price
+      FROM obilet_prices p JOIN obilet_targets t ON t.id = p.target_id
+     WHERE ${conds.join(" AND ")}
   `).all(...params);
-
-  const filtered = rows.filter((r) =>
+  const currentSefers = priceRows.filter((r) =>
     (!originQ || norm(r.origin).includes(originQ)) &&
     (!destQ || norm(r.destination).includes(destQ))
   );
 
-  const groups = new Map();
-  for (const r of filtered) {
-    const key = `${r.journey_date}|${r.operator}|${r.departure_time}|${r.departure_stop}`;
-    if (!groups.has(key)) {
-      groups.set(key, {
-        target_id: r.target_id, journey_date: r.journey_date, origin: r.origin, destination: r.destination,
-        operator: r.operator, departure_time: r.departure_time, departure_stop: r.departure_stop, changes: [],
-      });
+  // 2) Fiyat degisiklik gecmisi haritasi (son 3 gun) — sefere ekle.
+  const histMap = new Map();
+  try {
+    const histRows = db.prepare(
+      "SELECT id, target_id, journey_date, operator, departure_time, departure_stop, old_price, new_price, changed_at FROM obilet_price_history ORDER BY id ASC"
+    ).all();
+    for (const h of histRows) {
+      const key = `${h.target_id}|${h.journey_date}|${h.operator}|${h.departure_time}|${h.departure_stop}`;
+      if (!histMap.has(key)) histMap.set(key, []);
+      histMap.get(key).push(h);
     }
-    groups.get(key).changes.push(r);
-  }
+  } catch (e) { /* yok say */ }
 
+  // 3) Doluluk haritasi.
   const occMap = new Map();
   try {
     const occRows = db.prepare("SELECT target_id, journey_date, operator, departure_time, total_seats, available_seats FROM obilet_occupancy").all();
     for (const o of occRows) occMap.set(`${o.target_id}|${o.journey_date}|${o.operator}|${o.departure_time}`, o);
   } catch (e) { /* yok say */ }
 
-  const journeys = [...groups.values()].map((g) => {
-    g.changes.sort((a, b) => a.id - b.id);
-    const prices = [g.changes[0].old_price, ...g.changes.map((c) => c.new_price)];
-    const occ = occMap.get(`${g.target_id}|${g.journey_date}|${g.operator}|${g.departure_time}`);
+  const journeys = currentSefers.map((s) => {
+    const key = `${s.target_id}|${s.journey_date}|${s.operator}|${s.departure_time}|${s.departure_stop}`;
+    const changes = histMap.get(key) || [];
+    let prices, changeCount, lastChangedAt;
+    if (changes.length) {
+      prices = [changes[0].old_price, ...changes.map((c) => c.new_price)];
+      changeCount = changes.length;
+      lastChangedAt = changes[changes.length - 1].changed_at;
+    } else {
+      prices = [s.price];       // degismemis: sadece guncel fiyat
+      changeCount = 0;
+      lastChangedAt = "";
+    }
+    const occ = occMap.get(`${s.target_id}|${s.journey_date}|${s.operator}|${s.departure_time}`);
     const totalSeats = occ && occ.total_seats != null ? occ.total_seats : null;
     const availableSeats = occ && occ.available_seats != null ? occ.available_seats : null;
     const yolcu = (totalSeats != null && availableSeats != null) ? (totalSeats - availableSeats) : null;
     return {
-      journey_date: g.journey_date, origin: g.origin, destination: g.destination,
-      operator: g.operator, departure_time: g.departure_time, departure_stop: g.departure_stop,
-      changeCount: g.changes.length, prices, currentPrice: prices[prices.length - 1],
-      totalSeats, availableSeats, yolcu,
-      firstChangedAt: g.changes[0].changed_at, lastChangedAt: g.changes[g.changes.length - 1].changed_at,
+      journey_date: s.journey_date, origin: s.origin, destination: s.destination,
+      operator: s.operator, departure_time: s.departure_time, departure_stop: s.departure_stop,
+      changeCount, prices, currentPrice: s.price,
+      totalSeats, availableSeats, yolcu, lastChangedAt,
     };
   }).sort((a, b) =>
-    (b.changeCount - a.changeCount) ||
     String(a.journey_date).localeCompare(String(b.journey_date)) ||
-    String(a.departure_time).localeCompare(String(b.departure_time))
+    String(a.departure_time).localeCompare(String(b.departure_time)) ||
+    String(a.operator).localeCompare(String(b.operator), "tr")
   );
 
   return { operators, journeys };
