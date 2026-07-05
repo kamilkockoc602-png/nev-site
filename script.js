@@ -4997,7 +4997,10 @@ function renderSeferTakip(journeys) {
       <td>${occToDot(j.journey_date)}</td>
       <td>${occEsc(j.departure_time || "")}</td>
       <td>${occEsc(j.operator || "")}</td>
-      <td>${occEsc(j.departure_stop || "-")}</td>
+      <td>
+        <b>${occEsc((j.origin || "").toUpperCase())} → ${occEsc((j.destination || "").toUpperCase())}</b>
+        ${j.departure_stop ? `<div style="font-size:0.78rem;opacity:0.6;">${occEsc(j.departure_stop)}</div>` : ""}
+      </td>
       <td style="text-align:center;">${changeBadge}</td>
       <td>${seq}</td>
       <td><b>${j.currentPrice} TL</b></td>
