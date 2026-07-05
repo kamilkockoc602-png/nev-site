@@ -6748,8 +6748,8 @@ app.get("/api/obilet/occupancy", requireAuth, (req, res) => {
     const targetId = parseInt(req.query.targetId || "0", 10);
     const operator = String(req.query.operator || "").trim();
     const today = todayIsoInIstanbul();
-    // Gecmis tarihli doluluk kayitlarini temizle (birikmesin).
-    try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(today); } catch (e) {}
+    // 3 gunden eski doluluk kayitlarini temizle (yakin gecmis kalsin — Sefer Takip'te kalkis dolulugu).
+    try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(shiftIsoDate(today, -3)); } catch (e) {}
 
     // Firma dropdown'i icin: doluluk verisi olan tum firmalar (filtreden bagimsiz).
     const operators = db.prepare(
@@ -6802,7 +6802,7 @@ app.get("/api/obilet/journey-tracking", requireAuth, (req, res) => {
     if (operator) { conditions.push("operator = ?"); params.push(operator); }
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
     const rows = db.prepare(`
-      SELECT id, origin, destination, journey_date, operator, departure_time, departure_stop, old_price, new_price, changed_at
+      SELECT id, target_id, origin, destination, journey_date, operator, departure_time, departure_stop, old_price, new_price, changed_at
         FROM obilet_price_history ${where} ORDER BY id ASC
     `).all(...params);
 
@@ -6818,22 +6818,34 @@ app.get("/api/obilet/journey-tracking", requireAuth, (req, res) => {
       const key = `${r.journey_date}|${r.operator}|${r.departure_time}|${r.departure_stop}`;
       if (!groups.has(key)) {
         groups.set(key, {
-          journey_date: r.journey_date, origin: r.origin, destination: r.destination,
+          target_id: r.target_id, journey_date: r.journey_date, origin: r.origin, destination: r.destination,
           operator: r.operator, departure_time: r.departure_time, departure_stop: r.departure_stop, changes: [],
         });
       }
       groups.get(key).changes.push(r);
     }
 
+    // Doluluk eslemesi (target_id|journey_date|operator|departure_time).
+    const occMap = new Map();
+    try {
+      const occRows = db.prepare("SELECT target_id, journey_date, operator, departure_time, total_seats, available_seats FROM obilet_occupancy").all();
+      for (const o of occRows) occMap.set(`${o.target_id}|${o.journey_date}|${o.operator}|${o.departure_time}`, o);
+    } catch (e) { /* yok say */ }
+
     const journeys = [...groups.values()].map((g) => {
       g.changes.sort((a, b) => a.id - b.id);
       const prices = [g.changes[0].old_price, ...g.changes.map((c) => c.new_price)];
+      const occ = occMap.get(`${g.target_id}|${g.journey_date}|${g.operator}|${g.departure_time}`);
+      const totalSeats = occ && occ.total_seats != null ? occ.total_seats : null;
+      const availableSeats = occ && occ.available_seats != null ? occ.available_seats : null;
+      const yolcu = (totalSeats != null && availableSeats != null) ? (totalSeats - availableSeats) : null;
       return {
         journey_date: g.journey_date, origin: g.origin, destination: g.destination,
         operator: g.operator, departure_time: g.departure_time, departure_stop: g.departure_stop,
         changeCount: g.changes.length,
         prices,
         currentPrice: prices[prices.length - 1],
+        totalSeats, availableSeats, yolcu,
         firstChangedAt: g.changes[0].changed_at,
         lastChangedAt: g.changes[g.changes.length - 1].changed_at,
       };
@@ -6852,7 +6864,7 @@ app.get("/api/obilet/journey-tracking", requireAuth, (req, res) => {
 // Pazar payi verisini hesaplar (hat + firma bazinda). date bos ise tum gelecek seferler.
 function computeMarketShare(date) {
   const today = todayIsoInIstanbul();
-  try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(today); } catch (e) {}
+  try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(shiftIsoDate(today, -3)); } catch (e) {}
   const availableDates = db.prepare(
     "SELECT DISTINCT journey_date FROM obilet_occupancy WHERE journey_date >= ? ORDER BY journey_date"
   ).all(today).map((r) => r.journey_date);

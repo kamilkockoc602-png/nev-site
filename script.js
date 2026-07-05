@@ -4976,7 +4976,7 @@ function renderSeferTakip(journeys) {
   const body = document.getElementById("stTableBody");
   if (!body) return;
   if (!journeys.length) {
-    body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#888;">Kayıt yok</td></tr>`;
+    body.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#888;">Kayıt yok</td></tr>`;
     return;
   }
   body.innerHTML = journeys.map((j) => {
@@ -4987,6 +4987,12 @@ function renderSeferTakip(journeys) {
       return `<b style="color:${color}">${p}</b>`;
     }).join(" <span style='opacity:.5'>→</span> ");
     const changeBadge = `<span style="background:#31507a;color:#fff;border-radius:10px;padding:1px 8px;font-size:0.8rem;">${j.changeCount}x</span>`;
+    // Doluluk: yolcu / toplam koltuk + yuzde renkli.
+    let dolCell = "<span style='opacity:.5'>-</span>";
+    if (j.totalSeats != null && j.yolcu != null) {
+      const pct = j.totalSeats ? Math.round((j.yolcu / j.totalSeats) * 100) : 0;
+      dolCell = `<b style="color:${occColor(pct)}">${j.yolcu}/${j.totalSeats}</b> <span style="opacity:.7">(%${pct})</span>`;
+    }
     return `<tr>
       <td>${occToDot(j.journey_date)}</td>
       <td>${occEsc(j.departure_time || "")}</td>
@@ -4995,6 +5001,7 @@ function renderSeferTakip(journeys) {
       <td style="text-align:center;">${changeBadge}</td>
       <td>${seq}</td>
       <td><b>${j.currentPrice} TL</b></td>
+      <td>${dolCell}</td>
       <td style="font-size:0.82rem;opacity:0.8;">${occEsc(j.lastChangedAt || "")}</td>
     </tr>`;
   }).join("");
