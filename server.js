@@ -6187,6 +6187,10 @@ async function processObiletTarget(target) {
             if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(avail)) continue;
             const occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100)));
             const occOp = normalizeObiletOperatorName(j.operator) || j.operator;
+            // TESHIS: oBilet'in bu sefer icin bize verdigi HAM koltuk verisi (stub degeri gormek icin).
+            if (DEBUG_OBILET_PRICE) {
+              console.log(`[Doluluk-HAM] ${target.origin}->${target.destination} ${j.journey_date} ${j.time} ${occOp}: oBilet total=${total} avail=${avail} => dolu=${total - avail} (%${occ})`);
+            }
             db.prepare(`
               INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
