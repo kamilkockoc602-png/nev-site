@@ -5132,6 +5132,7 @@ function tgCmdYardim(isAdmin) {
     "/fiyatlar — Hat bazında güncel fiyat aralığı\n" +
     "/hat — Hata göre değişiklikler (listeden seç)\n" +
     "/guncel — Hattın değişmeyen fiyatları (listeden seç)\n" +
+    "/sefer — Sefer bazlı fiyat değişim geçmişi + doluluk (listeden seç)\n" +
     "/abone — Bildirim almak istediğin hatları seç\n" +
     "/aboneliklerim — Abone olduğun hatlar\n" +
     "/yardim — Bu menü";
@@ -5495,6 +5496,59 @@ async function tgSendGuncelSecimi(chatId) {
   });
 }
 
+// /sefer — bir hattin son 3 gundeki sefer bazli fiyat degisiklik gecmisi + doluluk.
+function tgCmdSeferTakip(origin, destination) {
+  try {
+    const { journeys } = computeJourneyTracking({ origin, destination });
+    const routeLabel = journeys[0]
+      ? `${(journeys[0].origin || "").toUpperCase()} → ${(journeys[0].destination || "").toUpperCase()}`
+      : `${(origin || "").toUpperCase()} → ${(destination || "").toUpperCase()}`;
+    if (!journeys.length) {
+      return `🚌 <b>${tgEscape(routeLabel)}</b>\n\nSon 3 günde fiyat değişikliği yok.`;
+    }
+    const dm = (s) => { const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? `${m[3]}.${m[2]}` : String(s || ""); };
+    const shown = journeys.slice(0, 40);
+    const blocks = shown.map((j) => {
+      const seq = (j.prices || []).join("→");
+      let dol = "";
+      if (j.totalSeats != null && j.yolcu != null) {
+        const pct = j.totalSeats ? Math.round((j.yolcu / j.totalSeats) * 100) : 0;
+        dol = `\n   👥 ${j.yolcu}/${j.totalSeats} (%${pct})`;
+      }
+      return `📅 <b>${dm(j.journey_date)} ${tgEscape(j.departure_time || "")}</b> · ${tgEscape(j.operator || "")}\n` +
+        `   <b>${j.changeCount}x</b>  ${tgEscape(seq)} = <b>${j.currentPrice} TL</b>${dol}`;
+    });
+    return `🚌 <b>${tgEscape(routeLabel)}</b> · Sefer Takip (${journeys.length} sefer${journeys.length > 40 ? ", ilk 40" : ""})\n\n` + blocks.join("\n\n");
+  } catch (e) {
+    return "Sefer takip alınamadı: " + tgEscape(e.message);
+  }
+}
+
+function tgCmdSeferTakipByTarget(targetId) {
+  const t = db.prepare("SELECT origin, destination FROM obilet_targets WHERE id = ?").get(targetId);
+  if (!t) return "Hat bulunamadı.";
+  return tgCmdSeferTakip(t.origin, t.destination);
+}
+
+// /sefer (argumansiz) — hat butonlari; tiklayinca o hattin sefer takibi.
+async function tgSendSeferSecimi(chatId) {
+  const routes = db.prepare("SELECT id, origin, destination FROM obilet_targets ORDER BY origin, destination").all();
+  if (!routes.length) {
+    await sendTelegramMessage(chatId, "Takip edilen hat yok.");
+    return;
+  }
+  const inline_keyboard = routes.map((r) => [{
+    text: `${(r.origin || "").toUpperCase()} → ${(r.destination || "").toUpperCase()}`,
+    callback_data: "st:" + r.id,
+  }]);
+  await telegramPost("sendMessage", {
+    chat_id: String(chatId),
+    parse_mode: "HTML",
+    text: "🚌 <b>Hat seç</b> — sefer takibini görmek istediğin hatta dokun:",
+    reply_markup: { inline_keyboard },
+  });
+}
+
 // /takip — panel kartiyla ayni: aktif hat + toplam izlenen sefer + hat bazinda dagilim.
 function tgCmdTakip() {
   try {
@@ -5631,6 +5685,13 @@ async function handleTelegramCallback(cb) {
     await sendTelegramLong(targetChat, tgCmdGuncelByTarget(id));
     return;
   }
+  // Sefer takip butonu — o hattin sefer bazli fiyat degisiklik gecmisi.
+  if (data.startsWith("st:")) {
+    if (!telegramCanUse(fromId)) return;
+    const id = parseInt(data.slice(3), 10);
+    await sendTelegramLong(targetChat, tgCmdSeferTakipByTarget(id));
+    return;
+  }
   // Abonelik toggle butonu — bu hatta abone ol/cik, klavyeyi guncelle.
   if (data.startsWith("sub:")) {
     if (!telegramCanUse(fromId)) return;
@@ -5745,6 +5806,17 @@ async function handleTelegramUpdate(update) {
     return;
   }
 
+  // /sefer — argumanli ise o hattin sefer takibi, argumansiz ise hat secim butonlari.
+  if (cmd === "/sefer") {
+    const rest = parts.slice(1);
+    if (rest.length >= 2) {
+      await sendTelegramLong(chatId, tgCmdSeferTakip(rest[0], rest[rest.length - 1]));
+    } else {
+      await tgSendSeferSecimi(chatId);
+    }
+    return;
+  }
+
   // /abone — bildirim almak istedigi hatlari sec (✅/⬜ toggle).
   if (cmd === "/abone") {
     await telegramPost("sendMessage", {
@@ -5813,6 +5885,7 @@ async function startTelegramPolling() {
     { command: "fiyatlar", description: "Güncel fiyat aralıkları" },
     { command: "hat", description: "Hata göre değişiklikler" },
     { command: "guncel", description: "Hattın değişmeyen fiyatları" },
+    { command: "sefer", description: "Sefer bazlı değişim + doluluk" },
     { command: "abone", description: "Bildirim hatlarını seç" },
     { command: "aboneliklerim", description: "Abone olduğun hatlar" },
     { command: "yardim", description: "Komut menüsü" },
@@ -6782,79 +6855,80 @@ app.get("/api/obilet/occupancy", requireAuth, (req, res) => {
   }
 });
 
+// Sefer bazli fiyat degisiklik gecmisi + doluluk hesaplar. Hem API hem bot kullanir.
+function computeJourneyTracking({ date, origin, destination, operator } = {}) {
+  const norm = (s) => String(s || "").toLocaleLowerCase("tr-TR").trim();
+  const originQ = norm(origin);
+  const destQ = norm(destination);
+  const op = String(operator || "").trim();
+
+  const operators = db.prepare(
+    "SELECT DISTINCT operator FROM obilet_price_history WHERE operator != '' ORDER BY operator"
+  ).all().map((r) => r.operator);
+
+  const conditions = [];
+  const params = [];
+  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) { conditions.push("journey_date = ?"); params.push(date); }
+  if (op) { conditions.push("operator = ?"); params.push(op); }
+  const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+  const rows = db.prepare(`
+    SELECT id, target_id, origin, destination, journey_date, operator, departure_time, departure_stop, old_price, new_price, changed_at
+      FROM obilet_price_history ${where} ORDER BY id ASC
+  `).all(...params);
+
+  const filtered = rows.filter((r) =>
+    (!originQ || norm(r.origin).includes(originQ)) &&
+    (!destQ || norm(r.destination).includes(destQ))
+  );
+
+  const groups = new Map();
+  for (const r of filtered) {
+    const key = `${r.journey_date}|${r.operator}|${r.departure_time}|${r.departure_stop}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        target_id: r.target_id, journey_date: r.journey_date, origin: r.origin, destination: r.destination,
+        operator: r.operator, departure_time: r.departure_time, departure_stop: r.departure_stop, changes: [],
+      });
+    }
+    groups.get(key).changes.push(r);
+  }
+
+  const occMap = new Map();
+  try {
+    const occRows = db.prepare("SELECT target_id, journey_date, operator, departure_time, total_seats, available_seats FROM obilet_occupancy").all();
+    for (const o of occRows) occMap.set(`${o.target_id}|${o.journey_date}|${o.operator}|${o.departure_time}`, o);
+  } catch (e) { /* yok say */ }
+
+  const journeys = [...groups.values()].map((g) => {
+    g.changes.sort((a, b) => a.id - b.id);
+    const prices = [g.changes[0].old_price, ...g.changes.map((c) => c.new_price)];
+    const occ = occMap.get(`${g.target_id}|${g.journey_date}|${g.operator}|${g.departure_time}`);
+    const totalSeats = occ && occ.total_seats != null ? occ.total_seats : null;
+    const availableSeats = occ && occ.available_seats != null ? occ.available_seats : null;
+    const yolcu = (totalSeats != null && availableSeats != null) ? (totalSeats - availableSeats) : null;
+    return {
+      journey_date: g.journey_date, origin: g.origin, destination: g.destination,
+      operator: g.operator, departure_time: g.departure_time, departure_stop: g.departure_stop,
+      changeCount: g.changes.length, prices, currentPrice: prices[prices.length - 1],
+      totalSeats, availableSeats, yolcu,
+      firstChangedAt: g.changes[0].changed_at, lastChangedAt: g.changes[g.changes.length - 1].changed_at,
+    };
+  }).sort((a, b) =>
+    (b.changeCount - a.changeCount) ||
+    String(a.journey_date).localeCompare(String(b.journey_date)) ||
+    String(a.departure_time).localeCompare(String(b.departure_time))
+  );
+
+  return { operators, journeys };
+}
+
 // SEFER TAKIP — bir seferin son 3 gundeki fiyat degisiklik gecmisi (kac kez, eski->guncel).
 app.get("/api/obilet/journey-tracking", requireAuth, (req, res) => {
   try {
-    const norm = (s) => String(s || "").toLocaleLowerCase("tr-TR").trim();
-    const date = String(req.query.date || "").trim();
-    const originQ = norm(req.query.origin);
-    const destQ = norm(req.query.destination);
-    const operator = String(req.query.operator || "").trim();
-
-    // Firma dropdown listesi.
-    const operators = db.prepare(
-      "SELECT DISTINCT operator FROM obilet_price_history WHERE operator != '' ORDER BY operator"
-    ).all().map((r) => r.operator);
-
-    const conditions = [];
-    const params = [];
-    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) { conditions.push("journey_date = ?"); params.push(date); }
-    if (operator) { conditions.push("operator = ?"); params.push(operator); }
-    const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
-    const rows = db.prepare(`
-      SELECT id, target_id, origin, destination, journey_date, operator, departure_time, departure_stop, old_price, new_price, changed_at
-        FROM obilet_price_history ${where} ORDER BY id ASC
-    `).all(...params);
-
-    // Kalkis/varis Turkce uyumlu JS filtresi (kismi eslesme).
-    const filtered = rows.filter((r) =>
-      (!originQ || norm(r.origin).includes(originQ)) &&
-      (!destQ || norm(r.destination).includes(destQ))
-    );
-
-    // Sefer bazinda grupla: journey_date + operator + departure_time + departure_stop.
-    const groups = new Map();
-    for (const r of filtered) {
-      const key = `${r.journey_date}|${r.operator}|${r.departure_time}|${r.departure_stop}`;
-      if (!groups.has(key)) {
-        groups.set(key, {
-          target_id: r.target_id, journey_date: r.journey_date, origin: r.origin, destination: r.destination,
-          operator: r.operator, departure_time: r.departure_time, departure_stop: r.departure_stop, changes: [],
-        });
-      }
-      groups.get(key).changes.push(r);
-    }
-
-    // Doluluk eslemesi (target_id|journey_date|operator|departure_time).
-    const occMap = new Map();
-    try {
-      const occRows = db.prepare("SELECT target_id, journey_date, operator, departure_time, total_seats, available_seats FROM obilet_occupancy").all();
-      for (const o of occRows) occMap.set(`${o.target_id}|${o.journey_date}|${o.operator}|${o.departure_time}`, o);
-    } catch (e) { /* yok say */ }
-
-    const journeys = [...groups.values()].map((g) => {
-      g.changes.sort((a, b) => a.id - b.id);
-      const prices = [g.changes[0].old_price, ...g.changes.map((c) => c.new_price)];
-      const occ = occMap.get(`${g.target_id}|${g.journey_date}|${g.operator}|${g.departure_time}`);
-      const totalSeats = occ && occ.total_seats != null ? occ.total_seats : null;
-      const availableSeats = occ && occ.available_seats != null ? occ.available_seats : null;
-      const yolcu = (totalSeats != null && availableSeats != null) ? (totalSeats - availableSeats) : null;
-      return {
-        journey_date: g.journey_date, origin: g.origin, destination: g.destination,
-        operator: g.operator, departure_time: g.departure_time, departure_stop: g.departure_stop,
-        changeCount: g.changes.length,
-        prices,
-        currentPrice: prices[prices.length - 1],
-        totalSeats, availableSeats, yolcu,
-        firstChangedAt: g.changes[0].changed_at,
-        lastChangedAt: g.changes[g.changes.length - 1].changed_at,
-      };
-    }).sort((a, b) =>
-      (b.changeCount - a.changeCount) ||
-      String(a.journey_date).localeCompare(String(b.journey_date)) ||
-      String(a.departure_time).localeCompare(String(b.departure_time))
-    );
-
+    const { operators, journeys } = computeJourneyTracking({
+      date: String(req.query.date || "").trim(),
+      origin: req.query.origin, destination: req.query.destination, operator: req.query.operator,
+    });
     res.json({ ok: true, operators, count: journeys.length, journeys });
   } catch (error) {
     res.status(500).json({ message: error.message || "Sefer takip alınamadı." });
