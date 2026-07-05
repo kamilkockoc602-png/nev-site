@@ -6125,6 +6125,16 @@ async function processObiletTarget(target) {
           // Durak bazli sorgu bos donerse sehir bazli rotaya geri dus.
           journeys = await scrapeObilet(target.origin, target.destination, journeyDate, targetRouteId);
         }
+        // Bos dondu (Cloudflare challenge / timeout olabilir) — 8 sn bekleyip 1 kez daha dene.
+        // Boylece o gunun fiyat+doluluk verisi eski kalmaz.
+        if (!journeys.length) {
+          console.log(`[Takip Görevi] ${journeyDate} bos dondu, 8 sn sonra 1 kez daha denenecek...`);
+          await new Promise(r => setTimeout(r, 8000));
+          journeys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate, targetRouteId);
+          if (departureStopFilter && !journeys.length) {
+            journeys = await scrapeObilet(target.origin, target.destination, journeyDate, targetRouteId);
+          }
+        }
         journeys.forEach((journey) => {
           const normalized = normalizeObiletOperatorName(journey.operator);
           if (normalized) scrapedOperators.add(normalized);
@@ -6187,10 +6197,6 @@ async function processObiletTarget(target) {
             if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(avail)) continue;
             const occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100)));
             const occOp = normalizeObiletOperatorName(j.operator) || j.operator;
-            // TESHIS: oBilet'in bu sefer icin bize verdigi HAM koltuk verisi (stub degeri gormek icin).
-            if (DEBUG_OBILET_PRICE) {
-              console.log(`[Doluluk-HAM] ${target.origin}->${target.destination} ${j.journey_date} ${j.time} ${occOp}: oBilet total=${total} avail=${avail} => dolu=${total - avail} (%${occ})`);
-            }
             db.prepare(`
               INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -6366,6 +6372,7 @@ async function processObiletTarget(target) {
 let obiletTaskRunning = false;
 const obiletPendingManualTargets = new Set(); // target.id'leri — ayni hatta duplicate basmayi engeller
 let obiletPendingFullRefresh = false;          // "tum hatlari yenile" tek bir kuyrukta tutulur
+const obiletPriorityQueue = [];                // ⚡ Anlik Tara: siranin ONUNE gecen hatlar (paralel degil!)
 
 // Acquire / release helpers: lock'u atomic almak icin.
 async function acquireObiletLock(timeoutMs = 120000) {
@@ -6408,18 +6415,36 @@ async function refreshObiletPricesTask() {
       return;
     }
     
-    for (let i = 0; i < targets.length; i++) {
-      const target = targets[i];
-      await processObiletTarget(target);
+    // Priority-farkinda dongu: her adimda once ⚡ Anlik Tara kuyrugunu bosalt (siranin onune gecer),
+    // sonra sirasi gelen normal hatti isle. Boylece Anlik Tara PARALEL degil, kuyrukta oncelikli.
+    const processedIds = new Set();
+    let idx = 0;
+    let firstTarget = true;
+    while (idx < targets.length || obiletPriorityQueue.length > 0) {
+      let target = null;
+      if (obiletPriorityQueue.length > 0) {
+        const pid = obiletPriorityQueue.shift();
+        if (processedIds.has(pid)) continue;
+        target = db.prepare("SELECT * FROM obilet_targets WHERE id = ? AND is_active = 1").get(pid);
+        if (target) console.log(`[Takip Görevi] ⚡ Öncelikli hat sıranın önüne alındı: ${target.origin} -> ${target.destination}`);
+      } else {
+        while (idx < targets.length && processedIds.has(targets[idx].id)) idx++;
+        if (idx >= targets.length) break;
+        target = targets[idx];
+        idx++;
+      }
+      if (!target || processedIds.has(target.id)) continue;
+      processedIds.add(target.id);
 
-      // Cloudflare bot korumasını önlemek için hatlar arası bekleme. 8s yetmiyor — 20s ile
-      // istek sıklığını dustrebiliriz, IP rate-limit yemekten daha guvenli.
-      if (i < targets.length - 1) {
+      // Cloudflare bot korumasını önlemek için hatlar arası 20 sn bekleme (ilk hat haric).
+      if (!firstTarget) {
         console.log(`[Takip Görevi] Cloudflare koruması için 20 saniye bekleniyor...`);
         await new Promise(resolve => setTimeout(resolve, 20000));
       }
+      firstTarget = false;
+      await processObiletTarget(target);
     }
-    
+
     console.log(`[Takip Görevi] Kontroller tamamlandı: ${nowStamp()}`);
   } finally {
     obiletTaskRunning = false;
@@ -6784,23 +6809,21 @@ app.post("/api/obilet/targets/:id/priority-refresh", requireAuth, requireAdmin, 
     const target = db.prepare("SELECT * FROM obilet_targets WHERE id = ?").get(targetId);
     if (!target) return res.status(404).json({ message: "Hat bulunamadi." });
 
-    setObiletTargetSyncStatus(target.id, "⚡ Öncelikli tarama başladı (admin)...");
-    // Arka planda hemen tara — lock beklemez (admin override).
-    (async () => {
-      try {
-        console.log(`[Öncelikli Tarama] ${target.origin} -> ${target.destination} (admin: ${req.auth.user.username}) basladi.`);
-        await processObiletTarget(target);
-        console.log(`[Öncelikli Tarama] ${target.origin} -> ${target.destination} tamamlandi.`);
-      } catch (e) {
-        console.error(`[Öncelikli Tarama] Hata: ${e.message}`);
-        setObiletTargetSyncStatus(target.id, `Öncelikli tarama hatası: ${e.message}`);
-      }
-    })();
+    // ⚡ PARALEL DEGIL: hatti oncelik kuyruguna al. Tarama calisiyorsa siranin ONUNE gecer;
+    // calismiyorsa hemen baslat. Boylece ayni anda iki tarama olmaz (Cloudflare'i tetiklemez).
+    if (!obiletPriorityQueue.includes(target.id)) obiletPriorityQueue.push(target.id);
 
-    res.json({
-      ok: true,
-      message: `⚡ Öncelikli tarama başlatıldı: ${target.origin} → ${target.destination}. Birkaç dakikada sonuç görünecek.`,
-    });
+    let msg;
+    if (obiletTaskRunning) {
+      setObiletTargetSyncStatus(target.id, "⚡ Öncelikli sıraya alındı, çalışan taramanın önüne geçecek...");
+      msg = `⚡ Öncelikli sıraya alındı: ${target.origin} → ${target.destination}. Çalışan tarama bu hattı hemen (bir sonraki adımda) işleyecek.`;
+    } else {
+      setObiletTargetSyncStatus(target.id, "⚡ Öncelikli tarama başlatılıyor...");
+      setTimeout(() => { refreshObiletPricesTask().catch(() => null); }, 100);
+      msg = `⚡ Öncelikli tarama başlatıldı: ${target.origin} → ${target.destination}. Birkaç dakikada sonuç görünecek.`;
+    }
+    console.log(`[Öncelikli Tarama] ${target.origin} -> ${target.destination} (admin: ${req.auth.user.username}) kuyruga alindi (calisan tarama: ${obiletTaskRunning}).`);
+    res.json({ ok: true, message: msg });
   } catch (error) {
     res.status(500).json({ message: error.message || "Öncelikli tarama tetiklenemedi." });
   }
