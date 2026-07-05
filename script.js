@@ -5134,6 +5134,7 @@ function renderObiletTargetCards(listEl) {
     return;
   }
 
+  const isAdmin = !!(state.currentUser && state.currentUser.isAdmin);
   listEl.innerHTML = obiletState.targets.map(t => {
     const dateFormatted = (t.date || "").split("-").reverse().join(".");
     const endDateFormatted = ((t.end_date || t.date) || "").split("-").reverse().join(".");
@@ -5157,6 +5158,7 @@ function renderObiletTargetCards(listEl) {
           </div>
           <div class="obilet-card-actions">
             <button class="btn btn-sm btn-ghost obilet-refresh-btn" data-id="${t.id}" title="Güncelle">🔄</button>
+            ${isAdmin ? `<button class="btn btn-sm btn-primary obilet-priority-btn" data-id="${t.id}" title="Sıra beklemeden hemen tara (admin)">⚡ Anlık Tara</button>` : ""}
             <button class="btn btn-sm btn-ghost obilet-edit-btn" data-id="${t.id}" title="Düzenle">✏️ Düzenle</button>
             <button class="btn btn-sm btn-success obilet-excel-btn" data-id="${t.id}" title="Excel İndir">📥 Excel</button>
             <button class="btn btn-sm btn-ghost obilet-expand-btn" data-id="${t.id}" title="Fiyatları Göster">📊 Fiyatlar</button>
@@ -5200,6 +5202,29 @@ function renderObiletTargetCards(listEl) {
       e.stopPropagation();
       const t = (obiletState.targets || []).find(x => String(x.id) === String(btn.dataset.id));
       if (t) openObiletEditModal(t);
+    });
+  });
+
+  listEl.querySelectorAll(".obilet-priority-btn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      const oldText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "⚡ Başlatılıyor...";
+      try {
+        const r = await apiFetch(`/api/obilet/targets/${id}/priority-refresh`, { method: "POST" });
+        btn.textContent = "⚡ Tarıyor...";
+        const statusEl = document.getElementById("obiletActionStatus");
+        if (statusEl) { statusEl.style.color = "#27ae60"; statusEl.textContent = r.message || "Öncelikli tarama başlatıldı."; }
+        // Birkaç saniye sonra listeyi tazele (sonuç düşsün).
+        setTimeout(() => renderObiletTargets().catch(() => null), 15000);
+        setTimeout(() => renderObiletTargets().catch(() => null), 40000);
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = oldText;
+        alert("Öncelikli tarama başlatılamadı: " + err.message);
+      }
     });
   });
 

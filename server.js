@@ -6772,6 +6772,36 @@ app.post("/api/obilet/targets/:id/refresh", requireAuth, async (req, res) => {
   }
 });
 
+// API: ADMIN ONCELIKLI TARAMA — sira/lock BEKLEMEZ, hemen bu hatti tarar (sadece admin).
+// Mevcut kuyruk sistemine dokunmaz; bagimsiz, aninda calisir.
+app.post("/api/obilet/targets/:id/priority-refresh", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const targetId = parseInt(req.params.id, 10);
+    const target = db.prepare("SELECT * FROM obilet_targets WHERE id = ?").get(targetId);
+    if (!target) return res.status(404).json({ message: "Hat bulunamadi." });
+
+    setObiletTargetSyncStatus(target.id, "⚡ Öncelikli tarama başladı (admin)...");
+    // Arka planda hemen tara — lock beklemez (admin override).
+    (async () => {
+      try {
+        console.log(`[Öncelikli Tarama] ${target.origin} -> ${target.destination} (admin: ${req.auth.user.username}) basladi.`);
+        await processObiletTarget(target);
+        console.log(`[Öncelikli Tarama] ${target.origin} -> ${target.destination} tamamlandi.`);
+      } catch (e) {
+        console.error(`[Öncelikli Tarama] Hata: ${e.message}`);
+        setObiletTargetSyncStatus(target.id, `Öncelikli tarama hatası: ${e.message}`);
+      }
+    })();
+
+    res.json({
+      ok: true,
+      message: `⚡ Öncelikli tarama başlatıldı: ${target.origin} → ${target.destination}. Birkaç dakikada sonuç görünecek.`,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Öncelikli tarama tetiklenemedi." });
+  }
+});
+
 // API: oBilet sehir kodlari — listele (seed + ogrenilmiş hepsi tek listede)
 app.get("/api/obilet/station-ids", requireAuth, (req, res) => {
   try {
