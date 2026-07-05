@@ -4863,11 +4863,63 @@ function exportOccupancyCsv() {
 // ============================================================
 const seferTakipState = { wired: false };
 
+const IL_LISTESI = ["Adana","Adıyaman","Afyonkarahisar","Ağrı","Aksaray","Amasya","Ankara","Antalya","Ardahan","Artvin","Aydın","Balıkesir","Bartın","Batman","Bayburt","Bilecik","Bingöl","Bitlis","Bolu","Burdur","Bursa","Çanakkale","Çankırı","Çorum","Denizli","Diyarbakır","Düzce","Edirne","Elazığ","Erzincan","Erzurum","Eskişehir","Gaziantep","Giresun","Gümüşhane","Hakkari","Hatay","Iğdır","Isparta","İstanbul","İzmir","Kahramanmaraş","Karabük","Karaman","Kars","Kastamonu","Kayseri","Kilis","Kırıkkale","Kırklareli","Kırşehir","Kocaeli","Konya","Kütahya","Malatya","Manisa","Mardin","Mersin","Muğla","Muş","Nevşehir","Niğde","Ordu","Osmaniye","Rize","Sakarya","Samsun","Siirt","Sinop","Sivas","Şanlıurfa","Şırnak","Tekirdağ","Tokat","Trabzon","Tunceli","Uşak","Van","Yalova","Yozgat","Zonguldak"];
+
+// Bir metin kutusuna 81 il otomatik tamamlama ekler (input'un tam altinda, koyu temali).
+function attachCityAutocomplete(input) {
+  if (!input || input.dataset.acWired) return;
+  input.dataset.acWired = "1";
+  const norm = (s) => String(s || "").toLocaleLowerCase("tr-TR");
+  const dd = document.createElement("div");
+  dd.style.cssText = "position:fixed;z-index:10000;background:#1c2530;border:1px solid rgba(255,255,255,0.15);border-radius:8px;max-height:240px;overflow:auto;display:none;box-shadow:0 8px 24px rgba(0,0,0,0.45);";
+  document.body.appendChild(dd);
+  let items = [], active = -1;
+  const position = () => {
+    const r = input.getBoundingClientRect();
+    dd.style.left = r.left + "px";
+    dd.style.top = (r.bottom + 2) + "px";
+    dd.style.minWidth = r.width + "px";
+  };
+  const hide = () => { dd.style.display = "none"; active = -1; };
+  const render = () => {
+    const q = norm(input.value);
+    items = q ? IL_LISTESI.filter((c) => norm(c).includes(q)) : IL_LISTESI.slice();
+    if (!items.length) { hide(); return; }
+    dd.innerHTML = items.map((c, i) =>
+      `<div data-i="${i}" style="padding:8px 14px;cursor:pointer;color:#e6edf3;${i === active ? "background:rgba(255,255,255,0.09);" : ""}">${c}</div>`
+    ).join("");
+    position();
+    dd.style.display = "block";
+    dd.querySelectorAll("[data-i]").forEach((el) => {
+      el.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        input.value = items[el.dataset.i];
+        hide();
+        input.dispatchEvent(new Event("change"));
+      });
+    });
+  };
+  input.addEventListener("input", render);
+  input.addEventListener("focus", render);
+  input.addEventListener("blur", () => setTimeout(hide, 150));
+  input.addEventListener("keydown", (e) => {
+    if (dd.style.display === "none") return;
+    if (e.key === "ArrowDown") { active = Math.min(active + 1, items.length - 1); render(); e.preventDefault(); }
+    else if (e.key === "ArrowUp") { active = Math.max(active - 1, 0); render(); e.preventDefault(); }
+    else if (e.key === "Enter" && active >= 0) { input.value = items[active]; hide(); e.preventDefault(); }
+    else if (e.key === "Escape") { hide(); }
+  });
+  window.addEventListener("scroll", () => { if (dd.style.display !== "none") position(); }, true);
+  window.addEventListener("resize", () => { if (dd.style.display !== "none") position(); });
+}
+
 function setupSeferTakipPanel() {
   const btn = document.getElementById("stSearchBtn");
   if (!btn) return;
   if (!seferTakipState.wired) {
     seferTakipState.wired = true;
+    attachCityAutocomplete(document.getElementById("stOrigin"));
+    attachCityAutocomplete(document.getElementById("stDestination"));
     btn.addEventListener("click", () => searchSeferTakip());
     const reset = document.getElementById("stResetBtn");
     if (reset) reset.addEventListener("click", () => {
