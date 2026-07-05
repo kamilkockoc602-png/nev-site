@@ -5132,7 +5132,7 @@ function tgCmdYardim(isAdmin) {
     "/fiyatlar — Hat bazında güncel fiyat aralığı\n" +
     "/hat — Hata göre değişiklikler (listeden seç)\n" +
     "/guncel — Hattın değişmeyen fiyatları (listeden seç)\n" +
-    "/sefer — Sefer bazlı fiyat değişim geçmişi + doluluk (listeden seç)\n" +
+    "/sefer — Firmanın sefer bazlı fiyat değişim geçmişi + doluluk (firma seç)\n" +
     "/abone — Bildirim almak istediğin hatları seç\n" +
     "/aboneliklerim — Abone olduğun hatlar\n" +
     "/yardim — Bu menü";
@@ -5496,66 +5496,67 @@ async function tgSendGuncelSecimi(chatId) {
   });
 }
 
-// /sefer — bir hattin son 3 gundeki sefer bazli fiyat degisiklik gecmisi + doluluk (TABLO).
-function tgCmdSeferTakip(origin, destination) {
+// /sefer — bir FIRMANIN son 3 gundeki tum guzergahlardaki sefer takibi (TABLO).
+function tgCmdSeferTakip(firmaQuery) {
   try {
-    const { journeys } = computeJourneyTracking({ origin, destination });
-    const routeLabel = journeys[0]
-      ? `${(journeys[0].origin || "").toUpperCase()} → ${(journeys[0].destination || "").toUpperCase()}`
-      : `${(origin || "").toUpperCase()} → ${(destination || "").toUpperCase()}`;
-    if (!journeys.length) {
-      return `🚌 <b>${tgEscape(routeLabel)}</b>\n\nSon 3 günde fiyat değişikliği yok.`;
+    const norm = (s) => String(s || "").toLocaleLowerCase("tr-TR").trim();
+    const q = norm(firmaQuery);
+    if (!q) {
+      return "Kullanım: <b>/sefer &lt;firma&gt;</b>\nÖrnek: /sefer Enver Geçgel\n\nveya sadece /sefer yazıp listeden seç.";
     }
+    const ops = db.prepare("SELECT DISTINCT operator FROM obilet_price_history WHERE operator != '' ORDER BY operator").all().map((r) => r.operator);
+    const matched = ops.find((o) => norm(o) === q) || ops.find((o) => norm(o).includes(q));
+    if (!matched) return `"${tgEscape(firmaQuery)}" için sefer takip verisi yok.`;
+
+    const { journeys } = computeJourneyTracking({ operator: matched });
+    if (!journeys.length) return `🏢 <b>${tgEscape(matched)}</b>\n\nSon 3 günde fiyat değişikliği yok.`;
+
     const dm = (s) => { const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? `${m[3]}.${m[2]}` : String(s || ""); };
     const tableRows = journeys.slice(0, 40).map((j) => ({
+      guzergah: `${(j.origin || "").toUpperCase()}>${(j.destination || "").toUpperCase()}`,
       sefer: `${dm(j.journey_date)} ${j.departure_time || ""}`.trim(),
-      firma: j.operator || "",
       deg: `${j.changeCount}x`,
       gecmis: (j.prices || []).join("→"),
       guncel: String(j.currentPrice),
       dolu: (j.totalSeats != null && j.yolcu != null) ? `${j.yolcu}/${j.totalSeats}` : "-",
     }));
     const cols = [
+      { key: "guzergah", label: "Güzergah", align: "l", max: 15 },
       { key: "sefer", label: "Sefer", align: "l", max: 11 },
-      { key: "firma", label: "Firma", align: "l", max: 16 },
       { key: "deg", label: "Değ", align: "r" },
       { key: "gecmis", label: "Fiyat Geçmişi", align: "l" },
       { key: "guncel", label: "Güncel", align: "r" },
       { key: "dolu", label: "Dolu", align: "r" },
     ];
-    const MAX = 25; // her tablo blogu tek mesaja sigsin
+    const MAX = 25;
     const blocks = [];
     for (let i = 0; i < tableRows.length; i += MAX) {
       blocks.push(tgTable(cols, tableRows.slice(i, i + MAX), { compact: true }));
     }
-    const head = `🚌 <b>${tgEscape(routeLabel)}</b> · Sefer Takip (${journeys.length} sefer${journeys.length > 40 ? ", ilk 40" : ""})`;
+    const head = `🏢 <b>${tgEscape(matched)}</b> · Sefer Takip (${journeys.length} sefer${journeys.length > 40 ? ", ilk 40" : ""})`;
     return head + "\n" + blocks.join("\n\n");
   } catch (e) {
     return "Sefer takip alınamadı: " + tgEscape(e.message);
   }
 }
 
-function tgCmdSeferTakipByTarget(targetId) {
-  const t = db.prepare("SELECT origin, destination FROM obilet_targets WHERE id = ?").get(targetId);
-  if (!t) return "Hat bulunamadı.";
-  return tgCmdSeferTakip(t.origin, t.destination);
-}
-
-// /sefer (argumansiz) — hat butonlari; tiklayinca o hattin sefer takibi.
+// /sefer (argumansiz) — firma butonlari; tiklayinca o firmanin sefer takibi.
 async function tgSendSeferSecimi(chatId) {
-  const routes = db.prepare("SELECT id, origin, destination FROM obilet_targets ORDER BY origin, destination").all();
-  if (!routes.length) {
-    await sendTelegramMessage(chatId, "Takip edilen hat yok.");
+  const ops = db.prepare("SELECT DISTINCT operator FROM obilet_price_history WHERE operator != '' ORDER BY operator").all().map((r) => r.operator);
+  if (!ops.length) {
+    await sendTelegramMessage(chatId, "Henüz sefer takip verisi yok.");
     return;
   }
-  const inline_keyboard = routes.map((r) => [{
-    text: `${(r.origin || "").toUpperCase()} → ${(r.destination || "").toUpperCase()}`,
-    callback_data: "st:" + r.id,
-  }]);
+  const inline_keyboard = [];
+  for (const op of ops) {
+    const data = "st:" + op;
+    if (Buffer.byteLength(data) > 64) continue;
+    inline_keyboard.push([{ text: op, callback_data: data }]);
+  }
   await telegramPost("sendMessage", {
     chat_id: String(chatId),
     parse_mode: "HTML",
-    text: "🚌 <b>Hat seç</b> — sefer takibini görmek istediğin hatta dokun:",
+    text: "🏢 <b>Firma seç</b> — sefer takibini görmek istediğin firmaya dokun:",
     reply_markup: { inline_keyboard },
   });
 }
@@ -5696,11 +5697,10 @@ async function handleTelegramCallback(cb) {
     await sendTelegramLong(targetChat, tgCmdGuncelByTarget(id));
     return;
   }
-  // Sefer takip butonu — o hattin sefer bazli fiyat degisiklik gecmisi.
+  // Sefer takip butonu — o FIRMANIN sefer bazli fiyat degisiklik gecmisi.
   if (data.startsWith("st:")) {
     if (!telegramCanUse(fromId)) return;
-    const id = parseInt(data.slice(3), 10);
-    await sendTelegramLong(targetChat, tgCmdSeferTakipByTarget(id));
+    await sendTelegramLong(targetChat, tgCmdSeferTakip(data.slice(3)));
     return;
   }
   // Abonelik toggle butonu — bu hatta abone ol/cik, klavyeyi guncelle.
@@ -5817,11 +5817,11 @@ async function handleTelegramUpdate(update) {
     return;
   }
 
-  // /sefer — argumanli ise o hattin sefer takibi, argumansiz ise hat secim butonlari.
+  // /sefer — argumanli ise o firmanin sefer takibi, argumansiz ise firma secim butonlari.
   if (cmd === "/sefer") {
-    const rest = parts.slice(1);
-    if (rest.length >= 2) {
-      await sendTelegramLong(chatId, tgCmdSeferTakip(rest[0], rest[rest.length - 1]));
+    const rest = parts.slice(1).join(" ").trim();
+    if (rest) {
+      await sendTelegramLong(chatId, tgCmdSeferTakip(rest));
     } else {
       await tgSendSeferSecimi(chatId);
     }
