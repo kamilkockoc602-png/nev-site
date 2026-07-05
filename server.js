@@ -6864,6 +6864,21 @@ app.get("/api/obilet/occupancy", requireAuth, (req, res) => {
     const today = todayIsoInIstanbul();
     // 3 gunden eski doluluk kayitlarini temizle (yakin gecmis kalsin — Sefer Takip'te kalkis dolulugu).
     try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(shiftIsoDate(today, -3)); } catch (e) {}
+    // Ayni sefer icin ESKI kopya doluluk satirlarini sil (durak yazimi degisince olusan mukerrer kayitlar);
+    // her sefer icin sadece EN GUNCEL satir kalsin.
+    try {
+      db.exec(`
+        DELETE FROM obilet_occupancy WHERE id IN (
+          SELECT o1.id FROM obilet_occupancy o1 WHERE EXISTS (
+            SELECT 1 FROM obilet_occupancy o2
+             WHERE o2.target_id = o1.target_id AND o2.journey_date = o1.journey_date
+               AND o2.operator = o1.operator AND o2.departure_time = o1.departure_time AND o2.id <> o1.id
+               AND (substr(o2.last_updated,7,4)||substr(o2.last_updated,4,2)||substr(o2.last_updated,1,2)||substr(o2.last_updated,12,8))
+                 > (substr(o1.last_updated,7,4)||substr(o1.last_updated,4,2)||substr(o1.last_updated,1,2)||substr(o1.last_updated,12,8))
+          )
+        )
+      `);
+    } catch (e) { /* yok say */ }
 
     // Firma dropdown'i icin: doluluk verisi olan tum firmalar (filtreden bagimsiz).
     const operators = db.prepare(
@@ -6936,11 +6951,22 @@ function computeJourneyTracking({ date, origin, destination, operator } = {}) {
     }
   } catch (e) { /* yok say */ }
 
-  // 3) Doluluk haritasi.
+  // 3) Doluluk haritasi. ONEMLI: ayni sefer icin (durak yazimi degisince) birden fazla
+  // doluluk satiri olabilir; HER ZAMAN EN GUNCEL (last_updated) satiri al — eski satir cekilmesin.
   const occMap = new Map();
   try {
-    const occRows = db.prepare("SELECT target_id, journey_date, operator, departure_time, total_seats, available_seats FROM obilet_occupancy").all();
-    for (const o of occRows) occMap.set(`${o.target_id}|${o.journey_date}|${o.operator}|${o.departure_time}`, o);
+    const occRows = db.prepare(
+      "SELECT target_id, journey_date, operator, departure_time, total_seats, available_seats, last_updated FROM obilet_occupancy"
+    ).all();
+    const tsKey = (s) => {
+      const m = String(s || "").match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
+      return m ? `${m[3]}${m[2]}${m[1]}${m[4]}${m[5]}${m[6]}` : "0";
+    };
+    for (const o of occRows) {
+      const key = `${o.target_id}|${o.journey_date}|${o.operator}|${o.departure_time}`;
+      const prev = occMap.get(key);
+      if (!prev || tsKey(o.last_updated) >= tsKey(prev.last_updated)) occMap.set(key, o);
+    }
   } catch (e) { /* yok say */ }
 
   const journeys = currentSefers.map((s) => {
