@@ -5496,7 +5496,7 @@ async function tgSendGuncelSecimi(chatId) {
   });
 }
 
-// /sefer — bir hattin son 3 gundeki sefer bazli fiyat degisiklik gecmisi + doluluk.
+// /sefer — bir hattin son 3 gundeki sefer bazli fiyat degisiklik gecmisi + doluluk (TABLO).
 function tgCmdSeferTakip(origin, destination) {
   try {
     const { journeys } = computeJourneyTracking({ origin, destination });
@@ -5507,18 +5507,29 @@ function tgCmdSeferTakip(origin, destination) {
       return `🚌 <b>${tgEscape(routeLabel)}</b>\n\nSon 3 günde fiyat değişikliği yok.`;
     }
     const dm = (s) => { const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? `${m[3]}.${m[2]}` : String(s || ""); };
-    const shown = journeys.slice(0, 40);
-    const blocks = shown.map((j) => {
-      const seq = (j.prices || []).join("→");
-      let dol = "";
-      if (j.totalSeats != null && j.yolcu != null) {
-        const pct = j.totalSeats ? Math.round((j.yolcu / j.totalSeats) * 100) : 0;
-        dol = `\n   👥 ${j.yolcu}/${j.totalSeats} (%${pct})`;
-      }
-      return `📅 <b>${dm(j.journey_date)} ${tgEscape(j.departure_time || "")}</b> · ${tgEscape(j.operator || "")}\n` +
-        `   <b>${j.changeCount}x</b>  ${tgEscape(seq)} = <b>${j.currentPrice} TL</b>${dol}`;
-    });
-    return `🚌 <b>${tgEscape(routeLabel)}</b> · Sefer Takip (${journeys.length} sefer${journeys.length > 40 ? ", ilk 40" : ""})\n\n` + blocks.join("\n\n");
+    const tableRows = journeys.slice(0, 40).map((j) => ({
+      sefer: `${dm(j.journey_date)} ${j.departure_time || ""}`.trim(),
+      firma: j.operator || "",
+      deg: `${j.changeCount}x`,
+      gecmis: (j.prices || []).join("→"),
+      guncel: String(j.currentPrice),
+      dolu: (j.totalSeats != null && j.yolcu != null) ? `${j.yolcu}/${j.totalSeats}` : "-",
+    }));
+    const cols = [
+      { key: "sefer", label: "Sefer", align: "l", max: 11 },
+      { key: "firma", label: "Firma", align: "l", max: 16 },
+      { key: "deg", label: "Değ", align: "r" },
+      { key: "gecmis", label: "Fiyat Geçmişi", align: "l" },
+      { key: "guncel", label: "Güncel", align: "r" },
+      { key: "dolu", label: "Dolu", align: "r" },
+    ];
+    const MAX = 25; // her tablo blogu tek mesaja sigsin
+    const blocks = [];
+    for (let i = 0; i < tableRows.length; i += MAX) {
+      blocks.push(tgTable(cols, tableRows.slice(i, i + MAX), { compact: true }));
+    }
+    const head = `🚌 <b>${tgEscape(routeLabel)}</b> · Sefer Takip (${journeys.length} sefer${journeys.length > 40 ? ", ilk 40" : ""})`;
+    return head + "\n" + blocks.join("\n\n");
   } catch (e) {
     return "Sefer takip alınamadı: " + tgEscape(e.message);
   }
