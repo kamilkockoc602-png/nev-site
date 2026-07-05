@@ -15,6 +15,7 @@ const MENUS = [
   { key: "oneops", label: "Hatali Islemler" },
   { key: "obilet_tracker", label: "oBilet Takip" },
   { key: "occupancy", label: "Doluluk Takip" },
+  { key: "sefer_takip", label: "Sefer Takip" },
   { key: "ocr", label: "Foto Tarama" },
   { key: "permissions", label: "Yetki Menusu" },
   { key: "logs", label: "Giris Kayitlari" },
@@ -2929,6 +2930,10 @@ async function activatePanel(menuKey) {
   if (menuKey === "occupancy") {
     setupOccupancyPanel();
   }
+
+  if (menuKey === "sefer_takip") {
+    setupSeferTakipPanel();
+  }
 }
 
 async function handleLogin(username, password) {
@@ -4851,6 +4856,96 @@ function exportOccupancyCsv() {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+// ============================================================
+// SEFER TAKIP — sefer bazli fiyat degisiklik gecmisi
+// ============================================================
+const seferTakipState = { wired: false };
+
+function setupSeferTakipPanel() {
+  const btn = document.getElementById("stSearchBtn");
+  if (!btn) return;
+  if (!seferTakipState.wired) {
+    seferTakipState.wired = true;
+    btn.addEventListener("click", () => searchSeferTakip());
+    const reset = document.getElementById("stResetBtn");
+    if (reset) reset.addEventListener("click", () => {
+      ["stOrigin", "stDestination"].forEach((id) => { const el = document.getElementById(id); if (el) el.value = ""; });
+      const op = document.getElementById("stOperator"); if (op) op.value = "";
+      const d = document.getElementById("stDate"); if (d) d.value = "";
+      searchSeferTakip();
+    });
+    ["stOrigin", "stDestination"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener("keydown", (e) => { if (e.key === "Enter") searchSeferTakip(); });
+    });
+    // Firma listesini bir kez doldur (bos aramayla).
+    searchSeferTakip(true);
+  }
+}
+
+async function searchSeferTakip(initial = false) {
+  const body = document.getElementById("stTableBody");
+  const statusEl = document.getElementById("stStatusMsg");
+  if (!body) return;
+  const date = document.getElementById("stDate")?.value || "";
+  const origin = document.getElementById("stOrigin")?.value.trim() || "";
+  const destination = document.getElementById("stDestination")?.value.trim() || "";
+  const operator = document.getElementById("stOperator")?.value || "";
+  if (statusEl) statusEl.textContent = "Aranıyor...";
+  try {
+    const params = new URLSearchParams();
+    if (date) params.set("date", date);
+    if (origin) params.set("origin", origin);
+    if (destination) params.set("destination", destination);
+    if (operator) params.set("operator", operator);
+    const data = await apiFetch(`/api/obilet/journey-tracking?${params.toString()}`);
+    // Firma dropdown'i doldur (secim korunur).
+    const opSel = document.getElementById("stOperator");
+    if (opSel && Array.isArray(data.operators)) {
+      const cur = opSel.value;
+      opSel.innerHTML = `<option value="">Tüm firmalar</option>` +
+        data.operators.map((op) => `<option value="${occEsc(op)}">${occEsc(op)}</option>`).join("");
+      if (cur && data.operators.includes(cur)) opSel.value = cur;
+    }
+    renderSeferTakip(data.journeys || []);
+    if (statusEl) {
+      statusEl.textContent = (data.journeys || []).length
+        ? `${data.journeys.length} sefer bulundu (son 3 günün fiyat değişiklikleri).`
+        : "Bu kritere uygun fiyat değişikliği yok. (Not: sadece son 3 gün tutulur.)";
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = `Hata: ${err.message}`;
+  }
+}
+
+function renderSeferTakip(journeys) {
+  const body = document.getElementById("stTableBody");
+  if (!body) return;
+  if (!journeys.length) {
+    body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#888;">Kayıt yok</td></tr>`;
+    return;
+  }
+  body.innerHTML = journeys.map((j) => {
+    // Fiyat geçmişi: eski → ... → güncel, renkli oklarla.
+    const seq = (j.prices || []).map((p, i, arr) => {
+      let color = "#c9d1d9";
+      if (i > 0) color = p < arr[i - 1] ? "#2ecc71" : p > arr[i - 1] ? "#e74c3c" : "#c9d1d9";
+      return `<b style="color:${color}">${p}</b>`;
+    }).join(" <span style='opacity:.5'>→</span> ");
+    const changeBadge = `<span style="background:#31507a;color:#fff;border-radius:10px;padding:1px 8px;font-size:0.8rem;">${j.changeCount}x</span>`;
+    return `<tr>
+      <td>${occToDot(j.journey_date)}</td>
+      <td>${occEsc(j.departure_time || "")}</td>
+      <td>${occEsc(j.operator || "")}</td>
+      <td>${occEsc(j.departure_stop || "-")}</td>
+      <td style="text-align:center;">${changeBadge}</td>
+      <td>${seq}</td>
+      <td><b>${j.currentPrice} TL</b></td>
+      <td style="font-size:0.82rem;opacity:0.8;">${occEsc(j.lastChangedAt || "")}</td>
+    </tr>`;
+  }).join("");
 }
 
 function openObiletEditModal(t) {
