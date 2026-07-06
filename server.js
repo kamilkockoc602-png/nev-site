@@ -4494,10 +4494,10 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
         Array.isArray(data) ? data : [];
       console.log(`[oBilet Puppeteer] XHR yakalandi: ${list.length} sefer`);
 
-      // ILK item'in TUM key'lerini ve uzun bir dump'ini logla — alan adlarini netlestirmek icin
+      // ILK item'in KOLTUK ile ilgili alanlarini kisaca logla (dev dump kaldirildi — gurultu yapiyordu).
       if (list.length > 0 && DEBUG_OBILET_PRICE) {
-        console.log(`[oBilet Puppeteer XHR DEBUG] Ilk item top-level keys: ${Object.keys(list[0]).join(", ")}`);
-        console.log(`[oBilet Puppeteer XHR DEBUG] Ilk item dump: ${JSON.stringify(list[0]).substring(0, 3000)}`);
+        const it = list[0];
+        console.log(`[oBilet XHR] ornek: ${it["partner-name"]} total=${it["total-seats"]} avail=${it["available-seats"]} hasSeatInfo=${it["has-available-seat-info"]} dyn=${it["has-dynamic-pricing"]} zero=${it?.journey?.["should-set-seats-to-zero"]}`);
       }
 
       let parsed = 0, skipped_op = 0, skipped_time = 0, skipped_price = 0;
@@ -4586,7 +4586,7 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
         const key = `${toObiletOperatorMatchKey(operator)}|${tm[0]}`;
         if (seenKeys.has(key)) continue;
         seenKeys.add(key);
-        capturedJourneys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop, totalSeats, availableSeats, seatInfoReliable });
+        capturedJourneys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop, totalSeats, availableSeats, seatInfoReliable, hasSeatInfoRaw: hasSeatInfo, shouldZeroRaw: shouldZeroSeats });
         parsed++;
       }
       if (list.length > 0) {
@@ -6263,9 +6263,14 @@ async function processObiletTarget(target) {
             const occOp = normalizeObiletOperatorName(j.operator) || j.operator;
             // Gercek koltuk bilgisi yoksa YAZMA — yanlis %100 gibi degerler gostermektense
             // "bilinmiyor" birak. (Bu seferler UI'da "-" olarak gorunur, hatali sayi degil.)
-            if (j.seatInfoReliable !== true) { occSkippedNoInfo++; continue; }
+            if (j.seatInfoReliable !== true) {
+              occSkippedNoInfo++;
+              if (DEBUG_OBILET_PRICE) console.log(`[Doluluk-Kontrol] ${j.time} ${occOp}: ATLANDI (koltuk bilgisi guvenilmez — avail=${j.availableSeats}, seatInfo=${j.hasSeatInfoRaw}, zero=${j.shouldZeroRaw})`);
+              continue;
+            }
             if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(avail)) { occSkippedNoInfo++; continue; }
             const occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100)));
+            if (DEBUG_OBILET_PRICE) console.log(`[Doluluk-Kontrol] ${j.time} ${occOp}: ${total - avail}/${total} dolu (%${occ}) [avail=${avail}, seatInfo=✓]`);
             db.prepare(`
               INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
