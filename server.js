@@ -7331,9 +7331,9 @@ app.post("/api/obilet/targets/:id/seatmap-probe", requireAuth, requireAdmin, asy
   }
 });
 
-// ADMIN: Sefer Takip'te TEK SEFERIN gercek dolulugunu HEMEN cek + DB'ye yaz (source='gercek').
-// Sefer Takip satirindaki butondan cagrilir (targetId + date + operator + time).
-app.post("/api/obilet/seat-refresh", requireAuth, requireAdmin, async (req, res) => {
+// Sefer Takip'te TEK SEFERIN gercek dolulugunu HEMEN cek + DB'ye yaz (source='gercek').
+// Sefer Takip satirindaki butondan cagrilir (targetId + date + operator + time). TUM kullanicilar.
+app.post("/api/obilet/seat-refresh", requireAuth, async (req, res) => {
   try {
     const targetId = parseInt(req.body?.targetId ?? req.query.targetId, 10);
     const target = db.prepare("SELECT * FROM obilet_targets WHERE id = ?").get(targetId);
