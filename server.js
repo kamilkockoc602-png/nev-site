@@ -6298,13 +6298,21 @@ async function processObiletTarget(target) {
               continue;
             }
             if (DEBUG_OBILET_PRICE) console.log(`[Doluluk] ${journeyDate} ${j.time} ${occOp}: ${total - avail}/${total} dolu (%${occ}) [${source}]`);
-            db.prepare(`
-              INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated, source)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-              ON CONFLICT(target_id, journey_date, operator, departure_time)
-              DO UPDATE SET departure_stop = excluded.departure_stop, total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated, source = excluded.source
-            `).run(target.id, j.journey_date, occOp, j.time, j.departureStop || "", total, avail, occ, now, source);
-            writtenOccKeys.add(`${occOp}|${j.time}`);
+            // ONEMLI: liste-yedegi, Doluluk İşçisi'nin yazdigi GERCEK degeri EZMESIN.
+            // Mevcut satir 'gercek' ise, liste ile ustune yazma (sadece koru).
+            const exOcc = db.prepare("SELECT source FROM obilet_occupancy WHERE target_id=? AND journey_date=? AND operator=? AND departure_time=?")
+              .get(target.id, j.journey_date, occOp, j.time);
+            if (source === "liste" && exOcc && exOcc.source === "gercek") {
+              writtenOccKeys.add(`${occOp}|${j.time}`); // gercek degeri koru (silinmesin, ezilmesin)
+            } else {
+              db.prepare(`
+                INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(target_id, journey_date, operator, departure_time)
+                DO UPDATE SET departure_stop = excluded.departure_stop, total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated, source = excluded.source
+              `).run(target.id, j.journey_date, occOp, j.time, j.departureStop || "", total, avail, occ, now, source);
+              writtenOccKeys.add(`${occOp}|${j.time}`);
+            }
           } catch (occErr) {
             if (DEBUG_OBILET_PRICE) console.warn(`[Doluluk] yazma hatasi: ${occErr.message}`);
           }
@@ -7911,6 +7919,151 @@ setTimeout(() => {
 setInterval(() => {
   refreshObiletPricesTask().catch(err => console.error("[Otomatik Kontrol] Zamanlayici hatasi:", err.message));
 }, OBILET_CHECK_INTERVAL_MS);
+
+// ===================== DOLULUK İŞÇİSİ (fiyat taramasindan TAMAMEN AYRI) =====================
+// Fiyat çekme koduna DOKUNMAZ. Kendi sayfasini acar, takip edilen seferlerin GERCEK koltuk
+// haritasini (/json/sefer, tiklama ile) okur, obilet_occupancy'yi 'gercek' kaynakli gunceller.
+// ASLA silmez (okuyamadigi seferin mevcut degeri kalir). Fiyat taramasi calisiyorsa BEKLER.
+let occupancyWorkerRunning = false;
+const OCCUPANCY_WORKER_ENABLED = true;
+const OCCUPANCY_NEAR_DAYS = 3;          // bugun + 2 gun (doluluk en cok yakinda onemli)
+const OCCUPANCY_WORKER_INTERVAL_MS = 15 * 60 * 1000; // 15 dk
+const OCCUPANCY_MAX_SEFER_PER_DATE = 20;
+
+async function occupancyForHatDate(target, routeId, ops, dateIso) {
+  const browser = await getBrowserInstance();
+  const page = await setupObiletPage(browser);
+  const journeyItems = [];
+  const seatById = new Map(); // seferId -> {sold,total,...}
+  page.on("response", async (resp) => {
+    try {
+      const url = resp.url();
+      const ct = resp.headers()["content-type"] || "";
+      if (!/json/i.test(ct)) return;
+      const txt = await resp.text().catch(() => "");
+      if (!txt) return;
+      let data; try { data = JSON.parse(txt); } catch { return; }
+      if (/\/json\/sefer\//i.test(url)) {
+        const m = url.match(/\/json\/sefer\/(\d+)/i);
+        const c = countSeatsFromSeferJson(data);
+        if (m && c) seatById.set(m[1], c);
+        return;
+      }
+      if (/\/json\/journeys\//i.test(url)) {
+        const list = Array.isArray(data?.data) ? data.data : Array.isArray(data?.journeys) ? data.journeys : [];
+        for (const it of list) journeyItems.push(it);
+      }
+    } catch {}
+  });
+  try {
+    await gotoAndHandleCloudflare(page, "https://www.obilet.com/");
+    await new Promise(r => setTimeout(r, 1200));
+    await gotoAndHandleCloudflare(page, `https://www.obilet.com/seferler/${routeId}/${dateIso}?t=${Date.now()}`);
+    await new Promise(r => setTimeout(r, 4500));
+
+    // Takip edilen operatorlerin seferleri (id + firma + saat)
+    const infos = journeyItems.map((it) => {
+      const dep = String(it?.journey?.departure || it?.departure || "");
+      const tm = dep.match(/(\d{2}:\d{2})/);
+      return { id: it?.id != null ? String(it.id) : null, firma: String(it?.["partner-name"] || "").trim(), time: tm ? tm[1] : "" };
+    }).filter((x) => x.id && x.time && ops.some((op) => isObiletOperatorMatch(op, x.firma)))
+      .slice(0, OCCUPANCY_MAX_SEFER_PER_DATE);
+
+    if (!infos.length) { console.log(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso}: takip edilen sefer yok.`); return; }
+
+    // Her seferin koltuk haritasini TIKLAMA ile tetikle (tarayicinin kendi POST'u calisir).
+    for (const info of infos) {
+      if (occupancyWorkerRunning === false) break; // durduruldu
+      if (seatById.has(info.id)) continue;
+      await page.evaluate((t, firm) => {
+        const hasSeatBtn = (el) => Array.from(el.querySelectorAll("button,a,span,div"))
+          .some((b) => /koltuk|seç|^sec$|satın al|satin al/i.test((b.innerText || "").trim()));
+        let cards = Array.from(document.querySelectorAll("div,li,article"))
+          .filter((el) => (el.innerText || "").length < 700 && /\d{2}:\d{2}/.test(el.innerText || "") && hasSeatBtn(el));
+        const matchFirm = (el) => {
+          const txt = (el.innerText || "").toLowerCase();
+          if (txt.includes(firm)) return true;
+          return Array.from(el.querySelectorAll("img")).some((im) =>
+            ((im.getAttribute("alt") || "") + (im.getAttribute("title") || "")).toLowerCase().includes(firm));
+        };
+        const timed = cards.filter((el) => (el.innerText || "").includes(t));
+        const target = timed.find(matchFirm) || timed[0];
+        if (!target) return;
+        let best = target;
+        for (const c of cards) if (target.contains(c) && c !== target && (c.innerText || "").includes(t)) { best = c; break; }
+        const btn = Array.from(best.querySelectorAll("button,a,span,div"))
+          .find((b) => /koltuk|seç|^sec$|satın al|satin al/i.test((b.innerText || "").trim()));
+        (btn || best).click();
+      }, info.time, info.firma.toLocaleLowerCase("tr-TR")).catch(() => {});
+      await new Promise((r) => setTimeout(r, 2500)); // koltuk haritasi gelsin
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+
+    // Ayni operator+saat icin birden cok listeleme olabilir -> en dolu (gercek otobus) alinir.
+    const bestByKey = new Map(); // normOp|time -> {sold,total}
+    for (const info of infos) {
+      const c = seatById.get(info.id);
+      if (!c) continue;
+      const occOp = normalizeObiletOperatorName(info.firma) || info.firma;
+      const key = `${occOp}|${info.time}`;
+      const prev = bestByKey.get(key);
+      if (!prev || c.sold > prev.sold) bestByKey.set(key, { occOp, time: info.time, sold: c.sold, total: c.total });
+    }
+
+    const now = nowStamp();
+    let ok = 0;
+    for (const v of bestByKey.values()) {
+      try {
+        const occ = v.total > 0 ? Math.max(0, Math.min(100, Math.round((v.sold / v.total) * 100))) : 0;
+        db.prepare(`
+          INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated, source)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'gercek')
+          ON CONFLICT(target_id, journey_date, operator, departure_time)
+          DO UPDATE SET total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated, source = 'gercek'
+        `).run(target.id, dateIso, v.occOp, v.time, "", v.total, Math.max(0, v.total - v.sold), occ, now);
+        ok++;
+      } catch (e) { /* tek sefer hatasi digerlerini bozmasin */ }
+    }
+    console.log(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso}: ${ok}/${infos.length} sefer GERCEK doluluk yazildi.`);
+  } finally {
+    try { await page.close(); } catch {}
+  }
+}
+
+async function runOccupancyWorker() {
+  if (!OCCUPANCY_WORKER_ENABLED || occupancyWorkerRunning) return;
+  if (obiletTaskRunning) { console.log("[Doluluk İşçisi] Fiyat taramasi calisiyor — bu tur atlandi."); return; }
+  occupancyWorkerRunning = true;
+  const t0 = Date.now();
+  try {
+    const today = todayIsoInIstanbul();
+    const targets = db.prepare("SELECT * FROM obilet_targets WHERE is_active = 1").all();
+    for (const target of targets) {
+      if (obiletTaskRunning) { console.log("[Doluluk İşçisi] Fiyat taramasi basladi — isci duruyor."); break; }
+      const routeId = String(target.route_id || "").trim();
+      if (!/^\d+-\d+$/.test(routeId)) continue;
+      const ops = parseCsvList(target.operators).map(normalizeObiletOperatorName).filter(Boolean);
+      if (!ops.length || ops.includes("*")) continue; // tum-firma cok agir -> atla (liste degeri kalir)
+      const dates = buildIsoDateRange(target.date, target.end_date || target.date)
+        .filter((d) => d >= today).slice(0, OCCUPANCY_NEAR_DAYS);
+      for (const dateIso of dates) {
+        if (obiletTaskRunning) break;
+        try { await occupancyForHatDate(target, routeId, ops, dateIso); }
+        catch (e) { console.warn(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso} hata: ${e.message}`); }
+        await new Promise((r) => setTimeout(r, 2500));
+      }
+    }
+  } catch (e) {
+    console.warn(`[Doluluk İşçisi] genel hata: ${e.message}`);
+  } finally {
+    occupancyWorkerRunning = false;
+    console.log(`[Doluluk İşçisi] Tur bitti (${Math.round((Date.now() - t0) / 1000)}s).`);
+  }
+}
+
+// Ilk tur: server acildiktan 2 dk sonra (fiyat taramasinin ilk turuna cakismasin), sonra her 15 dk.
+setTimeout(() => { runOccupancyWorker().catch(() => null); }, 2 * 60 * 1000);
+setInterval(() => { runOccupancyWorker().catch(() => null); }, OCCUPANCY_WORKER_INTERVAL_MS);
 
 // Eski pending kayıtları temizle - buildJourneyIdentityKey değişikliğinden sonra gerekli
 try {
