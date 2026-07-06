@@ -4089,7 +4089,7 @@ async function fetchObiletJourneysViaApi(origin, destination, dateIso) {
 // Onceligi: target'in elindeki route_id -> statik tablo -> Node API -> Puppeteer.
 // Onemli: Ayni route ID iki kez denenmesin — verilen ID ile statik tablo aynisi olabilir.
 // Browser/protocol hatalarini icerde yakalar, isleyen hatti devirmemek icin [] dondurur.
-async function scrapeObilet(origin, destination, dateIso, routeId = null) {
+async function scrapeObilet(origin, destination, dateIso, routeId = null, seatOperators = null) {
   const triedRouteIds = new Set();
   const cleanRouteId = routeId && /^\d+-\d+$/.test(String(routeId).trim()) ? String(routeId).trim() : null;
 
@@ -4104,7 +4104,7 @@ async function scrapeObilet(origin, destination, dateIso, routeId = null) {
     for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         const browser = await getBrowserInstance();
-        return await scrapeObiletSeferlerPage(browser, rid, dateIso);
+        return await scrapeObiletSeferlerPage(browser, rid, dateIso, seatOperators);
       } catch (err) {
         const msg = String(err?.message || "").substring(0, 200);
         if (attempt === 1 && isRetriable(msg)) {
@@ -4470,7 +4470,7 @@ async function fetchObiletJourneysViaBrowser(browser, origin, destination, dateI
 }
 
 // /seferler/{routeId}/{date} sayfasindan gercek satis fiyatlarini cek.
-async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
+async function scrapeObiletSeferlerPage(browser, routeId, dateIso, seatOperators = null) {
   const url = `https://www.obilet.com/seferler/${routeId}/${dateIso}?t=${Date.now()}`;
   console.log(`[oBilet Puppeteer] Seferler sayfasi: ${url}`);
 
@@ -4479,6 +4479,7 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
   // XHR yakalama — eger oBilet sayfa icinde API cagiriyorsa
   const capturedJourneys = [];
   const seenKeys = new Set();
+  const idsByKey = new Map(); // operator+saat -> [tum listeleme id'leri] (gercek doluluk icin)
   page.on("response", async (response) => {
     try {
       if (response.status() < 200 || response.status() >= 300) return;
@@ -4584,9 +4585,16 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
         const seatInfoReliable = hasSeatInfo && !shouldZeroSeats;
 
         const key = `${toObiletOperatorMatchKey(operator)}|${tm[0]}`;
+        // GERCEK doluluk icin: ayni operator+saat'in TUM listeleme id'lerini topla (mukerrer olabilir;
+        // gecerli koltuk haritasi doneni gercek otobustur).
+        const seferId = item?.id ?? item?.journey?.id;
+        if (seferId != null) {
+          if (!idsByKey.has(key)) idsByKey.set(key, []);
+          if (!idsByKey.get(key).includes(seferId)) idsByKey.get(key).push(seferId);
+        }
         if (seenKeys.has(key)) continue;
         seenKeys.add(key);
-        capturedJourneys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop, totalSeats, availableSeats, seatInfoReliable, hasSeatInfoRaw: hasSeatInfo, shouldZeroRaw: shouldZeroSeats });
+        capturedJourneys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop, totalSeats, availableSeats, seatInfoReliable, hasSeatInfoRaw: hasSeatInfo, shouldZeroRaw: shouldZeroSeats, matchKey: key });
         parsed++;
       }
       if (list.length > 0) {
@@ -4625,6 +4633,12 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
 
     if (capturedJourneys.length > 0) {
       console.log(`[oBilet Puppeteer] ${capturedJourneys.length} sefer (XHR)`);
+      // GERCEK DOLULUK (opsiyonel): takip edilen operatorlerin seferleri icin koltuk haritasindan
+      // gercek dolu say. Tamamen izole — hata olsa bile fiyat/sefer verisini etkilemez.
+      if (seatOperators && seatOperators.length) {
+        try { await attachRealOccupancy(page, capturedJourneys, idsByKey, seatOperators); }
+        catch (e) { if (DEBUG_OBILET_PRICE) console.warn(`[Doluluk] gercek koltuk cekme hatasi: ${e.message}`); }
+      }
       return capturedJourneys;
     }
 
@@ -6168,6 +6182,9 @@ async function processObiletTarget(target) {
     const departureStopFilter = String(target.departure_stop_filter || "").trim();
     const departureStopFilterKey = normalizeSearchText(departureStopFilter);
     const queryOriginPrimary = departureStopFilter || target.origin;
+    // GERCEK doluluk icin koltuk haritasi cekilecek operatorler — SADECE belirli firma seciliyse
+    // (tum firmalar seciliyse 100+ sefer olur, cok agir; o durumda gercek koltuk atlanir).
+    const seatOps = acceptAllOperators ? null : targetOperators;
 
     const trackedJourneys = [];
     const changes = [];     // [{ journey_date, operator, departure_time, oldPrice, newPrice }] — mail tetikleyici tek liste
@@ -6181,19 +6198,19 @@ async function processObiletTarget(target) {
         if (dayIdx > 0) {
           await new Promise(r => setTimeout(r, 3000));
         }
-        let journeys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate, targetRouteId);
+        let journeys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate, targetRouteId, seatOps);
         if (departureStopFilter && !journeys.length) {
           // Durak bazli sorgu bos donerse sehir bazli rotaya geri dus.
-          journeys = await scrapeObilet(target.origin, target.destination, journeyDate, targetRouteId);
+          journeys = await scrapeObilet(target.origin, target.destination, journeyDate, targetRouteId, seatOps);
         }
         // Bos dondu (Cloudflare challenge / timeout olabilir) — 8 sn bekleyip 1 kez daha dene.
         // Boylece o gunun fiyat+doluluk verisi eski kalmaz.
         if (!journeys.length) {
           console.log(`[Takip Görevi] ${journeyDate} bos dondu, 8 sn sonra 1 kez daha denenecek...`);
           await new Promise(r => setTimeout(r, 8000));
-          journeys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate, targetRouteId);
+          journeys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate, targetRouteId, seatOps);
           if (departureStopFilter && !journeys.length) {
-            journeys = await scrapeObilet(target.origin, target.destination, journeyDate, targetRouteId);
+            journeys = await scrapeObilet(target.origin, target.destination, journeyDate, targetRouteId, seatOps);
           }
         }
         journeys.forEach((journey) => {
@@ -6258,19 +6275,23 @@ async function processObiletTarget(target) {
         let occSkippedNoInfo = 0;
         for (const j of dayTracked) {
           try {
-            const total = Number(j.totalSeats);
-            const avail = Number(j.availableSeats);
             const occOp = normalizeObiletOperatorName(j.operator) || j.operator;
-            // Gercek koltuk bilgisi yoksa YAZMA — yanlis %100 gibi degerler gostermektense
-            // "bilinmiyor" birak. (Bu seferler UI'da "-" olarak gorunur, hatali sayi degil.)
-            if (j.seatInfoReliable !== true) {
+            let total, avail, occ, source;
+            const rT = Number(j.realTotal), rS = Number(j.realSold);
+            if (Number.isFinite(rT) && rT > 0 && Number.isFinite(rS)) {
+              // 1) GERCEK koltuk haritasindan (dogru kaynak — /json/sefer SVG sayimi).
+              total = rT; const sold = Math.max(0, Math.min(rT, rS));
+              avail = rT - sold; occ = Math.round((sold / rT) * 100); source = "GERCEK";
+            } else if (j.seatInfoReliable === true && Number.isFinite(Number(j.totalSeats)) && Number(j.totalSeats) > 0 && Number.isFinite(Number(j.availableSeats))) {
+              // 2) Yedek: liste available-seats (guvenilir bayrakli) — gercek harita cekilemediyse.
+              total = Number(j.totalSeats); avail = Number(j.availableSeats);
+              occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100))); source = "liste";
+            } else {
+              // 3) Guvenilir veri yok -> yazma (UI'da "-"). Yanlis sayi gosterme.
               occSkippedNoInfo++;
-              if (DEBUG_OBILET_PRICE) console.log(`[Doluluk-Kontrol] ${journeyDate} ${j.time} ${occOp}: ATLANDI (koltuk bilgisi guvenilmez — avail=${j.availableSeats}, seatInfo=${j.hasSeatInfoRaw}, zero=${j.shouldZeroRaw})`);
               continue;
             }
-            if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(avail)) { occSkippedNoInfo++; continue; }
-            const occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100)));
-            if (DEBUG_OBILET_PRICE) console.log(`[Doluluk-Kontrol] ${journeyDate} ${j.time} ${occOp}: ${total - avail}/${total} dolu (%${occ}) [avail=${avail}, seatInfo=✓]`);
+            if (DEBUG_OBILET_PRICE) console.log(`[Doluluk] ${journeyDate} ${j.time} ${occOp}: ${total - avail}/${total} dolu (%${occ}) [${source}]`);
             db.prepare(`
               INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -6977,13 +6998,16 @@ function countSeatsFromSeferJson(json) {
   return { total, sold, empty, unknown };
 }
 
-// Bir seferin GERCEK koltuk sayimini /json/sefer/{id}'den al (sayfa oturumunda fetch). Basarisizsa null.
+// Bir seferin GERCEK koltuk sayimini /json/sefer/{id}'den al. oBilet bunu POST + json ister
+// (GET HTML doner). Sayfa oturumunda (cf_bm cookie ile) fetch. Basarisizsa null.
 async function fetchSeferRealSeats(page, seferId) {
   const json = await page.evaluate(async (sid) => {
     try {
       const r = await fetch(`/json/sefer/${sid}`, {
-        headers: { "Accept": "application/json, text/javascript, */*; q=0.01", "X-Requested-With": "XMLHttpRequest" },
+        method: "POST",
+        headers: { "content-type": "application/json", "accept": "*/*", "x-requested-with": "XMLHttpRequest" },
         credentials: "include",
+        body: "{}",
       });
       const ct = r.headers.get("content-type") || "";
       if (!ct.toLowerCase().includes("json")) return { __html: true };
@@ -6992,6 +7016,31 @@ async function fetchSeferRealSeats(page, seferId) {
   }, seferId).catch((e) => ({ __error: String(e && e.message || e) }));
   if (!json || json.__error || json.__html) return null;
   return countSeatsFromSeferJson(json);
+}
+
+// Takip edilen operatorlerin seferlerine GERCEK doluluk ekle (koltuk haritasindan). journeys uzerine
+// realSold/realTotal yazar. idsByKey: operator+saat -> tum listeleme id'leri (mukerrerde gecerli olani sec).
+async function attachRealOccupancy(page, journeys, idsByKey, seatOperators) {
+  const wanted = (seatOperators || []).map((o) => normalizeObiletOperatorName(o)).filter(Boolean);
+  if (!wanted.length) return; // guvenlik: filtre yoksa 100+ sefer cekme
+  const targets = journeys.filter((j) => wanted.some((op) => isObiletOperatorMatch(op, j.operator)));
+  let ok = 0;
+  for (const j of targets) {
+    const ids = idsByKey.get(j.matchKey) || [];
+    let best = null;
+    for (const id of ids) {
+      const c = await fetchSeferRealSeats(page, id);
+      if (c && (best == null || c.sold > best.sold)) best = c;
+      await new Promise((r) => setTimeout(r, 250)); // Cloudflare burst'u onlemek icin kucuk ara
+    }
+    if (best) {
+      j.realSold = best.sold;
+      j.realTotal = best.total;
+      ok++;
+      if (DEBUG_OBILET_PRICE) console.log(`[Doluluk] GERCEK ${j.operator} ${j.time}: ${best.sold}/${best.total} dolu (liste ${(j.totalSeats != null && j.availableSeats != null) ? j.totalSeats - j.availableSeats : "?"} diyordu)`);
+    }
+  }
+  console.log(`[Doluluk] Gercek koltuk haritasi: ${ok}/${targets.length} sefer okundu.`);
 }
 
 // TEST/KESIF: Bir seferin GERCEK koltuk haritasini oBilet'ten cekip dolu/bos sayar; liste API'sindeki
