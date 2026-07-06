@@ -5099,42 +5099,79 @@ async function searchSeferTakip(initial = false) {
   }
 }
 
+const ST_PAGE = 50; // Kademeli yukleme adim boyu (kasmayi onlemek icin hepsini birden cizmiyoruz)
+
+// Tek bir sefer satirinin HTML'i.
+function stRowHtml(j) {
+  // Fiyat geçmişi: eski → ... → güncel, renkli oklarla.
+  const seq = (j.prices || []).map((p, i, arr) => {
+    let color = "#c9d1d9";
+    if (i > 0) color = p < arr[i - 1] ? "#2ecc71" : p > arr[i - 1] ? "#e74c3c" : "#c9d1d9";
+    return `<b style="color:${color}">${p}</b>`;
+  }).join(" <span style='opacity:.5'>→</span> ");
+  const changeBadge = `<span style="background:#31507a;color:#fff;border-radius:10px;padding:1px 8px;font-size:0.8rem;">${j.changeCount}x</span>`;
+  // Doluluk: yolcu / toplam koltuk + yuzde renkli.
+  let dolCell = "<span style='opacity:.5'>-</span>";
+  if (j.totalSeats != null && j.yolcu != null) {
+    const pct = j.totalSeats ? Math.round((j.yolcu / j.totalSeats) * 100) : 0;
+    dolCell = `<b style="color:${occColor(pct)}">${j.yolcu}/${j.totalSeats}</b> <span style="opacity:.7">(%${pct})</span>`;
+  }
+  return `<tr>
+    <td>${occToDot(j.journey_date)}</td>
+    <td>${occEsc(j.departure_time || "")}</td>
+    <td>${occEsc(j.operator || "")}</td>
+    <td>
+      <b>${occEsc((j.origin || "").toUpperCase())} → ${occEsc((j.destination || "").toUpperCase())}</b>
+      ${j.departure_stop ? `<div style="font-size:0.78rem;opacity:0.6;">${occEsc(j.departure_stop)}</div>` : ""}
+    </td>
+    <td style="text-align:center;">${changeBadge}</td>
+    <td>${seq}</td>
+    <td><b>${j.currentPrice} TL</b></td>
+    <td>${dolCell}</td>
+    <td style="font-size:0.82rem;opacity:0.8;">${occEsc(j.lastChangedAt || "")}</td>
+  </tr>`;
+}
+
+// "+50 daha göster" satiri (kalan sayisi ile). Kalan yoksa bos.
+function stLoadMoreRowHtml(total, shown) {
+  const remaining = total - shown;
+  if (remaining <= 0) return "";
+  const next = Math.min(ST_PAGE, remaining);
+  return `<tr id="stLoadMoreRow"><td colspan="9" style="text-align:center;padding:0.9rem;">
+    <button id="stLoadMore" class="btn btn-primary" type="button">+${next} daha göster <span style="opacity:.75">(${remaining} kaldı)</span></button>
+  </td></tr>`;
+}
+
+// Load-more butonunu bagla: mevcut satirlara EKLER (bastan cizmez -> kasmaz).
+function stBindLoadMore(journeys) {
+  const more = document.getElementById("stLoadMore");
+  if (!more) return;
+  more.addEventListener("click", () => {
+    const body = document.getElementById("stTableBody");
+    if (!body) return;
+    document.getElementById("stLoadMoreRow")?.remove();
+    const start = seferTakipState.shown || 0;
+    const end = Math.min(start + ST_PAGE, journeys.length);
+    body.insertAdjacentHTML("beforeend", journeys.slice(start, end).map(stRowHtml).join(""));
+    seferTakipState.shown = end;
+    body.insertAdjacentHTML("beforeend", stLoadMoreRowHtml(journeys.length, end));
+    stBindLoadMore(journeys);
+  });
+}
+
 function renderSeferTakip(journeys) {
   const body = document.getElementById("stTableBody");
   if (!body) return;
   if (!journeys.length) {
     body.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#888;">Kayıt yok</td></tr>`;
+    seferTakipState.shown = 0;
     return;
   }
-  body.innerHTML = journeys.map((j) => {
-    // Fiyat geçmişi: eski → ... → güncel, renkli oklarla.
-    const seq = (j.prices || []).map((p, i, arr) => {
-      let color = "#c9d1d9";
-      if (i > 0) color = p < arr[i - 1] ? "#2ecc71" : p > arr[i - 1] ? "#e74c3c" : "#c9d1d9";
-      return `<b style="color:${color}">${p}</b>`;
-    }).join(" <span style='opacity:.5'>→</span> ");
-    const changeBadge = `<span style="background:#31507a;color:#fff;border-radius:10px;padding:1px 8px;font-size:0.8rem;">${j.changeCount}x</span>`;
-    // Doluluk: yolcu / toplam koltuk + yuzde renkli.
-    let dolCell = "<span style='opacity:.5'>-</span>";
-    if (j.totalSeats != null && j.yolcu != null) {
-      const pct = j.totalSeats ? Math.round((j.yolcu / j.totalSeats) * 100) : 0;
-      dolCell = `<b style="color:${occColor(pct)}">${j.yolcu}/${j.totalSeats}</b> <span style="opacity:.7">(%${pct})</span>`;
-    }
-    return `<tr>
-      <td>${occToDot(j.journey_date)}</td>
-      <td>${occEsc(j.departure_time || "")}</td>
-      <td>${occEsc(j.operator || "")}</td>
-      <td>
-        <b>${occEsc((j.origin || "").toUpperCase())} → ${occEsc((j.destination || "").toUpperCase())}</b>
-        ${j.departure_stop ? `<div style="font-size:0.78rem;opacity:0.6;">${occEsc(j.departure_stop)}</div>` : ""}
-      </td>
-      <td style="text-align:center;">${changeBadge}</td>
-      <td>${seq}</td>
-      <td><b>${j.currentPrice} TL</b></td>
-      <td>${dolCell}</td>
-      <td style="font-size:0.82rem;opacity:0.8;">${occEsc(j.lastChangedAt || "")}</td>
-    </tr>`;
-  }).join("");
+  // Ilk sayfayi ciz + kalan varsa "+50" butonu. Her aramada bastan baslar.
+  const end = Math.min(ST_PAGE, journeys.length);
+  body.innerHTML = journeys.slice(0, end).map(stRowHtml).join("") + stLoadMoreRowHtml(journeys.length, end);
+  seferTakipState.shown = end;
+  stBindLoadMore(journeys);
 }
 
 function exportSeferTakipExcel() {
