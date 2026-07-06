@@ -626,6 +626,38 @@ CREATE TABLE IF NOT EXISTS obilet_occupancy (
 );
 CREATE INDEX IF NOT EXISTS idx_obilet_occupancy_target ON obilet_occupancy(target_id);
 `);
+
+// KOKTEN DUZELTME: Doluluk kimligini fiyat tablosuyla ayni yap — (target, tarih, firma, saat).
+// Eski UNIQUE'e departure_stop dahildi; durak yazimi degisince ayni sefere MUKERRER doluluk
+// satiri olusuyordu (obilet_prices durak olmadan kimliklerken doluluk durakla kimlikliyordu),
+// okuma tarafi da duragi yok sayinca eski/yanlis satir cekilebiliyordu.
+// 1) Once mevcut mukerrerleri temizle (her sefer icin EN GUNCEL, esitlikte en buyuk id kalsin),
+// 2) sonra 4-kolonlu UNIQUE index olustur (upsert artik hep tek satiri gunceller).
+try {
+  db.exec(`
+    DELETE FROM obilet_occupancy WHERE id IN (
+      SELECT o1.id FROM obilet_occupancy o1 WHERE EXISTS (
+        SELECT 1 FROM obilet_occupancy o2
+         WHERE o2.target_id = o1.target_id AND o2.journey_date = o1.journey_date
+           AND o2.operator = o1.operator AND o2.departure_time = o1.departure_time
+           AND o2.id <> o1.id
+           AND (
+             (substr(o2.last_updated,7,4)||substr(o2.last_updated,4,2)||substr(o2.last_updated,1,2)||substr(o2.last_updated,12,8))
+               > (substr(o1.last_updated,7,4)||substr(o1.last_updated,4,2)||substr(o1.last_updated,1,2)||substr(o1.last_updated,12,8))
+             OR (
+               (substr(o2.last_updated,7,4)||substr(o2.last_updated,4,2)||substr(o2.last_updated,1,2)||substr(o2.last_updated,12,8))
+                 = (substr(o1.last_updated,7,4)||substr(o1.last_updated,4,2)||substr(o1.last_updated,1,2)||substr(o1.last_updated,12,8))
+               AND o2.id > o1.id
+             )
+           )
+      )
+    );
+  `);
+} catch (e) { console.warn("[Doluluk] mukerrer temizleme (migrasyon) hatasi:", e.message); }
+try {
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_obilet_occupancy_identity ON obilet_occupancy(target_id, journey_date, operator, departure_time);");
+} catch (e) { console.warn("[Doluluk] kimlik index olusturma hatasi:", e.message); }
+
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN journey_date TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN departure_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN arrival_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
@@ -6200,11 +6232,33 @@ async function processObiletTarget(target) {
             db.prepare(`
               INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-              ON CONFLICT(target_id, journey_date, operator, departure_time, departure_stop)
-              DO UPDATE SET total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated
+              ON CONFLICT(target_id, journey_date, operator, departure_time)
+              DO UPDATE SET departure_stop = excluded.departure_stop, total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated
             `).run(target.id, j.journey_date, occOp, j.time, j.departureStop || "", total, avail, occ, now);
           } catch (occErr) {
             if (DEBUG_OBILET_PRICE) console.warn(`[Doluluk] yazma hatasi: ${occErr.message}`);
+          }
+        }
+
+        // Bu tarih icin doluluk tablosunda olup bu taramada GORULMEYEN eski satirlari sil
+        // (iptal/tasinmis sefer + eski durak-varyanti mukerrer kalintilari). obilet_prices ile simetrik.
+        // GUVENLIK: yalnizca scrape BASARILIYSA (journeys.length>0) temizle — bos donen taramada
+        // (Cloudflare/timeout) o tarihin dolulugunu YANLISLIKLA silmemek icin.
+        if (journeys.length > 0) {
+          try {
+            const currentOccKeys = new Set(
+              dayTracked.map((j) => `${normalizeObiletOperatorName(j.operator) || j.operator}|${j.time}`)
+            );
+            const occRowsForDate = db.prepare(
+              "SELECT id, operator, departure_time FROM obilet_occupancy WHERE target_id = ? AND journey_date = ?"
+            ).all(target.id, journeyDate);
+            for (const o of occRowsForDate) {
+              if (!currentOccKeys.has(`${o.operator}|${o.departure_time}`)) {
+                db.prepare("DELETE FROM obilet_occupancy WHERE id = ?").run(o.id);
+              }
+            }
+          } catch (occCleanErr) {
+            if (DEBUG_OBILET_PRICE) console.warn(`[Doluluk] temizleme hatasi: ${occCleanErr.message}`);
           }
         }
 
