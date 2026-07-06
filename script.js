@@ -3297,22 +3297,54 @@ function openPermissionEditor(userId) {
   });
 }
 
+// Bir kullanicinin aktiflik durumunu HTML rozetine cevir (Giris Kayitlari ozeti icin).
+function activityBadgeHtml(lastSeen) {
+  const st = activityStatus(lastSeen);
+  if (st.online) return '<span class="status-badge status-active">🟢 Şu an aktif</span>';
+  if (st.muted) return '<span class="subtle">Hiç giriş yapmadı</span>';
+  return `<span class="status-badge status-passive">${st.text}</span>`;
+}
+
 async function renderLoginLogs() {
+  if (state.loginLogsTimer) { clearInterval(state.loginLogsTimer); state.loginLogsTimer = null; }
   if (!state.currentUser?.isAdmin) {
     dom.loginLogsArea.innerHTML = '<p class="subtle">Bu bolum sadece admin tarafindan gorulebilir.</p>';
     return;
   }
 
   try {
-    const result = await apiFetch("/api/admin/logs");
-    const logs = result.logs || [];
+    // Aktiflik ozeti + giris kayitlarini birlikte cek.
+    const [usersRes, logsRes] = await Promise.all([
+      apiFetch("/api/admin/users").catch(() => ({ users: [] })),
+      apiFetch("/api/admin/logs").catch(() => ({ logs: [] })),
+    ]);
 
-    if (!logs.length) {
-      dom.loginLogsArea.innerHTML = '<p class="subtle">Henuz giris kaydi yok.</p>';
-      return;
-    }
+    // KULLANICI AKTIFLIGI — TUM kullanicilar (admin dahil), en son aktif olan ustte.
+    const users = (usersRes.users || []).slice().sort((a, b) => {
+      const da = parseTrStamp(a.lastSeen); const db2 = parseTrStamp(b.lastSeen);
+      const ta = da ? da.getTime() : -1; const tb = db2 ? db2.getTime() : -1;
+      return tb - ta;
+    });
+    const activityRows = users.map((u) => {
+      const self = u.id === state.currentUser?.id ? ' <span class="subtle">(sen)</span>' : "";
+      return `<tr data-activity-id="${u.id}">
+        <td>${escapeHtml(u.username)}${self}</td>
+        <td class="activity-badge">${activityBadgeHtml(u.lastSeen)}</td>
+        <td class="subtle">${u.lastSeen ? escapeHtml(u.lastSeen) : "—"}</td>
+      </tr>`;
+    }).join("");
+    const activityCard = users.length ? `
+      <div class="admin-card" style="margin-bottom:1rem;">
+        <h5>Kullanıcı Aktifliği <span class="subtle" style="font-weight:400;">(kim şu an aktif / en son ne zaman)</span></h5>
+        <table class="data-table">
+          <thead><tr><th>Kullanıcı</th><th>Durum</th><th>Son Görülme</th></tr></thead>
+          <tbody>${activityRows}</tbody>
+        </table>
+      </div>` : "";
 
-    const rows = logs
+    // GIRIS KAYITLARI
+    const logs = logsRes.logs || [];
+    const logRows = logs
       .map((log) => {
         const ok = log.status === "ok";
         const statusText = ok ? "Basarili" : "Basarisiz";
@@ -3321,16 +3353,36 @@ async function renderLoginLogs() {
         return `<tr><td>${log.time}</td><td>${log.username}</td><td class="${statusClass}">${statusText}${reason}</td><td>${log.ip || "-"}</td></tr>`;
       })
       .join("");
-
-    dom.loginLogsArea.innerHTML = `
+    const logsTable = logs.length ? `
       <table class="data-table">
         <thead><tr><th>Zaman</th><th>Kullanici</th><th>Durum</th><th>IP</th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    `;
+        <tbody>${logRows}</tbody>
+      </table>` : '<p class="subtle">Henuz giris kaydi yok.</p>';
+
+    dom.loginLogsArea.innerHTML = activityCard + logsTable;
+
+    // Aktiflik durumunu 20 sn'de bir canli tut (panel gorunurken).
+    state.loginLogsTimer = setInterval(refreshLoginActivity, 20000);
   } catch (error) {
     dom.loginLogsArea.innerHTML = `<p class="subtle">${error.message}</p>`;
   }
+}
+
+// Aktiflik rozetlerini arka planda tazele (tam re-render yapmadan). Panel gizliyse durdur.
+async function refreshLoginActivity() {
+  const panel = document.getElementById("panelLogs");
+  if (!panel || panel.classList.contains("hidden")) {
+    if (state.loginLogsTimer) { clearInterval(state.loginLogsTimer); state.loginLogsTimer = null; }
+    return;
+  }
+  try {
+    const res = await apiFetch("/api/admin/users");
+    const map = new Map((res.users || []).map((u) => [String(u.id), u.lastSeen]));
+    dom.loginLogsArea.querySelectorAll("tr[data-activity-id]").forEach((tr) => {
+      const badge = tr.querySelector(".activity-badge");
+      if (badge && map.has(tr.dataset.activityId)) badge.innerHTML = activityBadgeHtml(map.get(tr.dataset.activityId));
+    });
+  } catch (e) { /* sessiz */ }
 }
 
 // "Beni hatirla" — kullanici adi local storage'da saklanir (sifre ASLA saklanmaz).
