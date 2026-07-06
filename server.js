@@ -7047,7 +7047,7 @@ async function fetchSeferSeatsWithBody(page, seferId, bodyTemplate, templateId) 
   const body = (templateId && bodyTemplate && String(bodyTemplate).includes(String(templateId)))
     ? String(bodyTemplate).split(String(templateId)).join(String(seferId))
     : (bodyTemplate || "{}");
-  const json = await page.evaluate(async (sid, b) => {
+  const doFetch = () => page.evaluate(async (sid, b) => {
     try {
       const r = await fetch(`/json/sefer/${sid}`, {
         method: "POST",
@@ -7060,8 +7060,16 @@ async function fetchSeferSeatsWithBody(page, seferId, bodyTemplate, templateId) 
       return await r.json();
     } catch (e) { return { __error: String(e && e.message || e) }; }
   }, seferId, body).catch(() => null);
-  if (!json || json.__error || json.__html) return null;
-  return countSeatsFromSeferJson(json);
+  // Cloudflare throttle/challenge'a karsi 2 deneme (arada bekleme).
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const json = await doFetch();
+    if (json && !json.__error && !json.__html) {
+      const c = countSeatsFromSeferJson(json);
+      if (c) return c;
+    }
+    if (attempt === 1) await new Promise((r) => setTimeout(r, 1800));
+  }
+  return null;
 }
 
 // Takip edilen operatorlerin seferlerine GERCEK doluluk ekle (koltuk haritasindan). journeys uzerine
@@ -8050,9 +8058,10 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
     let viaFetch = 0, viaClick = 0;
     for (const info of infos) {
       if (seatById.has(info.id)) continue;
-      // 1) FETCH (govde varsa)
+      // 1) FETCH (govde varsa) — art arda burst yapmamak icin arada bekle (Cloudflare throttle).
       if (capturedBody) {
         const c = await fetchSeferSeatsWithBody(page, info.id, capturedBody, capturedBodyId);
+        await new Promise((r) => setTimeout(r, 600));
         if (c) { seatById.set(info.id, c); viaFetch++; continue; }
       }
       // 2) TIKLA (bootstrap / yedek) — tutmazsa 2 kez daha dene (tek-sefer butonu icin kritik).
