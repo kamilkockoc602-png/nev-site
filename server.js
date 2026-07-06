@@ -6968,7 +6968,7 @@ async function probeObiletSeatMap(routeId, dateIso, timeFilter = "") {
   const seatResponses = [];
   const journeyItems = [];
 
-  // TUM JSON yanitlarini yakala (host filtresi YOK — endpoint'i kesfetmek icin).
+  // Bulunan endpoint'ler: /json/journeys/{route}/{date} (liste) ve /json/sefer/{id} (koltuk haritasi).
   page.on("response", async (response) => {
     try {
       const url = response.url();
@@ -6979,15 +6979,27 @@ async function probeObiletSeatMap(routeId, dateIso, timeFilter = "") {
       if (!text || text.length < 2) return;
       let data; try { data = JSON.parse(text); } catch { return; }
       if (!result.apiUrls.includes(short)) result.apiUrls.push(short);
-      if (/journey/i.test(url) || /"partner-name"|"available-seats"/.test(text.slice(0, 2000))) {
-        const list = Array.isArray(data?.data) ? data.data : Array.isArray(data?.journeys) ? data.journeys : [];
-        if (list.length) { for (const it of list) journeyItems.push(it); return; }
-      }
-      const s = JSON.stringify(data);
-      if (/seat/i.test(url) || /"seats?"\s*:\s*\[/i.test(s) || /is-available|availability|"seat-no"|seatNo|"seat-number"/i.test(s)) {
+
+      // KOLTUK HARITASI: /json/sefer/{id}
+      if (/\/json\/sefer\//i.test(url)) {
+        const idm = url.match(/\/json\/sefer\/(\d+)/i);
+        if (idm) result.clickedSeferId = idm[1];
         seatResponses.push({ url: short, data });
-        if (!result.seatEndpoints.includes(short)) result.seatEndpoints.push(short);
-        console.log(`[SeatProbe] Koltuk-benzeri JSON yakalandi: ${short}`);
+        console.log(`[SeatProbe] SEFER (koltuk) JSON yakalandi: ${short}`);
+        console.log(`[SeatProbe] sefer JSON ust-anahtarlar: ${Object.keys(data || {}).join(", ")}`);
+        if (data && data.data) console.log(`[SeatProbe] sefer.data ust-anahtarlar: ${Object.keys(data.data).join(", ")}`);
+        console.log(`[SeatProbe] sefer JSON ornek (900 krkt): ${JSON.stringify(data).substring(0, 900)}`);
+        return;
+      }
+      // LISTE: /json/journeys/...
+      if (/\/json\/journeys\//i.test(url) || /"partner-name"|"available-seats"/.test(text.slice(0, 3000))) {
+        const list = Array.isArray(data?.data) ? data.data
+          : Array.isArray(data?.journeys) ? data.journeys
+          : Array.isArray(data?.data?.journeys) ? data.data.journeys : [];
+        if (list.length) {
+          for (const it of list) journeyItems.push(it);
+          console.log(`[SeatProbe] LISTE (journeys) JSON: ${list.length} sefer, ilk item anahtarlar: ${Object.keys(list[0] || {}).join(", ")}`);
+        }
       }
     } catch {}
   });
@@ -7015,53 +7027,46 @@ async function probeObiletSeatMap(routeId, dateIso, timeFilter = "") {
 
     await new Promise(r => setTimeout(r, 8000)); // koltuk haritasi acilsin/render olsun
 
-    // Karsilastirma: liste API'sindeki bu seferin available-seats'i
+    // Karsilastirma: liste API'sindeki AYNI seferin available-seats'i.
+    // Once tiklanan seferin id'siyle (kesin), sonra saat metniyle, en son ilk item.
     let listItem = null;
-    if (timeFilter) listItem = journeyItems.find((it) =>
-      String(it?.journey?.departure || it?.departure || "").includes(timeFilter));
+    if (result.clickedSeferId) listItem = journeyItems.find((it) => String(it?.id) === String(result.clickedSeferId));
+    if (!listItem && timeFilter) listItem = journeyItems.find((it) => JSON.stringify(it).includes(timeFilter));
     if (!listItem) listItem = journeyItems[0];
-    if (listItem) { result.listTotal = listItem["total-seats"]; result.listAvail = listItem["available-seats"]; }
+    if (listItem) {
+      const g = (...ks) => { for (const k of ks) { const v = listItem[k] ?? listItem.journey?.[k]; if (v != null) return v; } return null; };
+      result.listTotal = g("total-seats", "total_seats", "totalSeats");
+      result.listAvail = g("available-seats", "available_seats", "availableSeats");
+      console.log(`[SeatProbe] Eslesen liste seferi (id=${listItem.id ?? "?"}): total=${result.listTotal} avail=${result.listAvail}`);
+    }
 
-    // 1) ONCELIK: acilan koltuk haritasini DOM'dan oku (kullanicinin gordugu goruntu).
+    // 1) ONCELIK: acilan koltuk haritasini DOM'dan oku. GERCEK koltuk hucreleri class'inda
+    // "single-seat" ya da "not-single-seat" iceriyor (kesif logundan). Fiyat etiketleri/yapisal
+    // elemanlar (dynamic-seat-price, s-seat, s-seat-n) HARIC. Dolu = male/female, Bos = available.
     const dom = await page.evaluate(() => {
-      let els = Array.from(document.querySelectorAll('[class*="seat" i],[class*="koltuk" i],[data-seat],[data-seat-no],[data-seatnumber],[data-number]'));
-      if (els.length < 10) {
-        // Yedek: sayili kucuk hucreler (koltuk numaralari)
-        const nums = Array.from(document.querySelectorAll("div,li,span,td,button"))
-          .filter((el) => el.children.length === 0 && /^\d{1,2}$/.test((el.textContent || "").trim()));
-        if (nums.length >= 15) els = nums;
-      }
-      const distinct = new Map();
+      const all = Array.from(document.querySelectorAll('[class*="single-seat" i]'));
       let sold = 0, empty = 0, unknown = 0;
       const samples = [];
-      for (const el of els) {
+      for (const el of all) {
         const raw = el.className && el.className.baseVal !== undefined ? el.className.baseVal : el.className;
         const cls = String(raw || "").toLowerCase();
-        let bg = "";
-        try { bg = getComputedStyle(el).backgroundColor || ""; } catch {}
         const num = (el.textContent || "").trim();
-        if (samples.length < 8) samples.push(`no=${num} cls="${cls}" bg=${bg}`);
-        distinct.set(cls + "|" + bg, (distinct.get(cls + "|" + bg) || 0) + 1);
-        const soldCls = /(sold|dolu|occupied|full|reserved|unavailable|erkek|kadin|male|female|busy|passive|disabled|taken|not-?available)/.test(cls);
-        const emptyCls = /(available|empty|bos|free|active|selectable|open|mus|vacant|can-?select)/.test(cls);
-        if (soldCls && !emptyCls) sold++;
-        else if (emptyCls) empty++;
+        if (samples.length < 6) samples.push(`no=${num} cls="${cls}"`);
+        if (/\b(male|female|erkek|kadin)\b/.test(cls)) sold++;      // cinsiyetli = DOLU
+        else if (/\bavailable\b/.test(cls)) empty++;                 // available = BOS
         else unknown++;
       }
-      const groups = Array.from(distinct.entries()).sort((a, b) => b[1] - a[1]).slice(0, 8)
-        .map(([k, n]) => `${n}× [${k}]`);
-      return { count: els.length, sold, empty, unknown, samples, groups };
+      return { count: all.length, sold, empty, unknown, samples };
     }).catch((e) => ({ error: e.message }));
 
     if (dom && dom.count) {
-      result.totalReal = dom.count;
+      result.totalReal = dom.sold + dom.empty; // gercek koltuk sayisi (bilinmeyenler haric)
       result.soldReal = dom.sold;
       result.emptyReal = dom.empty;
-      console.log(`[SeatProbe] DOM koltuk: toplam=${dom.count} dolu=${dom.sold} bos=${dom.empty} bilinmeyen=${dom.unknown}`);
-      console.log(`[SeatProbe] DOM ornek koltuklar: ${(dom.samples || []).join("  |  ")}`);
-      console.log(`[SeatProbe] DOM class/renk gruplari: ${(dom.groups || []).join("  ,  ")}`);
+      console.log(`[SeatProbe] DOM koltuk (single-seat hucreleri): dolu=${dom.sold} bos=${dom.empty} bilinmeyen=${dom.unknown} (toplam eleman=${dom.count})`);
+      console.log(`[SeatProbe] DOM ornek: ${(dom.samples || []).join("  |  ")}`);
     } else {
-      console.log(`[SeatProbe] DOM'da koltuk elemani bulunamadi (${dom && dom.error ? dom.error : "0 eleman"}).`);
+      console.log(`[SeatProbe] DOM'da single-seat hucresi bulunamadi (${dom && dom.error ? dom.error : "0"}).`);
     }
 
     // 2) YEDEK: koltuk-XHR yakalandiysa oradan da say (varsa).
