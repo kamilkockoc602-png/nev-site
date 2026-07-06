@@ -8040,15 +8040,14 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
     // GOVDE yoksa TIKLA (ilk seferde tarayicinin POST'u calisir, govdeyi yakalar; sonrakiler fetch).
     let viaFetch = 0, viaClick = 0;
     for (const info of infos) {
-      if (occupancyWorkerRunning === false) break;
       if (seatById.has(info.id)) continue;
       // 1) FETCH (govde varsa)
       if (capturedBody) {
         const c = await fetchSeferSeatsWithBody(page, info.id, capturedBody, capturedBodyId);
         if (c) { seatById.set(info.id, c); viaFetch++; continue; }
       }
-      // 2) TIKLA (bootstrap / yedek)
-      await page.evaluate((t, firm) => {
+      // 2) TIKLA (bootstrap / yedek) — tutmazsa 2 kez daha dene (tek-sefer butonu icin kritik).
+      const doClick = () => page.evaluate((t, firm) => {
         const hasSeatBtn = (el) => Array.from(el.querySelectorAll("button,a,span,div"))
           .some((b) => /koltuk|seç|^sec$|satın al|satin al/i.test((b.innerText || "").trim()));
         let cards = Array.from(document.querySelectorAll("div,li,article"))
@@ -8061,14 +8060,19 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
         };
         const timed = cards.filter((el) => (el.innerText || "").includes(t));
         const target = timed.find(matchFirm) || timed[0];
-        if (!target) return;
+        if (!target) return false;
         let best = target;
         for (const c of cards) if (target.contains(c) && c !== target && (c.innerText || "").includes(t)) { best = c; break; }
         const btn = Array.from(best.querySelectorAll("button,a,span,div"))
           .find((b) => /koltuk|seç|^sec$|satın al|satin al/i.test((b.innerText || "").trim()));
         (btn || best).click();
-      }, info.time, info.firma.toLocaleLowerCase("tr-TR")).catch(() => {});
-      await new Promise((r) => setTimeout(r, 2500)); // koltuk haritasi + POST gelsin
+        return true;
+      }, info.time, info.firma.toLocaleLowerCase("tr-TR")).catch(() => false);
+
+      for (let attempt = 1; attempt <= 3 && !seatById.has(info.id); attempt++) {
+        await doClick();
+        await new Promise((r) => setTimeout(r, 2600)); // koltuk haritasi + POST gelsin
+      }
       if (seatById.has(info.id)) viaClick++;
       // Acik koltuk haritasini KAPAT (sonraki tiklama/DOM temiz kalsin)
       await page.evaluate(() => {
