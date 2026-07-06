@@ -6185,9 +6185,11 @@ async function processObiletTarget(target) {
     const departureStopFilter = String(target.departure_stop_filter || "").trim();
     const departureStopFilterKey = normalizeSearchText(departureStopFilter);
     const queryOriginPrimary = departureStopFilter || target.origin;
-    // GERCEK doluluk icin koltuk haritasi cekilecek operatorler — SADECE belirli firma seciliyse
-    // (tum firmalar seciliyse 100+ sefer olur, cok agir; o durumda gercek koltuk atlanir).
-    const seatOps = acceptAllOperators ? null : targetOperators;
+    // GERCEK doluluk icin koltuk haritasi cekilecek operatorler — SADECE belirli firma seciliyse.
+    // GECICI KAPALI: bulk POST fetch'in dogru govdesi henuz bilinmiyor (fetch HTML donuyor, %100
+    // basarisiz + zaman kaybi). Probe ile govde bulununca REAL_SEATMAP_ENABLED=true yapilacak.
+    const REAL_SEATMAP_ENABLED = false;
+    const seatOps = (acceptAllOperators || !REAL_SEATMAP_ENABLED) ? null : targetOperators;
 
     const trackedJourneys = [];
     const changes = [];     // [{ journey_date, operator, departure_time, oldPrice, newPrice }] — mail tetikleyici tek liste
@@ -7104,11 +7106,13 @@ async function probeObiletSeatMap(routeId, dateIso, timeFilter = "", operatorFil
       }
     } catch {}
   });
-  // Calisan /json/sefer isteginin method+header'larini logla (ileride fetch'i birebir taklit icin).
+  // Calisan /json/sefer isteginin method+header+GOVDE'sini logla (fetch'i birebir taklit icin).
   page.on("request", (req) => {
     try {
       if (/\/json\/sefer\//i.test(req.url())) {
-        console.log(`[SeatProbe] SEFER REQUEST ${req.method()} header: ${JSON.stringify(req.headers()).substring(0, 450)}`);
+        const body = req.postData();
+        if (body != null) result.seferPostBody = body;
+        console.log(`[SeatProbe] SEFER REQUEST ${req.method()} GOVDE: ${body != null ? String(body).substring(0, 400) : "(govde yok)"}`);
       }
     } catch {}
   });
@@ -7188,6 +7192,25 @@ async function probeObiletSeatMap(routeId, dateIso, timeFilter = "", operatorFil
     }
     if (result.soldRealSvg != null) {
       console.log(`[SeatProbe] >>> SVG SONUC: gercek ${result.soldRealSvg}/${result.totalRealSvg} dolu (liste bu firmada ${(result.listTotal != null && result.listAvail != null) ? result.listTotal - result.listAvail : "?"} diyordu)`);
+    }
+
+    // FETCH TESTI: yakalanan GOVDE ile POST fetch calisiyor mu? (bulk icin kritik)
+    if (result.clickedSeferId) {
+      const testBody = result.seferPostBody != null ? result.seferPostBody : "{}";
+      const fetchTest = await page.evaluate(async (id, body) => {
+        try {
+          const r = await fetch(`/json/sefer/${id}`, {
+            method: "POST",
+            headers: { "content-type": "application/json", "accept": "*/*", "x-requested-with": "XMLHttpRequest" },
+            credentials: "include",
+            body: body,
+          });
+          const ct = r.headers.get("content-type") || "";
+          const txt = await r.text();
+          return { status: r.status, ct, isJson: ct.toLowerCase().includes("json"), sample: txt.substring(0, 120) };
+        } catch (e) { return { err: String(e && e.message || e) }; }
+      }, result.clickedSeferId, testBody).catch((e) => ({ err: String(e && e.message || e) }));
+      console.log(`[SeatProbe] FETCH-TEST (govde ${result.seferPostBody != null ? "VAR:" + String(result.seferPostBody).substring(0, 80) : "YOK"}): status=${fetchTest.status} json=${fetchTest.isJson} ct=${fetchTest.ct} ornek=${fetchTest.sample || fetchTest.err}`);
     }
 
     // 1) ONCELIK: acilan koltuk haritasini DOM'dan oku. GERCEK koltuk hucreleri class'inda
