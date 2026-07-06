@@ -6926,6 +6926,159 @@ app.post("/api/obilet/targets/:id/priority-refresh", requireAuth, requireAdmin, 
   }
 });
 
+// Bir JSON icinde koltuk dizisini bul (seats / seat-list / data.seats vb.) — yapi bilinmedigi icin genel arama.
+function findSeatArray(data) {
+  const looksSeat = (arr) =>
+    Array.isArray(arr) && arr.length >= 5 && typeof arr[0] === "object" && arr[0] &&
+    /seat|koltuk|avail|number|no|status|gender|cinsiyet/i.test(Object.keys(arr[0]).join(","));
+  const direct = [data?.data?.seats, data?.seats, data?.data?.["seat-list"], data?.["seat-list"],
+    data?.data?.busSeats, data?.data?.["bus-seats"], Array.isArray(data?.data) ? data.data : null];
+  for (const c of direct) if (looksSeat(c)) return c;
+  let found = null;
+  const walk = (o, depth) => {
+    if (found || depth > 5 || !o || typeof o !== "object") return;
+    for (const k of Object.keys(o)) {
+      const v = o[k];
+      if (looksSeat(v)) { found = v; return; }
+      if (v && typeof v === "object") walk(v, depth + 1);
+    }
+  };
+  walk(data, 0);
+  return found;
+}
+
+// Bir koltugun DOLU olup olmadigini genel alan adlarindan cikar.
+function seatIsSold(st) {
+  const availRaw = st["is-available"] ?? st.available ?? st.availability ?? st["is-empty"] ?? st.isAvailable;
+  const status = String(st.status ?? st.state ?? st.availability ?? "").toLowerCase();
+  if (availRaw === true || availRaw === 1) return false;      // available -> bos
+  if (availRaw === false || availRaw === 0) return true;      // not available -> dolu
+  if (/avail|empty|bos|open|free|müsait|musait/.test(status)) return false;
+  if (/sold|dolu|occupied|reserved|full|satil/.test(status)) return true;
+  return null; // bilinmiyor
+}
+
+// TEST/KESIF: Bir seferin GERCEK koltuk haritasini oBilet'ten cekip dolu/bos sayar; liste API'sindeki
+// available-seats ile karsilastirir. Ilk calistirmada endpoint + koltuk yapisini KESFETMEK icin zengin loglar.
+async function probeObiletSeatMap(routeId, dateIso, timeFilter = "") {
+  const browser = await getBrowserInstance();
+  const page = await setupObiletPage(browser);
+  const result = { apiUrls: [], seatEndpoints: [], listAvail: null, listTotal: null,
+    soldReal: null, emptyReal: null, totalReal: null, clicked: "", note: "" };
+  const seatResponses = [];
+  const journeyItems = [];
+
+  page.on("response", async (response) => {
+    try {
+      const url = response.url();
+      if (!/obilet\.com\/api\/|api\.obilet\.com/i.test(url)) return;
+      const ct = response.headers()["content-type"] || "";
+      if (!ct.includes("json")) return;
+      const short = url.split("?")[0];
+      if (!result.apiUrls.includes(short)) result.apiUrls.push(short);
+      const text = await response.text().catch(() => "");
+      if (!text) return;
+      let data; try { data = JSON.parse(text); } catch { return; }
+      if (/getbusjourneys|busjourneys/i.test(url)) {
+        const list = Array.isArray(data?.data) ? data.data : Array.isArray(data?.journeys) ? data.journeys : [];
+        for (const it of list) journeyItems.push(it);
+        return;
+      }
+      const s = JSON.stringify(data);
+      if (/seat/i.test(url) || /"seats?"\s*:\s*\[/i.test(s) || /is-available|availability|"seat-no"|seatNo|"seat-number"/i.test(s)) {
+        seatResponses.push({ url: short, data });
+        if (!result.seatEndpoints.includes(short)) result.seatEndpoints.push(short);
+      }
+    } catch {}
+  });
+
+  try {
+    const pageUrl = `https://www.obilet.com/seferler/${routeId}/${dateIso}?t=${Date.now()}`;
+    console.log(`[SeatProbe] Sayfa aciliyor: ${pageUrl} (saat filtresi: ${timeFilter || "ilk sefer"})`);
+    await gotoAndHandleCloudflare(page, pageUrl);
+    await new Promise(r => setTimeout(r, 4500)); // getbusjourneys ve render
+
+    // Koltuk haritasini ac: saat (HH:MM) iceren sefer kartini tikla; yoksa ilk sefer.
+    result.clicked = await page.evaluate((t) => {
+      const cands = Array.from(document.querySelectorAll("div,li,article,button,a"))
+        .filter((el) => /\d{2}:\d{2}/.test(el.innerText || "") && (el.innerText || "").length < 400);
+      let target = null;
+      if (t) target = cands.find((el) => (el.innerText || "").includes(t));
+      if (!target) target = cands[0];
+      if (!target) return "sefer-bulunamadi";
+      const btn = Array.from(target.querySelectorAll("button,a,div"))
+        .find((b) => /koltuk|seç|sec\b|devam|satın|satin/i.test(b.innerText || ""));
+      (btn || target).click();
+      return (target.innerText || "").replace(/\s+/g, " ").trim().slice(0, 70);
+    }, timeFilter).catch((e) => "click-hata:" + e.message);
+    console.log(`[SeatProbe] Tiklanan sefer: ${result.clicked}`);
+
+    await new Promise(r => setTimeout(r, 6500)); // koltuk haritasi XHR gelsin
+
+    // Karsilastirma: liste API'sindeki bu seferin available-seats'i
+    let listItem = null;
+    if (timeFilter) listItem = journeyItems.find((it) =>
+      String(it?.journey?.departure || it?.departure || "").includes(timeFilter));
+    if (!listItem) listItem = journeyItems[0];
+    if (listItem) { result.listTotal = listItem["total-seats"]; result.listAvail = listItem["available-seats"]; }
+
+    // Gercek koltuk haritasindan say
+    if (seatResponses.length) {
+      const best = seatResponses[seatResponses.length - 1];
+      const seats = findSeatArray(best.data);
+      if (seats && seats.length) {
+        result.totalReal = seats.length;
+        let sold = 0, empty = 0, unknown = 0;
+        for (const st of seats) {
+          const v = seatIsSold(st);
+          if (v === true) sold++; else if (v === false) empty++; else unknown++;
+        }
+        result.soldReal = sold; result.emptyReal = empty;
+        console.log(`[SeatProbe] Koltuk yapisi ornegi: ${JSON.stringify(seats[0]).substring(0, 300)}`);
+        if (unknown) console.log(`[SeatProbe] UYARI: ${unknown} koltugun durumu cozulemedi (alan adi bilinmiyor).`);
+      } else {
+        console.log(`[SeatProbe] Koltuk dizisi bulunamadi. Yanit ornegi: ${JSON.stringify(best.data).substring(0, 500)}`);
+      }
+    } else {
+      console.log(`[SeatProbe] Hic koltuk-XHR yakalanamadi. Gorulen API'ler: ${result.apiUrls.join(" , ") || "(yok)"}`);
+    }
+
+    console.log(`[SeatProbe] === SONUC === Liste API: ${result.listAvail} bos / ${result.listTotal} toplam (=> ${result.listTotal != null && result.listAvail != null ? result.listTotal - result.listAvail : "?"} dolu)  |  GERCEK harita: ${result.soldReal} dolu, ${result.emptyReal} bos / ${result.totalReal} toplam`);
+    console.log(`[SeatProbe] Gorulen API endpoint'leri: ${result.apiUrls.join(" , ")}`);
+  } catch (e) {
+    result.note = e.message;
+    console.warn(`[SeatProbe] hata: ${e.message}`);
+  } finally {
+    try { await page.close(); } catch {}
+  }
+  return result;
+}
+
+// ADMIN TEST: bir hattin bir seferinin GERCEK koltuk haritasini cekip liste degeriyle karsilastir.
+app.post("/api/obilet/targets/:id/seatmap-probe", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const target = db.prepare("SELECT * FROM obilet_targets WHERE id = ?").get(parseInt(req.params.id, 10));
+    if (!target) return res.status(404).json({ message: "Hat bulunamadi." });
+    if (obiletTaskRunning) return res.status(409).json({ message: "Su an bir tarama calisiyor — bitince tekrar dene." });
+    const routeId = String(target.route_id || "").trim();
+    if (!/^\d+-\d+$/.test(routeId)) return res.status(400).json({ message: "Bu hatta route_id yok, koltuk haritasi cekilemiyor." });
+    const dateIso = String(req.query.date || target.date || "").trim();
+    const time = String(req.query.time || "").trim();
+    obiletTaskRunning = true;
+    let result;
+    try { result = await probeObiletSeatMap(routeId, dateIso, time); }
+    finally { obiletTaskRunning = false; }
+    const listSold = (result.listTotal != null && result.listAvail != null) ? result.listTotal - result.listAvail : null;
+    res.json({
+      ok: true,
+      ozet: `Liste API: ${listSold ?? "?"} dolu / ${result.listTotal ?? "?"}  |  Gerçek harita: ${result.soldReal ?? "?"} dolu / ${result.totalReal ?? "?"}`,
+      result,
+    });
+  } catch (e) {
+    res.status(500).json({ message: e.message || "Koltuk testi basarisiz." });
+  }
+});
+
 // API: oBilet sehir kodlari — listele (seed + ogrenilmiş hepsi tek listede)
 app.get("/api/obilet/station-ids", requireAuth, (req, res) => {
   try {

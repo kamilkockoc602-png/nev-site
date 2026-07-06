@@ -5353,6 +5353,7 @@ function renderObiletTargetCards(listEl) {
           <div class="obilet-card-actions">
             <button class="btn btn-sm btn-ghost obilet-refresh-btn" data-id="${t.id}" title="Güncelle">🔄</button>
             ${isAdmin ? `<button class="btn btn-sm btn-primary obilet-priority-btn" data-id="${t.id}" title="Sıra beklemeden hemen tara (admin)">⚡ Anlık Tara</button>` : ""}
+            ${isAdmin ? `<button class="btn btn-sm btn-ghost obilet-seatprobe-btn" data-id="${t.id}" title="Bir seferin GERÇEK koltuk haritasını çekip liste değeriyle karşılaştır (test)">🔬 Koltuk Testi</button>` : ""}
             <button class="btn btn-sm btn-ghost obilet-edit-btn" data-id="${t.id}" title="Düzenle">✏️ Düzenle</button>
             <button class="btn btn-sm btn-success obilet-excel-btn" data-id="${t.id}" title="Excel İndir">📥 Excel</button>
             <button class="btn btn-sm btn-ghost obilet-expand-btn" data-id="${t.id}" title="Fiyatları Göster">📊 Fiyatlar</button>
@@ -5418,6 +5419,32 @@ function renderObiletTargetCards(listEl) {
         btn.disabled = false;
         btn.textContent = oldText;
         alert("Öncelikli tarama başlatılamadı: " + err.message);
+      }
+    });
+  });
+
+  listEl.querySelectorAll(".obilet-seatprobe-btn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      const target = (obiletState.targets || []).find(t => String(t.id) === String(id));
+      if (!target) return;
+      const date = prompt("Hangi tarih? (YYYY-AA-GG)", target.date || "");
+      if (!date) return;
+      const time = prompt("Hangi sefer saati? (örn 00:30 — boş bırakırsan ilk sefer)", "");
+      const oldText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "🔬 Çekiliyor...";
+      try {
+        const params = new URLSearchParams({ date });
+        if (time) params.set("time", time.trim());
+        const r = await apiFetch(`/api/obilet/targets/${id}/seatmap-probe?${params.toString()}`, { method: "POST" });
+        alert(`🔬 KOLTUK TESTİ SONUCU\n\n${r.ozet}\n\n(Detay Railway loglarında "[SeatProbe]" satırlarında. Liste ile gerçek harita farklıysa: liste API'si güvenilmez demektir.)`);
+      } catch (err) {
+        alert("Koltuk testi başarısız: " + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = oldText;
       }
     });
   });
