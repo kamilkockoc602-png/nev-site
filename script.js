@@ -4929,21 +4929,54 @@ function renderOccupancy(data) {
   const rows = occupancyState.rows;
   if (!rows.length) {
     body.innerHTML = `<tr><td colspan="7" style="text-align:center;color:#888;">Kayıt yok</td></tr>`;
+    occupancyState.shown = 0;
     return;
   }
-  body.innerHTML = rows.map((r) => {
-    const sold = (r.total_seats || 0) - (r.available_seats || 0);
-    const p = r.occupancy_percent || 0;
-    return `<tr>
-      <td>${occEsc((r.origin || "").toUpperCase())} → ${occEsc((r.destination || "").toUpperCase())}</td>
-      <td>${occToDot(r.journey_date)}</td>
-      <td>${occEsc(r.departure_time || "")}</td>
-      <td>${occEsc(r.operator || "")}</td>
-      <td><b style="color:${occColor(p)}">%${p}</b></td>
-      <td>${sold} / ${r.total_seats || 0}</td>
-      <td>${r.available_seats || 0}</td>
-    </tr>`;
-  }).join("");
+  // Kademeli yukleme: ilk 50 + "+50 daha goster" (Sefer Takip ile ayni ST_PAGE).
+  const end = Math.min(ST_PAGE, rows.length);
+  body.innerHTML = rows.slice(0, end).map(occRowHtml).join("") + occLoadMoreRowHtml(rows.length, end);
+  occupancyState.shown = end;
+  occBindLoadMore(rows);
+}
+
+// Tek bir doluluk satirinin HTML'i.
+function occRowHtml(r) {
+  const sold = (r.total_seats || 0) - (r.available_seats || 0);
+  const p = r.occupancy_percent || 0;
+  return `<tr>
+    <td>${occEsc((r.origin || "").toUpperCase())} → ${occEsc((r.destination || "").toUpperCase())}</td>
+    <td>${occToDot(r.journey_date)}</td>
+    <td>${occEsc(r.departure_time || "")}</td>
+    <td>${occEsc(r.operator || "")}</td>
+    <td><b style="color:${occColor(p)}">%${p}</b></td>
+    <td>${sold} / ${r.total_seats || 0}</td>
+    <td>${r.available_seats || 0}</td>
+  </tr>`;
+}
+
+function occLoadMoreRowHtml(total, shown) {
+  const remaining = total - shown;
+  if (remaining <= 0) return "";
+  const next = Math.min(ST_PAGE, remaining);
+  return `<tr id="occLoadMoreRow"><td colspan="7" style="text-align:center;padding:0.9rem;">
+    <button id="occLoadMore" class="btn btn-primary" type="button">+${next} daha göster <span style="opacity:.75">(${remaining} kaldı)</span></button>
+  </td></tr>`;
+}
+
+function occBindLoadMore(rows) {
+  const more = document.getElementById("occLoadMore");
+  if (!more) return;
+  more.addEventListener("click", () => {
+    const body = document.getElementById("occTableBody");
+    if (!body) return;
+    document.getElementById("occLoadMoreRow")?.remove();
+    const start = occupancyState.shown || 0;
+    const end = Math.min(start + ST_PAGE, rows.length);
+    body.insertAdjacentHTML("beforeend", rows.slice(start, end).map(occRowHtml).join(""));
+    occupancyState.shown = end;
+    body.insertAdjacentHTML("beforeend", occLoadMoreRowHtml(rows.length, end));
+    occBindLoadMore(rows);
+  });
 }
 
 function exportOccupancyCsv() {
