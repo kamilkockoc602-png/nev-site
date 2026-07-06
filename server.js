@@ -6285,17 +6285,13 @@ async function processObiletTarget(target) {
               // 1) GERCEK koltuk haritasindan (dogru kaynak — /json/sefer SVG sayimi).
               total = rT; const sold = Math.max(0, Math.min(rT, rS));
               avail = rT - sold; occ = Math.round((sold / rT) * 100); source = "gercek";
-            } else if (!seatOps && j.seatInfoReliable === true && Number.isFinite(Number(j.totalSeats)) && Number(j.totalSeats) > 0 && Number.isFinite(Number(j.availableSeats))) {
-              // 2) Yedek: liste available-seats — SADECE "tum firmalar" hatlarda (gercek koltuk cekilmez).
+            } else if (j.seatInfoReliable === true && Number.isFinite(Number(j.totalSeats)) && Number(j.totalSeats) > 0 && Number.isFinite(Number(j.availableSeats))) {
+              // 2) Yedek: liste available-seats (gercek harita cekilemediyse en azindan bir deger goster).
+              // NOT: liste degeri bazen yanlis olabilir ama BOS birakmaktan iyidir — gercek gelince ustune yazilir.
               total = Number(j.totalSeats); avail = Number(j.availableSeats);
               occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100))); source = "liste";
             } else {
-              // 3) Gercek beklenen ama cekilemedi (Cloudflare vb.). Onceki GERCEK satiri varsa KORU
-              // (silme — eski dogru deger kalsin); yoksa "-". Yanlis liste degerini ASLA yazma.
-              try {
-                const ex = db.prepare("SELECT source FROM obilet_occupancy WHERE target_id=? AND journey_date=? AND operator=? AND departure_time=?").get(target.id, j.journey_date, occOp, j.time);
-                if (ex && ex.source === "gercek") writtenOccKeys.add(`${occOp}|${j.time}`); // koru
-              } catch (e) {}
+              // 3) Hicbir guvenilir veri yok -> yazma ("-").
               occSkippedNoInfo++;
               continue;
             }
