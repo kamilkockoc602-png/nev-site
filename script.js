@@ -5432,14 +5432,20 @@ function renderObiletTargetCards(listEl) {
       const date = prompt("Hangi tarih? (YYYY-AA-GG)", target.date || "");
       if (!date) return;
       const time = prompt("Hangi sefer saati? (örn 00:30 — boş bırakırsan ilk sefer)", "");
+      const operator = prompt("Hangi firma? (örn Enver Geçgel — boş bırakırsan o saatteki ilk firma)", (target.operators || "").split(",")[0].trim());
       const oldText = btn.textContent;
       btn.disabled = true;
       btn.textContent = "🔬 Çekiliyor...";
       try {
         const params = new URLSearchParams({ date });
         if (time) params.set("time", time.trim());
+        if (operator) params.set("operator", operator.trim());
         const r = await apiFetch(`/api/obilet/targets/${id}/seatmap-probe?${params.toString()}`, { method: "POST" });
-        alert(`🔬 KOLTUK TESTİ SONUCU\n\n${r.ozet}\n\n(Detay Railway loglarında "[SeatProbe]" satırlarında. Liste ile gerçek harita farklıysa: liste API'si güvenilmez demektir.)`);
+        let list = "";
+        if (Array.isArray(r.seferler) && r.seferler.length) {
+          list = "\n\nBu saatteki firmalar:\n" + r.seferler.map(s => `• ${s.firma}: ${(s.total!=null&&s.avail!=null)?(s.total-s.avail):"?"}/${s.total} dolu`).join("\n");
+        }
+        alert(`🔬 KOLTUK TESTİ SONUCU\n\n${r.ozet}${list}\n\n(Detay: Railway loglarında "[SeatProbe]". Liste ile gerçek harita farklıysa liste güvenilmez demektir.)`);
       } catch (err) {
         alert("Koltuk testi başarısız: " + err.message);
       } finally {

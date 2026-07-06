@@ -6960,13 +6960,14 @@ function seatIsSold(st) {
 
 // TEST/KESIF: Bir seferin GERCEK koltuk haritasini oBilet'ten cekip dolu/bos sayar; liste API'sindeki
 // available-seats ile karsilastirir. Ilk calistirmada endpoint + koltuk yapisini KESFETMEK icin zengin loglar.
-async function probeObiletSeatMap(routeId, dateIso, timeFilter = "") {
+async function probeObiletSeatMap(routeId, dateIso, timeFilter = "", operatorFilter = "") {
   const browser = await getBrowserInstance();
   const page = await setupObiletPage(browser);
   const result = { apiUrls: [], seatEndpoints: [], listAvail: null, listTotal: null,
-    soldReal: null, emptyReal: null, totalReal: null, clicked: "", note: "" };
+    soldReal: null, emptyReal: null, totalReal: null, clicked: "", matchedFirma: "", seferlerAtTime: [], note: "" };
   const seatResponses = [];
   const journeyItems = [];
+  const opKey = String(operatorFilter || "").toLocaleLowerCase("tr-TR").replace(/\s+/g, " ").trim();
 
   // Bulunan endpoint'ler: /json/journeys/{route}/{date} (liste) ve /json/sefer/{id} (koltuk haritasi).
   page.on("response", async (response) => {
@@ -7010,35 +7011,77 @@ async function probeObiletSeatMap(routeId, dateIso, timeFilter = "") {
     await gotoAndHandleCloudflare(page, pageUrl);
     await new Promise(r => setTimeout(r, 4500)); // getbusjourneys ve render
 
-    // Koltuk haritasini ac: saat (HH:MM) iceren sefer kartini tikla; yoksa ilk sefer.
-    result.clicked = await page.evaluate((t) => {
-      const cands = Array.from(document.querySelectorAll("div,li,article,button,a"))
-        .filter((el) => /\d{2}:\d{2}/.test(el.innerText || "") && (el.innerText || "").length < 400);
+    // Liste verisinden (journeyItems) bu saatteki TUM seferleri cikar: firma + id + koltuk.
+    const itemInfo = (it) => {
+      const dep = String(it?.journey?.departure || it?.departure || it?.["departure-time"] || it?.departureTime || it?.time || "");
+      const tm = dep.match(/(\d{2}:\d{2})/);
+      const g = (...ks) => { for (const k of ks) { const v = it?.[k] ?? it?.journey?.[k]; if (v != null) return v; } return null; };
+      return {
+        id: it?.id ?? it?.journey?.id,
+        firma: String(g("partner-name", "partner_name", "partnerName", "company-name") || "").trim(),
+        time: tm ? tm[1] : "",
+        total: g("total-seats", "total_seats", "totalSeats"),
+        avail: g("available-seats", "available_seats", "availableSeats"),
+      };
+    };
+    const infos = journeyItems.map(itemInfo).filter((x) => x.time && x.id != null);
+    const atTime = timeFilter ? infos.filter((x) => x.time === timeFilter) : infos;
+    result.seferlerAtTime = atTime.map((x) => ({ firma: x.firma, time: x.time, avail: x.avail, total: x.total, id: x.id }));
+    console.log(`[SeatProbe] ${timeFilter || "tum"} saatindeki seferler (${atTime.length}): ${atTime.map((x) => `${x.firma}[id=${x.id}, dolu=${(x.total != null && x.avail != null) ? x.total - x.avail : "?"}/${x.total}]`).join("  |  ") || "(liste bos — yapiyi asagidaki LISTE logundan gorecegiz)"}`);
+
+    // Hedef seferi sec: saat + firma (varsa). Firma verilmediyse ilk sefer.
+    let chosen = null;
+    if (opKey) chosen = atTime.find((x) => x.firma.toLocaleLowerCase("tr-TR").includes(opKey) || opKey.includes(x.firma.toLocaleLowerCase("tr-TR")));
+    if (!chosen) chosen = atTime[0] || infos[0] || null;
+    if (chosen) {
+      result.matchedFirma = chosen.firma;
+      result.clickedSeferId = chosen.id != null ? String(chosen.id) : null;
+      result.listTotal = chosen.total;
+      result.listAvail = chosen.avail;
+      console.log(`[SeatProbe] SECILEN sefer: ${chosen.firma} ${chosen.time} (id=${chosen.id}) — liste: ${(chosen.total != null && chosen.avail != null) ? chosen.total - chosen.avail : "?"}/${chosen.total} dolu`);
+
+      // Koltuk haritasini id ile DOGRUDAN cek (tiklama belirsizligi yok).
+      const seatJson = await page.evaluate(async (id) => {
+        try {
+          const r = await fetch(`/json/sefer/${id}`, { headers: { "x-requested-with": "XMLHttpRequest" }, credentials: "include" });
+          return await r.json();
+        } catch (e) { return { __error: e.message }; }
+      }, chosen.id).catch((e) => ({ __error: e.message }));
+      if (seatJson && !seatJson.__error) {
+        seatResponses.push({ url: `/json/sefer/${chosen.id}`, data: seatJson });
+        console.log(`[SeatProbe] /json/sefer/${chosen.id} cekildi. ust-anahtarlar: ${Object.keys(seatJson).join(", ")}`);
+        if (seatJson.data) console.log(`[SeatProbe] sefer.data ust-anahtarlar: ${Object.keys(seatJson.data).join(", ")}`);
+        console.log(`[SeatProbe] sefer JSON ornek (900): ${JSON.stringify(seatJson).substring(0, 900)}`);
+      } else {
+        console.log(`[SeatProbe] /json/sefer/${chosen.id} cekilemedi: ${seatJson && seatJson.__error}`);
+      }
+    } else {
+      console.log(`[SeatProbe] Liste'den sefer secilemedi (journeyItems bos olabilir). Tiklama yontemine dusulecek.`);
+    }
+
+    // Ek olarak: DOM'dan da oku (koltuk haritasi acilirsa). Firma-duyarli tiklama: karti bul, tikla.
+    result.clicked = await page.evaluate((t, firm) => {
+      const cards = Array.from(document.querySelectorAll("div,li,article"))
+        .filter((el) => /\d{2}:\d{2}/.test(el.innerText || "") && (el.innerText || "").length < 600);
+      const matchFirm = (el) => {
+        if (!firm) return true;
+        const txt = (el.innerText || "").toLowerCase();
+        if (txt.includes(firm)) return true;
+        return Array.from(el.querySelectorAll("img")).some((im) =>
+          ((im.getAttribute("alt") || "") + (im.getAttribute("title") || "")).toLowerCase().includes(firm));
+      };
       let target = null;
-      if (t) target = cands.find((el) => (el.innerText || "").includes(t));
-      if (!target) target = cands[0];
+      const timed = t ? cards.filter((el) => (el.innerText || "").includes(t)) : cards;
+      target = timed.find(matchFirm) || timed[0] || cards[0];
       if (!target) return "sefer-bulunamadi";
       const btn = Array.from(target.querySelectorAll("button,a,div"))
         .find((b) => /koltuk|seç|sec\b|devam|satın|satin/i.test(b.innerText || ""));
       (btn || target).click();
-      return (target.innerText || "").replace(/\s+/g, " ").trim().slice(0, 70);
-    }, timeFilter).catch((e) => "click-hata:" + e.message);
-    console.log(`[SeatProbe] Tiklanan sefer: ${result.clicked}`);
+      return (target.innerText || "").replace(/\s+/g, " ").trim().slice(0, 80);
+    }, timeFilter, opKey).catch((e) => "click-hata:" + e.message);
+    console.log(`[SeatProbe] Tiklanan kart: ${result.clicked}`);
 
-    await new Promise(r => setTimeout(r, 8000)); // koltuk haritasi acilsin/render olsun
-
-    // Karsilastirma: liste API'sindeki AYNI seferin available-seats'i.
-    // Once tiklanan seferin id'siyle (kesin), sonra saat metniyle, en son ilk item.
-    let listItem = null;
-    if (result.clickedSeferId) listItem = journeyItems.find((it) => String(it?.id) === String(result.clickedSeferId));
-    if (!listItem && timeFilter) listItem = journeyItems.find((it) => JSON.stringify(it).includes(timeFilter));
-    if (!listItem) listItem = journeyItems[0];
-    if (listItem) {
-      const g = (...ks) => { for (const k of ks) { const v = listItem[k] ?? listItem.journey?.[k]; if (v != null) return v; } return null; };
-      result.listTotal = g("total-seats", "total_seats", "totalSeats");
-      result.listAvail = g("available-seats", "available_seats", "availableSeats");
-      console.log(`[SeatProbe] Eslesen liste seferi (id=${listItem.id ?? "?"}): total=${result.listTotal} avail=${result.listAvail}`);
-    }
+    await new Promise(r => setTimeout(r, 7000)); // koltuk haritasi acilsin/render olsun
 
     // 1) ONCELIK: acilan koltuk haritasini DOM'dan oku. GERCEK koltuk hucreleri class'inda
     // "single-seat" ya da "not-single-seat" iceriyor (kesif logundan). Fiyat etiketleri/yapisal
@@ -7102,13 +7145,15 @@ app.post("/api/obilet/targets/:id/seatmap-probe", requireAuth, requireAdmin, asy
     if (!/^\d+-\d+$/.test(routeId)) return res.status(400).json({ message: "Bu hatta route_id yok, koltuk haritasi cekilemiyor." });
     const dateIso = String(req.query.date || target.date || "").trim();
     const time = String(req.query.time || "").trim();
+    const operator = String(req.query.operator || "").trim();
     // NOT: obiletTaskRunning kilidine DOKUNMUYORUZ — calisan taramanin kilidini bozmamak icin.
     // Probe tek hafif sayfa acar (tek sefer), tam taramaya gore dusuk yuk; paralel calisabilir.
-    const result = await probeObiletSeatMap(routeId, dateIso, time);
+    const result = await probeObiletSeatMap(routeId, dateIso, time, operator);
     const listSold = (result.listTotal != null && result.listAvail != null) ? result.listTotal - result.listAvail : null;
     res.json({
       ok: true,
-      ozet: `Liste API: ${listSold ?? "?"} dolu / ${result.listTotal ?? "?"}  |  Gerçek harita: ${result.soldReal ?? "?"} dolu / ${result.totalReal ?? "?"}`,
+      ozet: `Sefer: ${result.matchedFirma || operator || "?"} ${time || "(ilk)"}\nListe API: ${listSold ?? "?"} dolu / ${result.listTotal ?? "?"}  |  Gerçek harita: ${result.soldReal ?? "?"} dolu / ${result.totalReal ?? "?"}`,
+      seferler: result.seferlerAtTime || [],
       result,
     });
   } catch (e) {
