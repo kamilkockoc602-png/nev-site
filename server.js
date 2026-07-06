@@ -8032,14 +8032,16 @@ async function occupancyForHatDate(target, routeId, ops, dateIso) {
 
 async function runOccupancyWorker() {
   if (!OCCUPANCY_WORKER_ENABLED || occupancyWorkerRunning) return;
-  if (obiletTaskRunning) { console.log("[Doluluk İşçisi] Fiyat taramasi calisiyor — bu tur atlandi."); return; }
+  // NOT: Fiyat taramasi SUREKLI calisiyor; "bos iken calis" dersek isci hic calismaz.
+  // Bu yuzden AYNI ANDA calisir (kendi sayfasi, ayni tarayici/oturum). NAZIK tempo ile
+  // (hatlar arasi bekleme) fiyat taramasini bozmadan arka planda ilerler.
   occupancyWorkerRunning = true;
   const t0 = Date.now();
+  let doneHats = 0;
   try {
     const today = todayIsoInIstanbul();
     const targets = db.prepare("SELECT * FROM obilet_targets WHERE is_active = 1").all();
     for (const target of targets) {
-      if (obiletTaskRunning) { console.log("[Doluluk İşçisi] Fiyat taramasi basladi — isci duruyor."); break; }
       const routeId = String(target.route_id || "").trim();
       if (!/^\d+-\d+$/.test(routeId)) continue;
       const ops = parseCsvList(target.operators).map(normalizeObiletOperatorName).filter(Boolean);
@@ -8047,17 +8049,17 @@ async function runOccupancyWorker() {
       const dates = buildIsoDateRange(target.date, target.end_date || target.date)
         .filter((d) => d >= today).slice(0, OCCUPANCY_NEAR_DAYS);
       for (const dateIso of dates) {
-        if (obiletTaskRunning) break;
         try { await occupancyForHatDate(target, routeId, ops, dateIso); }
         catch (e) { console.warn(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso} hata: ${e.message}`); }
-        await new Promise((r) => setTimeout(r, 2500));
+        await new Promise((r) => setTimeout(r, 4000)); // hatlar/tarihler arasi nazik bekleme
       }
+      doneHats++;
     }
   } catch (e) {
     console.warn(`[Doluluk İşçisi] genel hata: ${e.message}`);
   } finally {
     occupancyWorkerRunning = false;
-    console.log(`[Doluluk İşçisi] Tur bitti (${Math.round((Date.now() - t0) / 1000)}s).`);
+    console.log(`[Doluluk İşçisi] Tur bitti: ${doneHats} hat, ${Math.round((Date.now() - t0) / 1000)}s.`);
   }
 }
 
