@@ -7323,6 +7323,33 @@ app.post("/api/obilet/targets/:id/seatmap-probe", requireAuth, requireAdmin, asy
   }
 });
 
+// ADMIN: Sefer Takip'te TEK SEFERIN gercek dolulugunu HEMEN cek + DB'ye yaz (source='gercek').
+// Sefer Takip satirindaki butondan cagrilir (targetId + date + operator + time).
+app.post("/api/obilet/seat-refresh", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const targetId = parseInt(req.body?.targetId ?? req.query.targetId, 10);
+    const target = db.prepare("SELECT * FROM obilet_targets WHERE id = ?").get(targetId);
+    if (!target) return res.status(404).json({ message: "Hat bulunamadi." });
+    const routeId = String(target.route_id || "").trim();
+    if (!/^\d+-\d+$/.test(routeId)) return res.status(400).json({ message: "Bu hatta route_id yok, koltuk cekilemiyor." });
+    const dateIso = String(req.body?.date ?? req.query.date ?? "").trim();
+    const operator = String(req.body?.operator ?? req.query.operator ?? "").trim();
+    const time = String(req.body?.time ?? req.query.time ?? "").trim();
+    if (!dateIso || !time) return res.status(400).json({ message: "Tarih ve saat gerekli." });
+    const ops = parseCsvList(target.operators).map(normalizeObiletOperatorName).filter(Boolean);
+    const opKey = operator.toLocaleLowerCase("tr-TR").trim();
+    const written = await occupancyForHatDate(target, routeId, ops, dateIso, opKey || null, time);
+    const m = (written || []).find((w) => w.time === time) || (written || [])[0];
+    if (m) {
+      res.json({ ok: true, sold: m.sold, total: m.total, occ: m.occ, operator: m.operator, time: m.time });
+    } else {
+      res.json({ ok: false, message: "Bu seferin koltuk haritasi su an alinamadi, birazdan tekrar dene." });
+    }
+  } catch (e) {
+    res.status(500).json({ message: e.message || "Kontrol basarisiz." });
+  }
+});
+
 // API: oBilet sehir kodlari — listele (seed + ogrenilmiş hepsi tek listede)
 app.get("/api/obilet/station-ids", requireAuth, (req, res) => {
   try {
@@ -7508,6 +7535,7 @@ function computeJourneyTracking({ date, origin, destination, operator } = {}) {
     const availableSeats = occ && occ.available_seats != null ? occ.available_seats : null;
     const yolcu = (totalSeats != null && availableSeats != null) ? (totalSeats - availableSeats) : null;
     return {
+      target_id: s.target_id,
       journey_date: s.journey_date, origin: s.origin, destination: s.destination,
       operator: s.operator, departure_time: s.departure_time, departure_stop: s.departure_stop,
       changeCount, prices, currentPrice: s.price,
@@ -7953,7 +7981,9 @@ const OCCUPANCY_NEAR_DAYS = 7;          // 1 hafta (bugun + 6 gun)
 const OCCUPANCY_WORKER_INTERVAL_MS = 15 * 60 * 1000; // 15 dk
 const OCCUPANCY_MAX_SEFER_PER_DATE = 20;
 
-async function occupancyForHatDate(target, routeId, ops, dateIso) {
+// filterOpKey/filterTime verilirse SADECE o seferi isler (admin "hemen kontrol" butonu icin).
+// Doner: [{operator,time,sold,total,occ}] yazilan seferler.
+async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = null, filterTime = null) {
   const browser = await getBrowserInstance();
   const page = await setupObiletPage(browser);
   const journeyItems = [];
@@ -8000,9 +8030,11 @@ async function occupancyForHatDate(target, routeId, ops, dateIso) {
       const tm = dep.match(/(\d{2}:\d{2})/);
       return { id: it?.id != null ? String(it.id) : null, firma: String(it?.["partner-name"] || "").trim(), time: tm ? tm[1] : "" };
     }).filter((x) => x.id && x.time && ops.some((op) => isObiletOperatorMatch(op, x.firma)))
+      .filter((x) => (!filterTime || x.time === filterTime) &&
+        (!filterOpKey || x.firma.toLocaleLowerCase("tr-TR").includes(filterOpKey)))
       .slice(0, OCCUPANCY_MAX_SEFER_PER_DATE);
 
-    if (!infos.length) { console.log(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso}: takip edilen sefer yok.`); return; }
+    if (!infos.length) { console.log(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso}: takip edilen sefer yok.`); return []; }
 
     // Seferleri oku: once yakalanmis GOVDE ile FETCH dene (tiklamasiz, guvenilir).
     // GOVDE yoksa TIKLA (ilk seferde tarayicinin POST'u calisir, govdeyi yakalar; sonrakiler fetch).
@@ -8061,6 +8093,7 @@ async function occupancyForHatDate(target, routeId, ops, dateIso) {
 
     const now = nowStamp();
     let ok = 0;
+    const written = [];
     for (const v of bestByKey.values()) {
       try {
         const occ = v.total > 0 ? Math.max(0, Math.min(100, Math.round((v.sold / v.total) * 100))) : 0;
@@ -8070,10 +8103,12 @@ async function occupancyForHatDate(target, routeId, ops, dateIso) {
           ON CONFLICT(target_id, journey_date, operator, departure_time)
           DO UPDATE SET total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated, source = 'gercek'
         `).run(target.id, dateIso, v.occOp, v.time, "", v.total, Math.max(0, v.total - v.sold), occ, now);
+        written.push({ operator: v.occOp, time: v.time, sold: v.sold, total: v.total, occ });
         ok++;
       } catch (e) { /* tek sefer hatasi digerlerini bozmasin */ }
     }
     console.log(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso}: ${ok}/${infos.length} sefer GERCEK yazildi (fetch=${viaFetch}, tik=${viaClick}).`);
+    return written;
   } finally {
     try { await page.close(); } catch {}
   }

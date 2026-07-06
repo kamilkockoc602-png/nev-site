@@ -5091,6 +5091,34 @@ function setupSeferTakipPanel() {
       const tmp = o.value; o.value = d.value; d.value = tmp;
       searchSeferTakip();
     });
+    // Admin: satırdaki 🔄 ile o seferin GERÇEK dolulugunu HEMEN çek (event delegation).
+    const stBody = document.getElementById("stTableBody");
+    if (stBody) stBody.addEventListener("click", async (e) => {
+      const b = e.target.closest(".st-seat-refresh");
+      if (!b) return;
+      e.preventDefault();
+      const { tid, date, time, op } = b.dataset;
+      const old = b.textContent;
+      b.disabled = true; b.textContent = "⏳";
+      try {
+        const r = await apiFetch("/api/obilet/seat-refresh", {
+          method: "POST",
+          body: JSON.stringify({ targetId: Number(tid), date, time, operator: op }),
+        });
+        const cell = b.closest("td");
+        if (r.ok && cell) {
+          const pct = r.total ? Math.round((r.sold / r.total) * 100) : 0;
+          cell.innerHTML = `<b style="color:${occColor(pct)}">${r.sold}/${r.total}</b> <span style="opacity:.7">(%${pct})</span> <span title="Gerçek koltuk haritasından" style="color:#2ecc71;">✓</span>`;
+        } else {
+          b.textContent = "⚠"; b.title = r.message || "Alınamadı";
+          setTimeout(() => { b.textContent = old; b.disabled = false; }, 2500);
+        }
+      } catch (err) {
+        b.textContent = "⚠"; b.title = err.message || "Hata";
+        setTimeout(() => { b.textContent = old; b.disabled = false; }, 2500);
+      }
+    });
+
     // Firma listesini bir kez doldur (bos aramayla).
     searchSeferTakip(true);
   }
@@ -5148,6 +5176,13 @@ function stRowHtml(j) {
   if (j.totalSeats != null && j.yolcu != null) {
     const pct = j.totalSeats ? Math.round((j.yolcu / j.totalSeats) * 100) : 0;
     dolCell = `<b style="color:${occColor(pct)}">${j.yolcu}/${j.totalSeats}</b> <span style="opacity:.7">(%${pct})</span>`;
+  }
+  // Admin'e ozel: bu seferin GERCEK dolulugunu HEMEN kontrol et butonu.
+  const stAdmin = !!(state.currentUser && state.currentUser.isAdmin);
+  if (stAdmin && j.target_id != null) {
+    dolCell += ` <button class="st-seat-refresh" title="Bu seferin gerçek koltuk doluluğunu hemen çek"
+      data-tid="${j.target_id}" data-date="${occEsc(j.journey_date || "")}" data-time="${occEsc(j.departure_time || "")}" data-op="${occEsc(j.operator || "")}"
+      style="margin-left:6px;border:none;border-radius:6px;background:#2f6fb0;color:#fff;cursor:pointer;font-size:0.85rem;padding:1px 7px;">🔄</button>`;
   }
   return `<tr>
     <td>${occToDot(j.journey_date)}</td>
