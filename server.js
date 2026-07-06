@@ -6958,6 +6958,42 @@ function seatIsSold(st) {
   return null; // bilinmiyor
 }
 
+// GERCEK doluluk: /json/sefer/{id} yaniti { bus: "<svg ...>" } seklinde koltuk haritasini SVG olarak verir.
+// Koltuk hucreleri class'inda "single-seat"/"not-single-seat" gecer; male/female = DOLU, available = BOS.
+// SVG string'i regex ile sayar. Basarisizsa null (yanit HTML ise / SVG yoksa).
+function countSeatsFromSeferJson(json) {
+  const svg = json && typeof json.bus === "string" ? json.bus : "";
+  if (!svg || !/single-seat/i.test(svg)) return null;
+  const re = /class="([^"]*single-seat[^"]*)"/gi;
+  let m, total = 0, sold = 0, empty = 0, unknown = 0;
+  while ((m = re.exec(svg)) !== null) {
+    const cls = m[1].toLowerCase();
+    total++;
+    if (/\b(male|female|erkek|kadin)\b/.test(cls)) sold++;
+    else if (/\bavailable\b/.test(cls)) empty++;
+    else unknown++;
+  }
+  if (total === 0) return null;
+  return { total, sold, empty, unknown };
+}
+
+// Bir seferin GERCEK koltuk sayimini /json/sefer/{id}'den al (sayfa oturumunda fetch). Basarisizsa null.
+async function fetchSeferRealSeats(page, seferId) {
+  const json = await page.evaluate(async (sid) => {
+    try {
+      const r = await fetch(`/json/sefer/${sid}`, {
+        headers: { "Accept": "application/json, text/javascript, */*; q=0.01", "X-Requested-With": "XMLHttpRequest" },
+        credentials: "include",
+      });
+      const ct = r.headers.get("content-type") || "";
+      if (!ct.toLowerCase().includes("json")) return { __html: true };
+      return await r.json();
+    } catch (e) { return { __error: String(e && e.message || e) }; }
+  }, seferId).catch((e) => ({ __error: String(e && e.message || e) }));
+  if (!json || json.__error || json.__html) return null;
+  return countSeatsFromSeferJson(json);
+}
+
 // TEST/KESIF: Bir seferin GERCEK koltuk haritasini oBilet'ten cekip dolu/bos sayar; liste API'sindeki
 // available-seats ile karsilastirir. Ilk calistirmada endpoint + koltuk yapisini KESFETMEK icin zengin loglar.
 async function probeObiletSeatMap(routeId, dateIso, timeFilter = "", operatorFilter = "") {
@@ -7036,24 +7072,28 @@ async function probeObiletSeatMap(routeId, dateIso, timeFilter = "", operatorFil
     if (chosen) {
       result.matchedFirma = chosen.firma;
       result.clickedSeferId = chosen.id != null ? String(chosen.id) : null;
-      result.listTotal = chosen.total;
-      result.listAvail = chosen.avail;
-      console.log(`[SeatProbe] SECILEN sefer: ${chosen.firma} ${chosen.time} (id=${chosen.id}) — liste: ${(chosen.total != null && chosen.avail != null) ? chosen.total - chosen.avail : "?"}/${chosen.total} dolu`);
+      console.log(`[SeatProbe] SECILEN firma: ${chosen.firma} ${chosen.time}`);
 
-      // Koltuk haritasini id ile DOGRUDAN cek (tiklama belirsizligi yok).
-      const seatJson = await page.evaluate(async (id) => {
-        try {
-          const r = await fetch(`/json/sefer/${id}`, { headers: { "x-requested-with": "XMLHttpRequest" }, credentials: "include" });
-          return await r.json();
-        } catch (e) { return { __error: e.message }; }
-      }, chosen.id).catch((e) => ({ __error: e.message }));
-      if (seatJson && !seatJson.__error) {
-        seatResponses.push({ url: `/json/sefer/${chosen.id}`, data: seatJson });
-        console.log(`[SeatProbe] /json/sefer/${chosen.id} cekildi. ust-anahtarlar: ${Object.keys(seatJson).join(", ")}`);
-        if (seatJson.data) console.log(`[SeatProbe] sefer.data ust-anahtarlar: ${Object.keys(seatJson.data).join(", ")}`);
-        console.log(`[SeatProbe] sefer JSON ornek (900): ${JSON.stringify(seatJson).substring(0, 900)}`);
-      } else {
-        console.log(`[SeatProbe] /json/sefer/${chosen.id} cekilemedi: ${seatJson && seatJson.__error}`);
+      // Secilen firmanin O SAATTEKI TUM listelemelerini SVG parser ile gercek koltuk say.
+      // (Ayni sefer birden cok kez listelenebilir; gecerli SVG doneni gercek otobustur.)
+      const firmListings = atTime.filter((x) => x.firma === chosen.firma && x.id != null);
+      let bestReal = null;
+      for (const lst of firmListings) {
+        const real = await fetchSeferRealSeats(page, lst.id);
+        const listSold = (lst.total != null && lst.avail != null) ? lst.total - lst.avail : null;
+        if (real) {
+          console.log(`[SeatProbe] id=${lst.id}: LISTE ${listSold}/${lst.total} dolu  →  GERCEK(SVG) ${real.sold}/${real.total} dolu (bos=${real.empty})`);
+          // En yuksek dolulugu (gercek otobus) sakla — hayalet listeler genelde dusuk/HTML doner.
+          if (!bestReal || real.sold > bestReal.sold) { bestReal = real; result.clickedSeferId = String(lst.id); result.listTotal = lst.total; result.listAvail = lst.avail; }
+        } else {
+          console.log(`[SeatProbe] id=${lst.id}: LISTE ${listSold}/${lst.total} dolu  →  GERCEK cekilemedi (HTML/gecersiz — muhtemelen hayalet listeleme)`);
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      if (bestReal) {
+        result.soldRealSvg = bestReal.sold;
+        result.totalRealSvg = bestReal.total;
+        console.log(`[SeatProbe] >>> SVG SONUC: gercek ${bestReal.sold}/${bestReal.total} dolu (liste bu seferde ${(result.listTotal != null && result.listAvail != null) ? result.listTotal - result.listAvail : "?"} diyordu)`);
       }
     } else {
       console.log(`[SeatProbe] Liste'den sefer secilemedi (journeyItems bos olabilir). Tiklama yontemine dusulecek.`);
@@ -7150,9 +7190,10 @@ app.post("/api/obilet/targets/:id/seatmap-probe", requireAuth, requireAdmin, asy
     // Probe tek hafif sayfa acar (tek sefer), tam taramaya gore dusuk yuk; paralel calisabilir.
     const result = await probeObiletSeatMap(routeId, dateIso, time, operator);
     const listSold = (result.listTotal != null && result.listAvail != null) ? result.listTotal - result.listAvail : null;
+    const gercek = result.soldRealSvg != null ? `${result.soldRealSvg} dolu / ${result.totalRealSvg}` : `${result.soldReal ?? "?"} dolu / ${result.totalReal ?? "?"} (DOM)`;
     res.json({
       ok: true,
-      ozet: `Sefer: ${result.matchedFirma || operator || "?"} ${time || "(ilk)"}\nListe API: ${listSold ?? "?"} dolu / ${result.listTotal ?? "?"}  |  Gerçek harita: ${result.soldReal ?? "?"} dolu / ${result.totalReal ?? "?"}`,
+      ozet: `Sefer: ${result.matchedFirma || operator || "?"} ${time || "(ilk)"}\nListe API: ${listSold ?? "?"} dolu / ${result.listTotal ?? "?"}  |  GERÇEK: ${gercek}`,
       seferler: result.seferlerAtTime || [],
       result,
     });
