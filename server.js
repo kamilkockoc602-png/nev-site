@@ -6265,12 +6265,12 @@ async function processObiletTarget(target) {
             // "bilinmiyor" birak. (Bu seferler UI'da "-" olarak gorunur, hatali sayi degil.)
             if (j.seatInfoReliable !== true) {
               occSkippedNoInfo++;
-              if (DEBUG_OBILET_PRICE) console.log(`[Doluluk-Kontrol] ${j.time} ${occOp}: ATLANDI (koltuk bilgisi guvenilmez — avail=${j.availableSeats}, seatInfo=${j.hasSeatInfoRaw}, zero=${j.shouldZeroRaw})`);
+              if (DEBUG_OBILET_PRICE) console.log(`[Doluluk-Kontrol] ${journeyDate} ${j.time} ${occOp}: ATLANDI (koltuk bilgisi guvenilmez — avail=${j.availableSeats}, seatInfo=${j.hasSeatInfoRaw}, zero=${j.shouldZeroRaw})`);
               continue;
             }
             if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(avail)) { occSkippedNoInfo++; continue; }
             const occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100)));
-            if (DEBUG_OBILET_PRICE) console.log(`[Doluluk-Kontrol] ${j.time} ${occOp}: ${total - avail}/${total} dolu (%${occ}) [avail=${avail}, seatInfo=✓]`);
+            if (DEBUG_OBILET_PRICE) console.log(`[Doluluk-Kontrol] ${journeyDate} ${j.time} ${occOp}: ${total - avail}/${total} dolu (%${occ}) [avail=${avail}, seatInfo=✓]`);
             db.prepare(`
               INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
