@@ -658,6 +658,9 @@ try {
 try {
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_obilet_occupancy_identity ON obilet_occupancy(target_id, journey_date, operator, departure_time);");
 } catch (e) { console.warn("[Doluluk] kimlik index olusturma hatasi:", e.message); }
+// Kaynak: 'gercek' (koltuk haritasi) | 'liste' (available-seats yedek). Gercek cekilemezse onceki
+// 'gercek' satiri korunur, 'liste' satiri silinir (yanlis deger gostermemek icin).
+try { db.exec("ALTER TABLE obilet_occupancy ADD COLUMN source TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN journey_date TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN departure_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
@@ -6281,23 +6284,28 @@ async function processObiletTarget(target) {
             if (Number.isFinite(rT) && rT > 0 && Number.isFinite(rS)) {
               // 1) GERCEK koltuk haritasindan (dogru kaynak — /json/sefer SVG sayimi).
               total = rT; const sold = Math.max(0, Math.min(rT, rS));
-              avail = rT - sold; occ = Math.round((sold / rT) * 100); source = "GERCEK";
-            } else if (j.seatInfoReliable === true && Number.isFinite(Number(j.totalSeats)) && Number(j.totalSeats) > 0 && Number.isFinite(Number(j.availableSeats))) {
-              // 2) Yedek: liste available-seats (guvenilir bayrakli) — gercek harita cekilemediyse.
+              avail = rT - sold; occ = Math.round((sold / rT) * 100); source = "gercek";
+            } else if (!seatOps && j.seatInfoReliable === true && Number.isFinite(Number(j.totalSeats)) && Number(j.totalSeats) > 0 && Number.isFinite(Number(j.availableSeats))) {
+              // 2) Yedek: liste available-seats — SADECE "tum firmalar" hatlarda (gercek koltuk cekilmez).
               total = Number(j.totalSeats); avail = Number(j.availableSeats);
               occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100))); source = "liste";
             } else {
-              // 3) Guvenilir veri yok -> yazma (UI'da "-"). Yanlis sayi gosterme.
+              // 3) Gercek beklenen ama cekilemedi (Cloudflare vb.). Onceki GERCEK satiri varsa KORU
+              // (silme — eski dogru deger kalsin); yoksa "-". Yanlis liste degerini ASLA yazma.
+              try {
+                const ex = db.prepare("SELECT source FROM obilet_occupancy WHERE target_id=? AND journey_date=? AND operator=? AND departure_time=?").get(target.id, j.journey_date, occOp, j.time);
+                if (ex && ex.source === "gercek") writtenOccKeys.add(`${occOp}|${j.time}`); // koru
+              } catch (e) {}
               occSkippedNoInfo++;
               continue;
             }
             if (DEBUG_OBILET_PRICE) console.log(`[Doluluk] ${journeyDate} ${j.time} ${occOp}: ${total - avail}/${total} dolu (%${occ}) [${source}]`);
             db.prepare(`
-              INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated, source)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(target_id, journey_date, operator, departure_time)
-              DO UPDATE SET departure_stop = excluded.departure_stop, total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated
-            `).run(target.id, j.journey_date, occOp, j.time, j.departureStop || "", total, avail, occ, now);
+              DO UPDATE SET departure_stop = excluded.departure_stop, total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated, source = excluded.source
+            `).run(target.id, j.journey_date, occOp, j.time, j.departureStop || "", total, avail, occ, now, source);
             writtenOccKeys.add(`${occOp}|${j.time}`);
           } catch (occErr) {
             if (DEBUG_OBILET_PRICE) console.warn(`[Doluluk] yazma hatasi: ${occErr.message}`);
@@ -7000,8 +7008,9 @@ function countSeatsFromSeferJson(json) {
 
 // Bir seferin GERCEK koltuk sayimini /json/sefer/{id}'den al. oBilet bunu POST + json ister
 // (GET HTML doner). Sayfa oturumunda (cf_bm cookie ile) fetch. Basarisizsa null.
+// Cloudflare/gecici hataya karsi 2 deneme (arada bekleme).
 async function fetchSeferRealSeats(page, seferId) {
-  const json = await page.evaluate(async (sid) => {
+  const doFetch = () => page.evaluate(async (sid) => {
     try {
       const r = await fetch(`/json/sefer/${sid}`, {
         method: "POST",
@@ -7014,8 +7023,16 @@ async function fetchSeferRealSeats(page, seferId) {
       return await r.json();
     } catch (e) { return { __error: String(e && e.message || e) }; }
   }, seferId).catch((e) => ({ __error: String(e && e.message || e) }));
-  if (!json || json.__error || json.__html) return null;
-  return countSeatsFromSeferJson(json);
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const json = await doFetch();
+    if (json && !json.__error && !json.__html) {
+      const c = countSeatsFromSeferJson(json);
+      if (c) return c;
+    }
+    if (attempt === 1) await new Promise((r) => setTimeout(r, 1500)); // kisa bekleyip tekrar dene
+  }
+  return null;
 }
 
 // Takip edilen operatorlerin seferlerine GERCEK doluluk ekle (koltuk haritasindan). journeys uzerine
@@ -7031,13 +7048,15 @@ async function attachRealOccupancy(page, journeys, idsByKey, seatOperators) {
     for (const id of ids) {
       const c = await fetchSeferRealSeats(page, id);
       if (c && (best == null || c.sold > best.sold)) best = c;
-      await new Promise((r) => setTimeout(r, 250)); // Cloudflare burst'u onlemek icin kucuk ara
+      await new Promise((r) => setTimeout(r, 400)); // Cloudflare burst'u onlemek icin ara
     }
     if (best) {
       j.realSold = best.sold;
       j.realTotal = best.total;
       ok++;
       if (DEBUG_OBILET_PRICE) console.log(`[Doluluk] GERCEK ${j.operator} ${j.time}: ${best.sold}/${best.total} dolu (liste ${(j.totalSeats != null && j.availableSeats != null) ? j.totalSeats - j.availableSeats : "?"} diyordu)`);
+    } else if (DEBUG_OBILET_PRICE) {
+      console.log(`[Doluluk] ${j.operator} ${j.time}: GERCEK koltuk cekilemedi (2 deneme) -> "-" gosterilecek`);
     }
   }
   console.log(`[Doluluk] Gercek koltuk haritasi: ${ok}/${targets.length} sefer okundu.`);
