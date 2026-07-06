@@ -7949,7 +7949,7 @@ setInterval(() => {
 // ASLA silmez (okuyamadigi seferin mevcut degeri kalir). Fiyat taramasi calisiyorsa BEKLER.
 let occupancyWorkerRunning = false;
 const OCCUPANCY_WORKER_ENABLED = true;
-const OCCUPANCY_NEAR_DAYS = 3;          // bugun + 2 gun (doluluk en cok yakinda onemli)
+const OCCUPANCY_NEAR_DAYS = 7;          // 1 hafta (bugun + 6 gun)
 const OCCUPANCY_WORKER_INTERVAL_MS = 15 * 60 * 1000; // 15 dk
 const OCCUPANCY_MAX_SEFER_PER_DATE = 20;
 
