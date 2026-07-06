@@ -4570,11 +4570,23 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso) {
         // Fiyat mantigini etkilemez — sadece sefer nesnesine ek alan; takip dongusu ayri tabloya yazar.
         const totalSeats = toFiniteNumber(item?.["total-seats"] ?? item?.total_seats ?? item?.totalSeats);
         const availableSeats = toFiniteNumber(item?.["available-seats"] ?? item?.available_seats ?? item?.availableSeats);
+        // KRITIK: oBilet gercek koltuk bilgisini SADECE has-available-seat-info=true iken verir.
+        // False olan seferlerde available-seats guvenilmez (cogu zaman 0 -> sahte %100). Bu seferler
+        // tam da dinamik-fiyatlamasi olmayan yani FIYATI DEGISMEYEN seferler. Doluluk YALNIZCA
+        // bu bayrak true iken kaydedilir; degilse "bilinmiyor" birakilir (yanlis sayi gosterilmez).
+        const hasSeatInfo =
+          (item?.["has-available-seat-info"] ?? item?.journey?.["has-available-seat-info"] ??
+           item?.has_available_seat_info ?? item?.hasAvailableSeatInfo) === true;
+        // should-set-seats-to-zero=true iken oBilet koltuklari SIFIR gostertir (yapay %100). Bu seferlerde
+        // available-seats guvenilmez — dolulugu kaydetmeyiz.
+        const shouldZeroSeats =
+          (item?.journey?.["should-set-seats-to-zero"] ?? item?.["should-set-seats-to-zero"]) === true;
+        const seatInfoReliable = hasSeatInfo && !shouldZeroSeats;
 
         const key = `${toObiletOperatorMatchKey(operator)}|${tm[0]}`;
         if (seenKeys.has(key)) continue;
         seenKeys.add(key);
-        capturedJourneys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop, totalSeats, availableSeats });
+        capturedJourneys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop, totalSeats, availableSeats, seatInfoReliable });
         parsed++;
       }
       if (list.length > 0) {
@@ -6239,38 +6251,47 @@ async function processObiletTarget(target) {
 
         // DOLULUK (piggyback) — her seferin anlik koltuk durumunu AYRI tabloya yazar.
         // Tamamen izole: hata olsa bile fiyat takibini etkilemez.
+        // YALNIZCA has-available-seat-info=true olan seferler yazilir (gercek koltuk verisi).
+        // writtenOccKeys: gercekten yazdigimiz seferler — temizlik bunu baz alir ki koltuk bilgisi
+        // olmayan seferlerin ESKI (yanlis) satirlari da silinsin.
+        const writtenOccKeys = new Set();
+        let occSkippedNoInfo = 0;
         for (const j of dayTracked) {
           try {
             const total = Number(j.totalSeats);
             const avail = Number(j.availableSeats);
-            if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(avail)) continue;
-            const occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100)));
             const occOp = normalizeObiletOperatorName(j.operator) || j.operator;
+            // Gercek koltuk bilgisi yoksa YAZMA — yanlis %100 gibi degerler gostermektense
+            // "bilinmiyor" birak. (Bu seferler UI'da "-" olarak gorunur, hatali sayi degil.)
+            if (j.seatInfoReliable !== true) { occSkippedNoInfo++; continue; }
+            if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(avail)) { occSkippedNoInfo++; continue; }
+            const occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100)));
             db.prepare(`
               INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(target_id, journey_date, operator, departure_time)
               DO UPDATE SET departure_stop = excluded.departure_stop, total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated
             `).run(target.id, j.journey_date, occOp, j.time, j.departureStop || "", total, avail, occ, now);
+            writtenOccKeys.add(`${occOp}|${j.time}`);
           } catch (occErr) {
             if (DEBUG_OBILET_PRICE) console.warn(`[Doluluk] yazma hatasi: ${occErr.message}`);
           }
         }
+        if (journeys.length > 0 && occSkippedNoInfo > 0) {
+          console.log(`[Doluluk] ${journeyDate}: ${writtenOccKeys.size} sefer koltuk yazildi, ${occSkippedNoInfo} sefer koltuk bilgisi YOK (atlandi, "-" gosterilecek).`);
+        }
 
-        // Bu tarih icin doluluk tablosunda olup bu taramada GORULMEYEN eski satirlari sil
-        // (iptal/tasinmis sefer + eski durak-varyanti mukerrer kalintilari). obilet_prices ile simetrik.
+        // Bu tarih icin doluluk tablosunda olup bu taramada YAZILMAYAN satirlari sil
+        // (iptal/tasinmis sefer + koltuk-bilgisi-yok seferlerin eski yanlis kayitlari + durak mukerrerleri).
         // GUVENLIK: yalnizca scrape BASARILIYSA (journeys.length>0) temizle — bos donen taramada
         // (Cloudflare/timeout) o tarihin dolulugunu YANLISLIKLA silmemek icin.
         if (journeys.length > 0) {
           try {
-            const currentOccKeys = new Set(
-              dayTracked.map((j) => `${normalizeObiletOperatorName(j.operator) || j.operator}|${j.time}`)
-            );
             const occRowsForDate = db.prepare(
               "SELECT id, operator, departure_time FROM obilet_occupancy WHERE target_id = ? AND journey_date = ?"
             ).all(target.id, journeyDate);
             for (const o of occRowsForDate) {
-              if (!currentOccKeys.has(`${o.operator}|${o.departure_time}`)) {
+              if (!writtenOccKeys.has(`${o.operator}|${o.departure_time}`)) {
                 db.prepare("DELETE FROM obilet_occupancy WHERE id = ?").run(o.id);
               }
             }
