@@ -8020,9 +8020,18 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
     await gotoAndHandleCloudflare(page, "https://www.obilet.com/");
     await new Promise(r => setTimeout(r, 1200));
     await gotoAndHandleCloudflare(page, `https://www.obilet.com/seferler/${routeId}/${dateIso}?t=${Date.now()}`);
-    await new Promise(r => setTimeout(r, 4500));
-    // Seferler gelmediyse (Cloudflare/timing) bir kez daha bekle.
-    if (!journeyItems.length) { await new Promise(r => setTimeout(r, 6000)); }
+    // Sefer listesi (journeys XHR) SABIT sure yerine GELENE KADAR beklenir (soguk/Cloudflare
+    // sayfalari yavas yukleniyor). Max ~30s, 2s'de bir kontrol; gelince hemen devam.
+    for (let i = 0; i < 16 && !journeyItems.length; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    if (!journeyItems.length) {
+      // Bir kez daha dene (sayfayi yeniden yukle) — bazen ilk yukleme Cloudflare'e takiliyor.
+      await gotoAndHandleCloudflare(page, `https://www.obilet.com/seferler/${routeId}/${dateIso}?t=${Date.now()}`);
+      for (let i = 0; i < 12 && !journeyItems.length; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
 
     // Takip edilen operatorlerin seferleri (id + firma + saat)
     const infos = journeyItems.map((it) => {
@@ -8111,7 +8120,18 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
         ok++;
       } catch (e) { /* tek sefer hatasi digerlerini bozmasin */ }
     }
-    console.log(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso}: ${ok}/${infos.length} sefer GERCEK yazildi (fetch=${viaFetch}, tik=${viaClick}).`);
+    // Sefer-sefer detay: hangisi geldi (saat dolu/toplam), hangisi EKSIK kaldi.
+    const okList = [], eksikList = [];
+    const seenT = new Set();
+    for (const info of infos) {
+      if (seenT.has(info.time)) continue; seenT.add(info.time);
+      const c = seatById.get(info.id) || [...infos].filter(x => x.time === info.time).map(x => seatById.get(x.id)).find(Boolean);
+      if (c) okList.push(`${info.time}=${c.sold}/${c.total}`);
+      else eksikList.push(info.time);
+    }
+    console.log(`[Doluluk İşçisi]   ${dateIso}: ${ok}/${seenT.size} sefer (fetch=${viaFetch},tik=${viaClick})`);
+    console.log(`[Doluluk İşçisi]     ✓ ${okList.join("  ") || "(yok)"}`);
+    if (eksikList.length) console.log(`[Doluluk İşçisi]     ✗ EKSIK: ${eksikList.join(", ")}`);
     return written;
   } finally {
     try { await page.close(); } catch {}
@@ -8136,11 +8156,17 @@ async function runOccupancyWorker() {
       if (!ops.length || ops.includes("*")) continue; // tum-firma cok agir -> atla (liste degeri kalir)
       const dates = buildIsoDateRange(target.date, target.end_date || target.date)
         .filter((d) => d >= today).slice(0, OCCUPANCY_NEAR_DAYS);
+      const hat = `${target.origin}->${target.destination}`;
+      console.log(`[Doluluk İşçisi] ===== HAT BASLADI: ${hat} (${ops.join(",")}) — ${dates.length} gun =====`);
+      let hatOk = 0;
       for (const dateIso of dates) {
-        try { await occupancyForHatDate(target, routeId, ops, dateIso); }
-        catch (e) { console.warn(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso} hata: ${e.message}`); }
-        await new Promise((r) => setTimeout(r, 4000)); // hatlar/tarihler arasi nazik bekleme
+        try {
+          const w = await occupancyForHatDate(target, routeId, ops, dateIso);
+          hatOk += (w || []).length;
+        } catch (e) { console.warn(`[Doluluk İşçisi]   ${dateIso} hata: ${e.message}`); }
+        await new Promise((r) => setTimeout(r, 4000)); // tarihler arasi nazik bekleme
       }
+      console.log(`[Doluluk İşçisi] ===== HAT BITTI: ${hat} — toplam ${hatOk} sefer GERCEK yazildi =====`);
       doneHats++;
     }
   } catch (e) {
