@@ -7041,6 +7041,29 @@ async function fetchSeferRealSeats(page, seferId) {
   return null;
 }
 
+// Yakalanan GOVDE ile /json/sefer POST (tiklamasiz). Govde ilk seferin id'sini iceriyorsa
+// hedef id ile degistirilir. Basarisizsa null.
+async function fetchSeferSeatsWithBody(page, seferId, bodyTemplate, templateId) {
+  const body = (templateId && bodyTemplate && String(bodyTemplate).includes(String(templateId)))
+    ? String(bodyTemplate).split(String(templateId)).join(String(seferId))
+    : (bodyTemplate || "{}");
+  const json = await page.evaluate(async (sid, b) => {
+    try {
+      const r = await fetch(`/json/sefer/${sid}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "accept": "*/*", "x-requested-with": "XMLHttpRequest" },
+        credentials: "include",
+        body: b,
+      });
+      const ct = r.headers.get("content-type") || "";
+      if (!ct.toLowerCase().includes("json")) return { __html: true };
+      return await r.json();
+    } catch (e) { return { __error: String(e && e.message || e) }; }
+  }, seferId, body).catch(() => null);
+  if (!json || json.__error || json.__html) return null;
+  return countSeatsFromSeferJson(json);
+}
+
 // Takip edilen operatorlerin seferlerine GERCEK doluluk ekle (koltuk haritasindan). journeys uzerine
 // realSold/realTotal yazar. idsByKey: operator+saat -> tum listeleme id'leri (mukerrerde gecerli olani sec).
 async function attachRealOccupancy(page, journeys, idsByKey, seatOperators) {
@@ -7955,11 +7978,21 @@ async function occupancyForHatDate(target, routeId, ops, dateIso) {
       }
     } catch {}
   });
+  // Ilk tiklamada tarayicinin /json/sefer POST GOVDE'sini yakala -> kalan seferleri FETCH ile cek.
+  let capturedBody = null, capturedBodyId = null;
+  page.on("request", (req) => {
+    try {
+      const m = req.url().match(/\/json\/sefer\/(\d+)/i);
+      if (m && req.postData()) { capturedBody = req.postData(); capturedBodyId = m[1]; }
+    } catch {}
+  });
   try {
     await gotoAndHandleCloudflare(page, "https://www.obilet.com/");
     await new Promise(r => setTimeout(r, 1200));
     await gotoAndHandleCloudflare(page, `https://www.obilet.com/seferler/${routeId}/${dateIso}?t=${Date.now()}`);
     await new Promise(r => setTimeout(r, 4500));
+    // Seferler gelmediyse (Cloudflare/timing) bir kez daha bekle.
+    if (!journeyItems.length) { await new Promise(r => setTimeout(r, 6000)); }
 
     // Takip edilen operatorlerin seferleri (id + firma + saat)
     const infos = journeyItems.map((it) => {
@@ -7971,10 +8004,18 @@ async function occupancyForHatDate(target, routeId, ops, dateIso) {
 
     if (!infos.length) { console.log(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso}: takip edilen sefer yok.`); return; }
 
-    // Her seferin koltuk haritasini TIKLAMA ile tetikle (tarayicinin kendi POST'u calisir).
+    // Seferleri oku: once yakalanmis GOVDE ile FETCH dene (tiklamasiz, guvenilir).
+    // GOVDE yoksa TIKLA (ilk seferde tarayicinin POST'u calisir, govdeyi yakalar; sonrakiler fetch).
+    let viaFetch = 0, viaClick = 0;
     for (const info of infos) {
-      if (occupancyWorkerRunning === false) break; // durduruldu
+      if (occupancyWorkerRunning === false) break;
       if (seatById.has(info.id)) continue;
+      // 1) FETCH (govde varsa)
+      if (capturedBody) {
+        const c = await fetchSeferSeatsWithBody(page, info.id, capturedBody, capturedBodyId);
+        if (c) { seatById.set(info.id, c); viaFetch++; continue; }
+      }
+      // 2) TIKLA (bootstrap / yedek)
       await page.evaluate((t, firm) => {
         const hasSeatBtn = (el) => Array.from(el.querySelectorAll("button,a,span,div"))
           .some((b) => /koltuk|seç|^sec$|satın al|satin al/i.test((b.innerText || "").trim()));
@@ -7995,9 +8036,17 @@ async function occupancyForHatDate(target, routeId, ops, dateIso) {
           .find((b) => /koltuk|seç|^sec$|satın al|satin al/i.test((b.innerText || "").trim()));
         (btn || best).click();
       }, info.time, info.firma.toLocaleLowerCase("tr-TR")).catch(() => {});
-      await new Promise((r) => setTimeout(r, 2500)); // koltuk haritasi gelsin
+      await new Promise((r) => setTimeout(r, 2500)); // koltuk haritasi + POST gelsin
+      if (seatById.has(info.id)) viaClick++;
+      // Acik koltuk haritasini KAPAT (sonraki tiklama/DOM temiz kalsin)
+      await page.evaluate(() => {
+        const k = Array.from(document.querySelectorAll("button,a,span,div"))
+          .find((b) => { const t = (b.innerText || "").trim(); return t.length < 12 && /^kapat$/i.test(t); });
+        if (k) k.click();
+      }).catch(() => {});
     }
-    await new Promise((r) => setTimeout(r, 1500));
+    await new Promise((r) => setTimeout(r, 1200));
+    if (DEBUG_OBILET_PRICE && capturedBody) console.log(`[Doluluk İşçisi] GOVDE ornek: ${String(capturedBody).substring(0, 160)}`);
 
     // Ayni operator+saat icin birden cok listeleme olabilir -> en dolu (gercek otobus) alinir.
     const bestByKey = new Map(); // normOp|time -> {sold,total}
@@ -8024,7 +8073,7 @@ async function occupancyForHatDate(target, routeId, ops, dateIso) {
         ok++;
       } catch (e) { /* tek sefer hatasi digerlerini bozmasin */ }
     }
-    console.log(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso}: ${ok}/${infos.length} sefer GERCEK doluluk yazildi.`);
+    console.log(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso}: ${ok}/${infos.length} sefer GERCEK yazildi (fetch=${viaFetch}, tik=${viaClick}).`);
   } finally {
     try { await page.close(); } catch {}
   }
