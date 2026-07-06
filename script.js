@@ -1366,11 +1366,10 @@ function renderSidebarUserCard() {
 
   if (dom.sidebarUserName) dom.sidebarUserName.textContent = fullName;
   if (dom.sidebarUserRole) {
-    const roleParts = [];
-    if (u.isAdmin) roleParts.push("Admin");
-    if (u.role) roleParts.push(u.role);
-    if (u.title) roleParts.push(u.title);
-    dom.sidebarUserRole.textContent = roleParts.length ? roleParts.join(" · ") : "Kullanıcı";
+    // Ünvan/rol gösterimi kaldırıldı — yalnızca Admin rozeti kalsın, o da yoksa satır gizlenir.
+    const label = u.isAdmin ? "Admin" : "";
+    dom.sidebarUserRole.textContent = label;
+    dom.sidebarUserRole.style.display = label ? "" : "none";
   }
 
   // Initials avatar: ad ve soyaddan al
@@ -4932,7 +4931,22 @@ function setupSeferTakipPanel() {
     });
     ["stOrigin", "stDestination"].forEach((id) => {
       const el = document.getElementById(id);
-      if (el) el.addEventListener("keydown", (e) => { if (e.key === "Enter") searchSeferTakip(); });
+      if (!el) return;
+      el.addEventListener("keydown", (e) => { if (e.key === "Enter") searchSeferTakip(); });
+      // Kolaylık: doldurulmuş alana tıklayınca metni komple seç — tek tuşla değiştirilebilsin
+      // (kullanıcı elle silmek zorunda kalmasın). Boş alana dokunma.
+      const selectAll = () => { if (el.value) setTimeout(() => { try { el.select(); } catch (_) {} }, 0); };
+      el.addEventListener("focus", selectAll);
+      el.addEventListener("click", selectAll);
+    });
+    // Yön değiştir: Kalkış ↔ Varış yer değiştir ve otomatik tekrar ara.
+    const swapBtn = document.getElementById("stSwapBtn");
+    if (swapBtn) swapBtn.addEventListener("click", () => {
+      const o = document.getElementById("stOrigin");
+      const d = document.getElementById("stDestination");
+      if (!o || !d) return;
+      const tmp = o.value; o.value = d.value; d.value = tmp;
+      searchSeferTakip();
     });
     // Firma listesini bir kez doldur (bos aramayla).
     searchSeferTakip(true);
