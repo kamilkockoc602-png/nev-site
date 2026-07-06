@@ -7059,15 +7059,13 @@ app.post("/api/obilet/targets/:id/seatmap-probe", requireAuth, requireAdmin, asy
   try {
     const target = db.prepare("SELECT * FROM obilet_targets WHERE id = ?").get(parseInt(req.params.id, 10));
     if (!target) return res.status(404).json({ message: "Hat bulunamadi." });
-    if (obiletTaskRunning) return res.status(409).json({ message: "Su an bir tarama calisiyor — bitince tekrar dene." });
     const routeId = String(target.route_id || "").trim();
     if (!/^\d+-\d+$/.test(routeId)) return res.status(400).json({ message: "Bu hatta route_id yok, koltuk haritasi cekilemiyor." });
     const dateIso = String(req.query.date || target.date || "").trim();
     const time = String(req.query.time || "").trim();
-    obiletTaskRunning = true;
-    let result;
-    try { result = await probeObiletSeatMap(routeId, dateIso, time); }
-    finally { obiletTaskRunning = false; }
+    // NOT: obiletTaskRunning kilidine DOKUNMUYORUZ — calisan taramanin kilidini bozmamak icin.
+    // Probe tek hafif sayfa acar (tek sefer), tam taramaya gore dusuk yuk; paralel calisabilir.
+    const result = await probeObiletSeatMap(routeId, dateIso, time);
     const listSold = (result.listTotal != null && result.listAvail != null) ? result.listTotal - result.listAvail : null;
     res.json({
       ok: true,
