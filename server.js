@@ -7040,6 +7040,14 @@ async function probeObiletSeatMap(routeId, dateIso, timeFilter = "", operatorFil
       }
     } catch {}
   });
+  // Calisan /json/sefer isteginin method+header'larini logla (ileride fetch'i birebir taklit icin).
+  page.on("request", (req) => {
+    try {
+      if (/\/json\/sefer\//i.test(req.url())) {
+        console.log(`[SeatProbe] SEFER REQUEST ${req.method()} header: ${JSON.stringify(req.headers()).substring(0, 450)}`);
+      }
+    } catch {}
+  });
 
   try {
     const pageUrl = `https://www.obilet.com/seferler/${routeId}/${dateIso}?t=${Date.now()}`;
@@ -7071,38 +7079,18 @@ async function probeObiletSeatMap(routeId, dateIso, timeFilter = "", operatorFil
     if (!chosen) chosen = atTime[0] || infos[0] || null;
     if (chosen) {
       result.matchedFirma = chosen.firma;
-      result.clickedSeferId = chosen.id != null ? String(chosen.id) : null;
-      console.log(`[SeatProbe] SECILEN firma: ${chosen.firma} ${chosen.time}`);
-
-      // Secilen firmanin O SAATTEKI TUM listelemelerini SVG parser ile gercek koltuk say.
-      // (Ayni sefer birden cok kez listelenebilir; gecerli SVG doneni gercek otobustur.)
-      const firmListings = atTime.filter((x) => x.firma === chosen.firma && x.id != null);
-      let bestReal = null;
-      for (const lst of firmListings) {
-        const real = await fetchSeferRealSeats(page, lst.id);
-        const listSold = (lst.total != null && lst.avail != null) ? lst.total - lst.avail : null;
-        if (real) {
-          console.log(`[SeatProbe] id=${lst.id}: LISTE ${listSold}/${lst.total} dolu  →  GERCEK(SVG) ${real.sold}/${real.total} dolu (bos=${real.empty})`);
-          // En yuksek dolulugu (gercek otobus) sakla — hayalet listeler genelde dusuk/HTML doner.
-          if (!bestReal || real.sold > bestReal.sold) { bestReal = real; result.clickedSeferId = String(lst.id); result.listTotal = lst.total; result.listAvail = lst.avail; }
-        } else {
-          console.log(`[SeatProbe] id=${lst.id}: LISTE ${listSold}/${lst.total} dolu  →  GERCEK cekilemedi (HTML/gecersiz — muhtemelen hayalet listeleme)`);
-        }
-        await new Promise((r) => setTimeout(r, 500));
-      }
-      if (bestReal) {
-        result.soldRealSvg = bestReal.sold;
-        result.totalRealSvg = bestReal.total;
-        console.log(`[SeatProbe] >>> SVG SONUC: gercek ${bestReal.sold}/${bestReal.total} dolu (liste bu seferde ${(result.listTotal != null && result.listAvail != null) ? result.listTotal - result.listAvail : "?"} diyordu)`);
-      }
-    } else {
-      console.log(`[SeatProbe] Liste'den sefer secilemedi (journeyItems bos olabilir). Tiklama yontemine dusulecek.`);
+      result.listTotal = chosen.total; result.listAvail = chosen.avail;
+      console.log(`[SeatProbe] SECILEN firma: ${chosen.firma} ${chosen.time} — liste: ${(chosen.total != null && chosen.avail != null) ? chosen.total - chosen.avail : "?"}/${chosen.total}`);
     }
 
-    // Ek olarak: DOM'dan da oku (koltuk haritasi acilirsa). Firma-duyarli tiklama: karti bul, tikla.
+    // Koltuk haritasini TIKLAMA ile ac (fetch HTML donduruyor; tarayicinin kendi AJAX'i /json/sefer'i
+    // getiriyor, response listener yakalar). Kart secimi: icinde KOLTUK/SEC butonu OLAN + saat iceren
+    // + (firma verildiyse) firma eslesen kart. Filtre cubugu vb. elenir (koltuk butonu yok).
     result.clicked = await page.evaluate((t, firm) => {
-      const cards = Array.from(document.querySelectorAll("div,li,article"))
-        .filter((el) => /\d{2}:\d{2}/.test(el.innerText || "") && (el.innerText || "").length < 600);
+      const hasSeatBtn = (el) => Array.from(el.querySelectorAll("button,a,span,div"))
+        .some((b) => /koltuk|koltuğa|seç|^sec$|satın al|satin al/i.test((b.innerText || "").trim()));
+      let cards = Array.from(document.querySelectorAll("div,li,article"))
+        .filter((el) => (el.innerText || "").length < 700 && /\d{2}:\d{2}/.test(el.innerText || "") && hasSeatBtn(el));
       const matchFirm = (el) => {
         if (!firm) return true;
         const txt = (el.innerText || "").toLowerCase();
@@ -7110,18 +7098,33 @@ async function probeObiletSeatMap(routeId, dateIso, timeFilter = "", operatorFil
         return Array.from(el.querySelectorAll("img")).some((im) =>
           ((im.getAttribute("alt") || "") + (im.getAttribute("title") || "")).toLowerCase().includes(firm));
       };
-      let target = null;
       const timed = t ? cards.filter((el) => (el.innerText || "").includes(t)) : cards;
-      target = timed.find(matchFirm) || timed[0] || cards[0];
-      if (!target) return "sefer-bulunamadi";
-      const btn = Array.from(target.querySelectorAll("button,a,div"))
-        .find((b) => /koltuk|seç|sec\b|devam|satın|satin/i.test(b.innerText || ""));
-      (btn || target).click();
-      return (target.innerText || "").replace(/\s+/g, " ").trim().slice(0, 80);
+      const target = (firm && timed.find(matchFirm)) || timed[0] || null;
+      if (!target) return "uygun-kart-yok";
+      // En kucuk (en ic) uygun karti sec — buyuk kapsayicilar yerine tek sefer karti.
+      let best = target;
+      const inner = cards.filter((c) => target.contains(c) && c !== target);
+      for (const c of inner) if ((c.innerText || "").includes(t || "")) { best = c; break; }
+      const btn = Array.from(best.querySelectorAll("button,a,span,div"))
+        .find((b) => /koltuk|seç|^sec$|satın al|satin al/i.test((b.innerText || "").trim()));
+      (btn || best).click();
+      return (best.innerText || "").replace(/\s+/g, " ").trim().slice(0, 90);
     }, timeFilter, opKey).catch((e) => "click-hata:" + e.message);
     console.log(`[SeatProbe] Tiklanan kart: ${result.clicked}`);
 
-    await new Promise(r => setTimeout(r, 7000)); // koltuk haritasi acilsin/render olsun
+    await new Promise(r => setTimeout(r, 7000)); // koltuk haritasi acilsin + /json/sefer AJAX gelsin
+
+    // Yakalanan /json/sefer yanit(lar)ini SVG parser ile say.
+    for (const sr of seatResponses) {
+      const c = countSeatsFromSeferJson(sr.data);
+      if (c) {
+        console.log(`[SeatProbe] SVG say (${sr.url}): dolu=${c.sold} bos=${c.empty} toplam=${c.total} bilinmeyen=${c.unknown}`);
+        if (result.soldRealSvg == null || c.sold > result.soldRealSvg) { result.soldRealSvg = c.sold; result.totalRealSvg = c.total; }
+      }
+    }
+    if (result.soldRealSvg != null) {
+      console.log(`[SeatProbe] >>> SVG SONUC: gercek ${result.soldRealSvg}/${result.totalRealSvg} dolu (liste bu firmada ${(result.listTotal != null && result.listAvail != null) ? result.listTotal - result.listAvail : "?"} diyordu)`);
+    }
 
     // 1) ONCELIK: acilan koltuk haritasini DOM'dan oku. GERCEK koltuk hucreleri class'inda
     // "single-seat" ya da "not-single-seat" iceriyor (kesif logundan). Fiyat etiketleri/yapisal
