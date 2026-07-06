@@ -3013,7 +3013,57 @@ function buildPermissions(fullAccess) {
   return permissions;
 }
 
+// "DD.MM.YYYY HH:MM:SS" (Istanbul) damgasini Date'e cevir (tarayici da Istanbul saatinde).
+function parseTrStamp(s) {
+  const m = String(s || "").match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
+  if (!m) return null;
+  return new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]);
+}
+
+// Son aktifligi insan-okur metne cevir + "su an aktif" durumu (90 sn esik).
+function activityStatus(lastSeen) {
+  const d = parseTrStamp(lastSeen);
+  if (!d) return { text: "Hiç giriş yapmadı", online: false, muted: true };
+  let diff = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (diff < 0) diff = 0;
+  if (diff < 90) return { text: "Şu an aktif", online: true };
+  if (diff < 3600) return { text: `${Math.floor(diff / 60)} dakika önce`, online: false };
+  if (diff < 86400) {
+    const h = Math.floor(diff / 3600);
+    const mm = Math.floor((diff % 3600) / 60);
+    return { text: mm ? `${h} saat ${mm} dk önce` : `${h} saat önce`, online: false };
+  }
+  return { text: `${Math.floor(diff / 86400)} gün önce`, online: false };
+}
+
+// Bir aktiflik hucresini doldur (yesil nokta = su an aktif).
+function renderActivityCell(cell, lastSeen) {
+  const st = activityStatus(lastSeen);
+  cell.title = lastSeen || "Kayit yok";
+  if (st.online) {
+    cell.innerHTML = '<span class="status-badge status-active">🟢 Şu an aktif</span>';
+  } else {
+    cell.innerHTML = `<span class="subtle"${st.muted ? "" : ' style="color:inherit"'}>${st.text}</span>`;
+  }
+}
+
+// Admin panelindeki aktiflik hucrelerini periyodik tazele (tam re-render yapmadan,
+// acik editorleri bozmadan). Tablo DOM'da degilse interval'i durdur.
+async function refreshUserActivityCells() {
+  const rowsEl = document.getElementById("userRows");
+  if (!rowsEl) { if (state.adminUsersTimer) { clearInterval(state.adminUsersTimer); state.adminUsersTimer = null; } return; }
+  try {
+    const result = await apiFetch("/api/admin/users");
+    const map = new Map(result.users.map((u) => [String(u.id), u.lastSeen]));
+    rowsEl.querySelectorAll("tr[data-user-id]").forEach((tr) => {
+      const cell = tr.querySelector(".lastseen");
+      if (cell && map.has(tr.dataset.userId)) renderActivityCell(cell, map.get(tr.dataset.userId));
+    });
+  } catch (e) { /* sessiz — arka plan tazeleme istegi bozmasin */ }
+}
+
 async function renderAdminPermissions() {
+  if (state.adminUsersTimer) { clearInterval(state.adminUsersTimer); state.adminUsersTimer = null; }
   if (!state.currentUser?.isAdmin) {
     dom.permissionAdminArea.innerHTML = '<p class="subtle">Bu bolum sadece admin icin aciktir.</p>';
     return;
@@ -3040,7 +3090,7 @@ async function renderAdminPermissions() {
           <h5>Kullanicilar ve Yetkiler</h5>
           <table class="data-table">
             <thead>
-              <tr><th>Kullanici</th><th>Durum</th><th>Olusturma</th><th>Islem</th></tr>
+              <tr><th>Kullanici</th><th>Durum</th><th>Son Aktiflik</th><th>Olusturma</th><th>Islem</th></tr>
             </thead>
             <tbody id="userRows"></tbody>
           </table>
@@ -3052,6 +3102,8 @@ async function renderAdminPermissions() {
 
     state.usersCache.forEach((user) => {
       const row = dom.templateRow.content.cloneNode(true);
+      const tr = row.querySelector("tr");
+      if (tr) tr.dataset.userId = user.id;
       row.querySelector(".username").textContent = user.username;
       row.querySelector(".created").textContent = user.createdAt;
 
@@ -3059,6 +3111,9 @@ async function renderAdminPermissions() {
       statusCell.innerHTML = user.isActive
         ? '<span class="status-badge status-active">Aktif</span>'
         : '<span class="status-badge status-passive">Pasif</span>';
+
+      const seenCell = row.querySelector(".lastseen");
+      if (seenCell) renderActivityCell(seenCell, user.lastSeen);
 
       const toggleBtn = row.querySelector(".toggleActiveBtn");
       toggleBtn.textContent = user.isActive ? "Pasif Et" : "Aktif Et";
@@ -3086,6 +3141,9 @@ async function renderAdminPermissions() {
 
       rows.appendChild(row);
     });
+
+    // Aktiflik hucrelerini her 20 sn'de bir tazele ("su an aktif / X dk once" canli kalsin).
+    state.adminUsersTimer = setInterval(refreshUserActivityCells, 20000);
 
     const newUserForm = document.getElementById("newUserForm");
     const newUserMsg = document.getElementById("newUserMsg");

@@ -559,6 +559,7 @@ try { db.exec("ALTER TABLE obilet_targets ADD COLUMN created_by TEXT NOT NULL DE
 try { db.exec("ALTER TABLE users ADD COLUMN full_name TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE users ADD COLUMN title TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+try { db.exec("ALTER TABLE users ADD COLUMN last_seen TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 
 // Fiyat degisikligi gecmisi tablosu: her bir onaylanmis fiyat degisikligini kayit altina alir.
 // Raporlama ekraninda kronolojik liste olarak gosterilir.
@@ -2343,6 +2344,7 @@ function sanitizeUser(row) {
     isActive: Boolean(row.is_active),
     permissions: JSON.parse(row.permissions || "{}"),
     createdAt: row.created_at,
+    lastSeen: row.last_seen || "",
   };
 }
 
@@ -2375,6 +2377,9 @@ function getAuthUser(req) {
   return { token, user: sanitizeUser(user) };
 }
 
+// Kullanici basina son last_seen yazim zamani (ms) — throttle icin bellek ici.
+const lastSeenWrites = new Map();
+
 function requireAuth(req, res, next) {
   const auth = getAuthUser(req);
   if (!auth) {
@@ -2386,6 +2391,18 @@ function requireAuth(req, res, next) {
     res.status(403).json({ message: "Hesabin pasif durumda." });
     return;
   }
+
+  // Son aktiflik damgasi: her yetkili istekte guncelle (admin panelinde "su an aktif / X dk once").
+  // Disk yazimini azaltmak icin kullanici basina 15 sn throttle.
+  try {
+    const uid = auth.user.id;
+    const nowMs = Date.now();
+    const prev = lastSeenWrites.get(uid) || 0;
+    if (nowMs - prev >= 15000) {
+      lastSeenWrites.set(uid, nowMs);
+      db.prepare("UPDATE users SET last_seen = ? WHERE id = ?").run(nowStamp(), uid);
+    }
+  } catch (e) { /* yok say — aktiflik takibi asla istegi bozmasin */ }
 
   req.auth = auth;
   next();
@@ -2453,7 +2470,7 @@ app.get("/api/me", requireAuth, (req, res) => {
 app.get("/api/admin/users", requireAuth, requireAdmin, (req, res) => {
   const rows = db
     .prepare(
-      "SELECT id, username, full_name, role, title, is_admin, is_active, permissions, created_at FROM users ORDER BY is_admin DESC, username ASC"
+      "SELECT id, username, full_name, role, title, is_admin, is_active, permissions, created_at, last_seen FROM users ORDER BY is_admin DESC, username ASC"
     )
     .all();
 
