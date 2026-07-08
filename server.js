@@ -7041,22 +7041,36 @@ function seatIsSold(st) {
 }
 
 // GERCEK doluluk: /json/sefer/{id} yaniti { bus: "<svg ...>" } seklinde koltuk haritasini SVG olarak verir.
-// Koltuk hucreleri class'inda "single-seat"/"not-single-seat" gecer; male/female = DOLU, available = BOS.
-// SVG string'i regex ile sayar. Basarisizsa null (yanit HTML ise / SVG yoksa).
+// GERCEK oBilet sinif semasi (canli teshis ile dogrulandi, 2026-07):
+//   "available active [not-]single-seat" = BOS
+//   "male [not-]single-seat"             = DOLU (erkek)
+//   "female [not-]single-seat"           = DOLU (kadin)
+//   "single-seats-warning warning ..."   = KOLTUK DEGIL (uyari ogesi) -> HARIC TUTULUR
+// Onemli: hem "single-seat" hem "not-single-seat" GERCEK koltuktur (2+1'in tekli ve ikili tarafi).
+// TOPLAM = dolu + bos (yalnizca gercek koltuklar; uyari/taninmayan ogeler sayilmaz -> yuzde dogru cikar).
+// Kismi/eksik harita (is-partial-layout) veya anormal derecede az koltuk -> GUVENILMEZ, null doner
+// (yanlis DUSUK doluluk yazip kullaniciyi yaniltmaktansa hic yazmamak dogru; onceki gercek deger korunur).
 function countSeatsFromSeferJson(json) {
-  const svg = json && typeof json.bus === "string" ? json.bus : "";
+  const svg = (json && typeof json.bus === "string") ? json.bus
+    : (json && json.data && typeof json.data.bus === "string" ? json.data.bus : "");
   if (!svg || !/single-seat/i.test(svg)) return null;
-  const re = /class="([^"]*single-seat[^"]*)"/gi;
-  let m, total = 0, sold = 0, empty = 0, unknown = 0;
-  while ((m = re.exec(svg)) !== null) {
+  let sold = 0, empty = 0, other = 0;
+  for (const m of svg.matchAll(/class="([^"]*single-seat[^"]*)"/gi)) {
     const cls = m[1].toLowerCase();
-    total++;
-    if (/\b(male|female|erkek|kadin)\b/.test(cls)) sold++;
-    else if (/\bavailable\b/.test(cls)) empty++;
-    else unknown++;
+    if (/\bavailable\b/.test(cls)) empty++;
+    else if (/\b(male|female|erkek|kadin)\b/.test(cls)) sold++;
+    else other++; // "single-seats-warning" vb. -> koltuk DEGIL, sayima katma
   }
+  const total = sold + empty; // yalnizca gercek koltuklar
   if (total === 0) return null;
-  return { total, sold, empty, unknown };
+
+  const partial = json?.["is-partial-layout"] === true || json?.data?.["is-partial-layout"] === true;
+  // Sehirlerarasi otobusler tipik 27-46 koltuk. total < 15 veya kismi duzen => eksik/bozuk harita.
+  if (partial || total < 15) {
+    if (DEBUG_OBILET_PRICE) console.log(`[Doluluk] Guvenilmez koltuk haritasi atlandi: dolu=${sold} bos=${empty} toplam=${total} partial=${partial}`);
+    return null;
+  }
+  return { total, sold, empty, unknown: other, partial: false };
 }
 
 // Bir seferin GERCEK koltuk sayimini /json/sefer/{id}'den al. oBilet bunu POST + json ister
