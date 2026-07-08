@@ -679,6 +679,42 @@ CREATE TABLE IF NOT EXISTS obilet_station_ids (
 );
 `);
 
+// ===================== TALEP RADARI (Otonom Yogunluk Analizi) =====================
+// oBilet Takip sisteminden (obilet_targets / obilet_occupancy) TAMAMEN BAGIMSIZ ayri altyapi.
+// analysis_routes  : sistemin hazir "populer rota" havuzu (boot'ta seed'lenir, route_id backfill'lenir).
+// analysis_occupancy_history : her tarama olcumu APPEND edilir (UZERINE YAZILMAZ) — boylece
+//   ayni seferin zaman icindeki dolulugu (gun-deseni / talep trendi) cikarilabilir.
+db.exec(`
+CREATE TABLE IF NOT EXISTS analysis_routes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  origin TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  route_id TEXT NOT NULL DEFAULT '',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  is_seed INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  UNIQUE(origin, destination)
+);
+CREATE TABLE IF NOT EXISTS analysis_occupancy_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  route_ref TEXT NOT NULL,
+  origin TEXT NOT NULL DEFAULT '',
+  destination TEXT NOT NULL DEFAULT '',
+  journey_date TEXT NOT NULL,
+  operator TEXT NOT NULL,
+  departure_time TEXT NOT NULL,
+  total_seats INTEGER,
+  available_seats INTEGER,
+  occupancy_percent INTEGER,
+  source TEXT NOT NULL DEFAULT 'gercek',
+  measured_at TEXT NOT NULL,
+  measured_at_iso TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_analysis_hist_route_date ON analysis_occupancy_history(route_ref, journey_date);
+CREATE INDEX IF NOT EXISTS idx_analysis_hist_measured ON analysis_occupancy_history(measured_at_iso);
+CREATE INDEX IF NOT EXISTS idx_analysis_hist_jdate ON analysis_occupancy_history(journey_date);
+`);
+
 const pricingItemColumns = db.prepare("PRAGMA table_info(pricing_upload_items)").all();
 const hasRowDirectionColumn = pricingItemColumns.some((col) => col.name === "row_direction");
 if (!hasRowDirectionColumn) {
@@ -2417,6 +2453,17 @@ function requireAdmin(req, res, next) {
     return;
   }
   next();
+}
+
+// Menu-key bazli yetki: admin her seye erisir; degilse kullanicinin permissions[menuKey]'i truthy olmali.
+// requireAuth'tan SONRA middleware olarak kullanilir: app.get("/api/x", requireAuth, requirePermission("demand"), ...)
+function requirePermission(menuKey) {
+  return (req, res, next) => {
+    const u = req.auth?.user;
+    if (!u) { res.status(401).json({ message: "Oturum gecersiz." }); return; }
+    if (u.isAdmin || (u.permissions && u.permissions[menuKey])) { next(); return; }
+    res.status(403).json({ message: "Bu bolum icin yetkiniz yok." });
+  };
 }
 
 app.post("/api/login", (req, res) => {
@@ -7467,6 +7514,209 @@ app.get("/api/obilet/occupancy", requireAuth, (req, res) => {
   }
 });
 
+// ===================== TALEP RADARI API'LERI (otonom yogunluk analizi) =====================
+const WEEKDAY_TR = ["Pazar", "Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi"];
+function isoWeekdayTr(dateIso) {
+  const m = String(dateIso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return { idx: -1, name: "" };
+  const idx = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], 12, 0, 0)).getUTCDay();
+  return { idx, name: WEEKDAY_TR[idx] };
+}
+
+// Ana analiz: gecmis olcumlerden her seferin EN GUNCEL dolulugunu alip yogun/bos gunleri cikarir.
+app.get("/api/analysis/demand", requireAuth, requirePermission("demand"), (req, res) => {
+  try {
+    const today = todayIsoInIstanbul();
+    let days = parseInt(req.query.days || String(ANALYSIS_HORIZON_DAYS), 10);
+    if (!Number.isFinite(days) || days < 1) days = ANALYSIS_HORIZON_DAYS;
+    days = Math.min(days, 60);
+    const endIso = shiftIsoDate(today, days - 1);
+    const routeRef = String(req.query.routeRef || "").trim();
+    let high = parseInt(req.query.high || "80", 10); if (!Number.isFinite(high)) high = 80;
+    let low = parseInt(req.query.low || "50", 10); if (!Number.isFinite(low)) low = 50;
+
+    const cond = ["journey_date >= ?", "journey_date <= ?"];
+    const params = [today, endIso];
+    if (routeRef) { cond.push("route_ref = ?"); params.push(routeRef); }
+    const raw = db.prepare(`
+      SELECT route_ref, origin, destination, journey_date, operator, departure_time,
+             total_seats, available_seats, occupancy_percent, measured_at, measured_at_iso
+        FROM analysis_occupancy_history
+       WHERE ${cond.join(" AND ")}
+    `).all(...params);
+
+    // Her sefer kimligi (route_ref|date|operator|time) icin EN GUNCEL olcumu al (append-only tablo).
+    const latest = new Map();
+    for (const r of raw) {
+      const key = `${r.route_ref}|${r.journey_date}|${r.operator}|${r.departure_time}`;
+      const prev = latest.get(key);
+      if (!prev || String(r.measured_at_iso) > String(prev.measured_at_iso)) latest.set(key, r);
+    }
+    const seferler = [...latest.values()];
+
+    const count = seferler.length;
+    const withCap = seferler.filter((s) => (s.total_seats || 0) > 0);
+    const avgOccupancy = count ? Math.round(seferler.reduce((a, s) => a + (s.occupancy_percent || 0), 0) / count) : 0;
+    const highCount = seferler.filter((s) => (s.occupancy_percent || 0) >= high).length;
+    const lowCount = withCap.filter((s) => (s.occupancy_percent || 0) < low).length;
+    let lastMeasuredAt = "";
+    for (const s of seferler) if (String(s.measured_at_iso) > lastMeasuredAt) lastMeasuredAt = String(s.measured_at_iso);
+
+    // Rota bazli skor + her rota icin gun kirilimlari (hangi gun yogun/bos).
+    const byRouteMap = new Map();
+    for (const s of seferler) {
+      if (!byRouteMap.has(s.route_ref)) byRouteMap.set(s.route_ref, { route_ref: s.route_ref, origin: s.origin, destination: s.destination, list: [] });
+      byRouteMap.get(s.route_ref).list.push(s);
+    }
+    const routes = [...byRouteMap.values()].map((r) => {
+      const c = r.list.length;
+      const avg = c ? Math.round(r.list.reduce((a, s) => a + (s.occupancy_percent || 0), 0) / c) : 0;
+      const dm = new Map();
+      for (const s of r.list) {
+        if (!dm.has(s.journey_date)) dm.set(s.journey_date, []);
+        dm.get(s.journey_date).push(s.occupancy_percent || 0);
+      }
+      const perDate = [...dm.entries()].map(([date, arr]) => ({
+        date, weekday: isoWeekdayTr(date).name,
+        avg: Math.round(arr.reduce((a, v) => a + v, 0) / arr.length), seferler: arr.length,
+      })).sort((a, b) => a.date.localeCompare(b.date));
+      const byAvg = [...perDate].sort((a, b) => b.avg - a.avg);
+      return {
+        route_ref: r.route_ref, origin: r.origin, destination: r.destination,
+        seferCount: c, avgOccupancy: avg,
+        busiestDate: byAvg[0] || null, quietestDate: byAvg[byAvg.length - 1] || null,
+        perDate,
+      };
+    }).sort((a, b) => b.avgOccupancy - a.avgOccupancy);
+
+    // Genel: gelecek tarihlerin ortalama dolulugu (hangi gunler yogun).
+    const dateMap = new Map();
+    for (const s of seferler) {
+      if (!dateMap.has(s.journey_date)) dateMap.set(s.journey_date, []);
+      dateMap.get(s.journey_date).push(s.occupancy_percent || 0);
+    }
+    const byDate = [...dateMap.entries()].map(([date, arr]) => ({
+      date, weekday: isoWeekdayTr(date).name,
+      avg: Math.round(arr.reduce((a, v) => a + v, 0) / arr.length), seferler: arr.length,
+    })).sort((a, b) => a.date.localeCompare(b.date));
+
+    // Haftanin gunu deseni (Pazartesi-basli).
+    const wdMap = new Map();
+    for (const s of seferler) {
+      const wd = isoWeekdayTr(s.journey_date);
+      if (wd.idx < 0) continue;
+      if (!wdMap.has(wd.idx)) wdMap.set(wd.idx, []);
+      wdMap.get(wd.idx).push(s.occupancy_percent || 0);
+    }
+    const byWeekday = [1, 2, 3, 4, 5, 6, 0].map((i) => {
+      const arr = wdMap.get(i) || [];
+      return { idx: i, name: WEEKDAY_TR[i], avg: arr.length ? Math.round(arr.reduce((a, v) => a + v, 0) / arr.length) : null, seferler: arr.length };
+    });
+
+    // En yogun / en bos seferler.
+    const enriched = seferler.map((s) => ({
+      route_ref: s.route_ref, origin: s.origin, destination: s.destination,
+      journey_date: s.journey_date, weekday: isoWeekdayTr(s.journey_date).name,
+      operator: s.operator, departure_time: s.departure_time,
+      total_seats: s.total_seats || 0, sold: (s.total_seats || 0) - (s.available_seats || 0),
+      occupancy_percent: s.occupancy_percent || 0, measured_at: s.measured_at,
+    }));
+    const topFull = [...enriched].sort((a, b) => b.occupancy_percent - a.occupancy_percent).slice(0, 25);
+    const topEmpty = [...enriched].filter((s) => s.total_seats > 0).sort((a, b) => a.occupancy_percent - b.occupancy_percent).slice(0, 25);
+
+    res.json({
+      ok: true, today, days, high, low,
+      summary: { count, avgOccupancy, highCount, lowCount, routeCount: routes.length, lastMeasuredAt },
+      routes, byDate, byWeekday, topFull, topEmpty,
+      workerRunning: analysisWorkerRunning,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Analiz alınamadı." });
+  }
+});
+
+// Rota havuzu listesi + kapsam (her rota kac sefer olculdu, en son ne zaman).
+app.get("/api/analysis/routes", requireAuth, requirePermission("demand"), (req, res) => {
+  try {
+    const today = todayIsoInIstanbul();
+    const rows = db.prepare("SELECT * FROM analysis_routes ORDER BY origin, destination").all();
+    const covStmt = db.prepare(`
+      SELECT COUNT(DISTINCT journey_date || '|' || operator || '|' || departure_time) AS seferler,
+             MAX(measured_at_iso) AS last_measured
+        FROM analysis_occupancy_history
+       WHERE route_ref = ? AND journey_date >= ?
+    `);
+    const out = rows.map((r) => {
+      const cov = covStmt.get(r.route_id, today) || {};
+      return { ...r, coverage: cov.seferler || 0, lastMeasured: cov.last_measured || "" };
+    });
+    res.json({ ok: true, routes: out, workerRunning: analysisWorkerRunning });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Rotalar alınamadı." });
+  }
+});
+
+// Havuza yeni rota ekle (sehir cifti; route_id otomatik cozulur).
+app.post("/api/analysis/routes", requireAuth, requirePermission("demand"), (req, res) => {
+  try {
+    const origin = String(req.body?.origin || "").trim();
+    const destination = String(req.body?.destination || "").trim();
+    if (!origin || !destination) return res.status(400).json({ message: "Kalkis ve varis zorunlu." });
+    const rid = buildObiletRouteIdLocal(origin, destination) || "";
+    db.prepare(`
+      INSERT INTO analysis_routes (origin, destination, route_id, is_active, is_seed, created_at)
+      VALUES (?, ?, ?, 1, 0, ?)
+      ON CONFLICT(origin, destination) DO UPDATE SET is_active = 1, route_id = CASE WHEN TRIM(analysis_routes.route_id) = '' THEN excluded.route_id ELSE analysis_routes.route_id END
+    `).run(origin, destination, rid, nowStamp());
+    res.json({ ok: true, route_id: rid, resolved: Boolean(rid) });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Rota eklenemedi." });
+  }
+});
+
+// Rota aktif/pasif.
+app.patch("/api/analysis/routes/:id", requireAuth, requirePermission("demand"), (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const isActive = req.body?.isActive ? 1 : 0;
+    db.prepare("UPDATE analysis_routes SET is_active = ? WHERE id = ?").run(isActive, id);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Guncellenemedi." });
+  }
+});
+
+// Rota sil.
+app.delete("/api/analysis/routes/:id", requireAuth, requirePermission("demand"), (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    db.prepare("DELETE FROM analysis_routes WHERE id = ?").run(id);
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Silinemedi." });
+  }
+});
+
+// Motor durumu (worker calisiyor mu, kac olcum var).
+app.get("/api/analysis/status", requireAuth, requirePermission("demand"), (req, res) => {
+  try {
+    const today = todayIsoInIstanbul();
+    const routeCount = db.prepare("SELECT COUNT(*) c FROM analysis_routes WHERE is_active = 1").get().c;
+    const measurements = db.prepare("SELECT COUNT(*) c FROM analysis_occupancy_history WHERE journey_date >= ?").get(today).c;
+    const last = db.prepare("SELECT MAX(measured_at_iso) m FROM analysis_occupancy_history").get().m || "";
+    res.json({ ok: true, workerRunning: analysisWorkerRunning, routeCount, measurements, lastMeasured: last, horizonDays: ANALYSIS_HORIZON_DAYS });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Durum alınamadı." });
+  }
+});
+
+// Manuel tarama tetikle (admin) — arka planda calisir.
+app.post("/api/analysis/scan", requireAuth, requireAdmin, (req, res) => {
+  if (analysisWorkerRunning) return res.status(409).json({ message: "Tarama zaten calisiyor." });
+  runAnalysisWorker().catch(() => null);
+  res.json({ ok: true, message: "Tarama baslatildi (arka planda calisiyor)." });
+});
+
 // Sefer bazli fiyat degisiklik gecmisi + doluluk hesaplar. Hem API hem bot kullanir.
 function computeJourneyTracking({ date, origin, destination, operator } = {}) {
   const norm = (s) => String(s || "").toLocaleLowerCase("tr-TR").trim();
@@ -8189,6 +8439,236 @@ async function runOccupancyWorker() {
 // Ilk tur: server acildiktan 2 dk sonra (fiyat taramasinin ilk turuna cakismasin), sonra her 15 dk.
 setTimeout(() => { runOccupancyWorker().catch(() => null); }, 2 * 60 * 1000);
 setInterval(() => { runOccupancyWorker().catch(() => null); }, OCCUPANCY_WORKER_INTERVAL_MS);
+
+// ===================== TALEP RADARI MOTORU (otonom yogunluk analizi) =====================
+// oBilet Takip'ten (obilet_targets / obilet_occupancy) BAGIMSIZ. Hazir populer rota havuzunu
+// (analysis_routes) arka planda tarar, her seferin GERCEK dolulugunu (koltuk haritasi) TUM
+// firmalar icin okur ve analysis_occupancy_history'ye APPEND eder. Mevcut fiyat/doluluk
+// iscilerine DOKUNMAZ; kendi reentrancy kilidi + nazik tempo ile calisir.
+let analysisWorkerRunning = false;
+const ANALYSIS_WORKER_ENABLED = true;
+const ANALYSIS_HORIZON_DAYS = 15;                        // gelecek 15 gun
+const ANALYSIS_MAX_SEFER_PER_DATE = 30;                  // tarih basina en fazla sefer (tum firmalar)
+const ANALYSIS_WORKER_INTERVAL_MS = 3 * 60 * 60 * 1000;  // 3 saat
+const ANALYSIS_HISTORY_RETENTION_DAYS = 120;             // gecmis olcumleri bu kadar gun sakla
+
+// Hazir populer rota havuzu. Sehirler OBILET_STATION_IDS_SEED'de tanimli olmali (route_id otomatik cikar).
+const ANALYSIS_SEED_ROUTES = [
+  ["Adana", "Ankara"], ["Adana", "İstanbul"], ["Adana", "Gaziantep"],
+  ["Gaziantep", "İstanbul"], ["Gaziantep", "Ankara"],
+  ["Diyarbakır", "İstanbul"], ["Diyarbakır", "Ankara"],
+  ["Şanlıurfa", "İstanbul"], ["Van", "İstanbul"], ["Van", "Ankara"],
+  ["Mersin", "Ankara"], ["Mersin", "İstanbul"],
+  ["Kayseri", "İstanbul"], ["Hatay", "İstanbul"], ["Adıyaman", "Ankara"],
+];
+
+const insertAnalysisHistStmt = db.prepare(`
+  INSERT INTO analysis_occupancy_history
+    (route_ref, origin, destination, journey_date, operator, departure_time,
+     total_seats, available_seats, occupancy_percent, source, measured_at, measured_at_iso)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'gercek', ?, ?)
+`);
+
+// Seed rotalarini DB'ye ekle (varsa dokunma) + route_id backfill dene.
+function seedAnalysisRoutes() {
+  try {
+    const now = nowStamp();
+    const insert = db.prepare(`
+      INSERT OR IGNORE INTO analysis_routes (origin, destination, route_id, is_active, is_seed, created_at)
+      VALUES (?, ?, ?, 1, 1, ?)
+    `);
+    for (const [o, d] of ANALYSIS_SEED_ROUTES) {
+      const rid = buildObiletRouteIdLocal(o, d) || "";
+      insert.run(o, d, rid, now);
+    }
+    // route_id'si bos olanlari doldurmayi dene (sehir sonradan ogrenilmis olabilir).
+    const empties = db.prepare("SELECT id, origin, destination FROM analysis_routes WHERE TRIM(route_id) = ''").all();
+    const upd = db.prepare("UPDATE analysis_routes SET route_id = ? WHERE id = ?");
+    let filled = 0;
+    for (const r of empties) {
+      const rid = buildObiletRouteIdLocal(r.origin, r.destination);
+      if (rid) { upd.run(rid, r.id); filled++; }
+    }
+    const total = db.prepare("SELECT COUNT(*) c FROM analysis_routes").get().c;
+    console.log(`[Talep Radari] Rota havuzu hazir: ${total} rota (${filled} route_id backfill).`);
+  } catch (e) {
+    console.warn("[Talep Radari] Seed hatasi:", e.message);
+  }
+}
+
+// Tek rota × tek gun tarama — TUM firmalar. Sadece analysis_occupancy_history'ye APPEND yazar.
+// occupancyForHatDate'in okuma cekirdegini temel alir ama operator filtresi yok ve baska tabloya yazar.
+async function scanAnalysisRouteDate(route, dateIso) {
+  const routeId = String(route.route_id || "").trim();
+  if (!/^\d+-\d+$/.test(routeId)) return [];
+  const browser = await getBrowserInstance();
+  const page = await setupObiletPage(browser);
+  const journeyItems = [];
+  const seatById = new Map();
+  page.on("response", async (resp) => {
+    try {
+      const url = resp.url();
+      const ct = resp.headers()["content-type"] || "";
+      if (!/json/i.test(ct)) return;
+      const txt = await resp.text().catch(() => "");
+      if (!txt) return;
+      let data; try { data = JSON.parse(txt); } catch { return; }
+      if (/\/json\/sefer\//i.test(url)) {
+        const m = url.match(/\/json\/sefer\/(\d+)/i);
+        const c = countSeatsFromSeferJson(data);
+        if (m && c) seatById.set(m[1], c);
+        return;
+      }
+      if (/\/json\/journeys\//i.test(url)) {
+        const list = Array.isArray(data?.data) ? data.data : Array.isArray(data?.journeys) ? data.journeys : [];
+        for (const it of list) journeyItems.push(it);
+      }
+    } catch {}
+  });
+  let capturedBody = null, capturedBodyId = null;
+  page.on("request", (req) => {
+    try {
+      const m = req.url().match(/\/json\/sefer\/(\d+)/i);
+      if (m && req.postData()) { capturedBody = req.postData(); capturedBodyId = m[1]; }
+    } catch {}
+  });
+  try {
+    await gotoAndHandleCloudflare(page, "https://www.obilet.com/");
+    await new Promise(r => setTimeout(r, 1200));
+    await gotoAndHandleCloudflare(page, `https://www.obilet.com/seferler/${routeId}/${dateIso}?t=${Date.now()}`);
+    for (let i = 0; i < 16 && !journeyItems.length; i++) await new Promise(r => setTimeout(r, 2000));
+    if (!journeyItems.length) {
+      await gotoAndHandleCloudflare(page, `https://www.obilet.com/seferler/${routeId}/${dateIso}?t=${Date.now()}`);
+      for (let i = 0; i < 12 && !journeyItems.length; i++) await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // TUM firmalarin seferleri (operator filtresi YOK — analizde her firma dahil).
+    const infos = journeyItems.map((it) => {
+      const dep = String(it?.journey?.departure || it?.departure || "");
+      const tm = dep.match(/(\d{2}:\d{2})/);
+      return { id: it?.id != null ? String(it.id) : null, firma: String(it?.["partner-name"] || "").trim(), time: tm ? tm[1] : "" };
+    }).filter((x) => x.id && x.time && x.firma)
+      .slice(0, ANALYSIS_MAX_SEFER_PER_DATE);
+
+    if (!infos.length) { console.log(`[Talep Radari]   ${route.origin}->${route.destination} ${dateIso}: sefer yok.`); return []; }
+
+    let viaFetch = 0, viaClick = 0;
+    for (const info of infos) {
+      if (seatById.has(info.id)) continue;
+      if (capturedBody) {
+        const c = await fetchSeferSeatsWithBody(page, info.id, capturedBody, capturedBodyId);
+        await new Promise((r) => setTimeout(r, 600));
+        if (c) { seatById.set(info.id, c); viaFetch++; continue; }
+      }
+      const doClick = () => page.evaluate((t, firm) => {
+        const hasSeatBtn = (el) => Array.from(el.querySelectorAll("button,a,span,div"))
+          .some((b) => /koltuk|seç|^sec$|satın al|satin al/i.test((b.innerText || "").trim()));
+        let cards = Array.from(document.querySelectorAll("div,li,article"))
+          .filter((el) => (el.innerText || "").length < 700 && /\d{2}:\d{2}/.test(el.innerText || "") && hasSeatBtn(el));
+        const matchFirm = (el) => {
+          const txt = (el.innerText || "").toLowerCase();
+          if (txt.includes(firm)) return true;
+          return Array.from(el.querySelectorAll("img")).some((im) =>
+            ((im.getAttribute("alt") || "") + (im.getAttribute("title") || "")).toLowerCase().includes(firm));
+        };
+        const timed = cards.filter((el) => (el.innerText || "").includes(t));
+        const target = timed.find(matchFirm) || timed[0];
+        if (!target) return false;
+        let best = target;
+        for (const c of cards) if (target.contains(c) && c !== target && (c.innerText || "").includes(t)) { best = c; break; }
+        const btn = Array.from(best.querySelectorAll("button,a,span,div"))
+          .find((b) => /koltuk|seç|^sec$|satın al|satin al/i.test((b.innerText || "").trim()));
+        (btn || best).click();
+        return true;
+      }, info.time, info.firma.toLocaleLowerCase("tr-TR")).catch(() => false);
+
+      for (let attempt = 1; attempt <= 3 && !seatById.has(info.id); attempt++) {
+        await doClick();
+        await new Promise((r) => setTimeout(r, 2600));
+      }
+      if (seatById.has(info.id)) viaClick++;
+      await page.evaluate(() => {
+        const k = Array.from(document.querySelectorAll("button,a,span,div"))
+          .find((b) => { const t = (b.innerText || "").trim(); return t.length < 12 && /^kapat$/i.test(t); });
+        if (k) k.click();
+      }).catch(() => {});
+    }
+    await new Promise((r) => setTimeout(r, 1200));
+
+    // Ayni operator+saat icin birden cok listeleme olabilir -> en dolu (gercek otobus) alinir.
+    const bestByKey = new Map();
+    for (const info of infos) {
+      const c = seatById.get(info.id);
+      if (!c) continue;
+      const op = normalizeObiletOperatorName(info.firma) || info.firma;
+      const key = `${op}|${info.time}`;
+      const prev = bestByKey.get(key);
+      if (!prev || c.sold > prev.sold) bestByKey.set(key, { op, time: info.time, sold: c.sold, total: c.total });
+    }
+
+    const now = nowStamp();
+    const nowIso = new Date().toISOString();
+    const written = [];
+    const rows = [...bestByKey.values()];
+    const tx = db.transaction(() => {
+      for (const v of rows) {
+        const occ = v.total > 0 ? Math.max(0, Math.min(100, Math.round((v.sold / v.total) * 100))) : 0;
+        insertAnalysisHistStmt.run(routeId, route.origin, route.destination, dateIso, v.op, v.time,
+          v.total, Math.max(0, v.total - v.sold), occ, now, nowIso);
+        written.push({ operator: v.op, time: v.time, sold: v.sold, total: v.total, occ });
+      }
+    });
+    tx();
+    console.log(`[Talep Radari]   ${route.origin}->${route.destination} ${dateIso}: ${written.length} sefer yazildi (fetch=${viaFetch},tik=${viaClick}).`);
+    return written;
+  } finally {
+    try { await page.close(); } catch {}
+  }
+}
+
+async function runAnalysisWorker() {
+  if (!ANALYSIS_WORKER_ENABLED || analysisWorkerRunning) return;
+  analysisWorkerRunning = true;
+  const t0 = Date.now();
+  let doneRoutes = 0, totalWritten = 0;
+  try {
+    // Retention: cok eski olcumleri temizle (append-only tablo sinirsiz buyumesin).
+    try {
+      db.prepare("DELETE FROM analysis_occupancy_history WHERE journey_date < ?")
+        .run(shiftIsoDate(todayIsoInIstanbul(), -ANALYSIS_HISTORY_RETENTION_DAYS));
+    } catch (e) {}
+
+    const today = todayIsoInIstanbul();
+    const horizonEnd = shiftIsoDate(today, ANALYSIS_HORIZON_DAYS - 1);
+    const dates = buildIsoDateRange(today, horizonEnd);
+    const routes = db.prepare("SELECT * FROM analysis_routes WHERE is_active = 1 AND TRIM(route_id) <> ''").all();
+    console.log(`[Talep Radari] ===== TUR BASLADI: ${routes.length} rota × ${dates.length} gun =====`);
+    for (const route of routes) {
+      let routeWritten = 0;
+      for (const dateIso of dates) {
+        try {
+          const w = await scanAnalysisRouteDate(route, dateIso);
+          routeWritten += (w || []).length;
+        } catch (e) { console.warn(`[Talep Radari]   ${route.origin}->${route.destination} ${dateIso} hata: ${e.message}`); }
+        await new Promise((r) => setTimeout(r, 4000)); // tarihler arasi nazik bekleme
+      }
+      totalWritten += routeWritten;
+      doneRoutes++;
+      console.log(`[Talep Radari] Rota bitti: ${route.origin}->${route.destination} — ${routeWritten} olcum.`);
+      await new Promise((r) => setTimeout(r, 20000)); // rotalar arasi nazik bekleme (Cloudflare burst'u onle)
+    }
+  } catch (e) {
+    console.warn(`[Talep Radari] genel hata: ${e.message}`);
+  } finally {
+    analysisWorkerRunning = false;
+    console.log(`[Talep Radari] ===== TUR BITTI: ${doneRoutes} rota, ${totalWritten} olcum, ${Math.round((Date.now() - t0) / 1000)}s. =====`);
+  }
+}
+
+// Boot: rota havuzunu seed'le, ilk turu occupancy'den (2dk) farkli offset'te (6dk) baslat, sonra periyodik.
+seedAnalysisRoutes();
+setTimeout(() => { runAnalysisWorker().catch(() => null); }, 6 * 60 * 1000);
+setInterval(() => { runAnalysisWorker().catch(() => null); }, ANALYSIS_WORKER_INTERVAL_MS);
 
 // Eski pending kayıtları temizle - buildJourneyIdentityKey değişikliğinden sonra gerekli
 try {

@@ -16,6 +16,7 @@ const MENUS = [
   { key: "obilet_tracker", label: "oBilet Takip" },
   { key: "occupancy", label: "Doluluk Takip" },
   { key: "sefer_takip", label: "Sefer Takip" },
+  { key: "demand", label: "Talep Radarı" },
   { key: "ocr", label: "Foto Tarama" },
   { key: "permissions", label: "Yetki Menusu" },
   { key: "logs", label: "Giris Kayitlari" },
@@ -2858,6 +2859,7 @@ async function activatePanel(menuKey) {
     oneops: "Hatalı işlem bildirimleri ve fotoğraf kayıtları",
     obilet: "Rakip otobüs firmalarının fiyatlarını otomatik takip edin",
     ocr: "Fotoğraftan otomatik tablo çıkarımı",
+    demand: "Sistem popüler hatları otomatik tarar; yoğun ve boş günleri gösterir",
     permissions: "Kullanıcı yetki yönetimi",
     logs: "Sistem giriş ve oturum kayıtları",
   };
@@ -2932,6 +2934,10 @@ async function activatePanel(menuKey) {
 
   if (menuKey === "sefer_takip") {
     setupSeferTakipPanel();
+  }
+
+  if (menuKey === "demand") {
+    setupDemandPanel();
   }
 }
 
@@ -4994,6 +5000,261 @@ function exportOccupancyCsv() {
   const a = document.createElement("a");
   a.href = url;
   a.download = `doluluk-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ============================================================
+// TALEP RADARI (otonom yogunluk analizi — oBilet Takip'ten bagimsiz)
+// Sistem populer rotalari arka planda tarar; yogun/bos gunleri analiz eder.
+// ============================================================
+const demandState = { wired: false, data: null };
+
+function demColor(p) {
+  if (p == null) return "#888";
+  if (p >= 80) return "#e74c3c";
+  if (p >= 50) return "#e67e22";
+  return "#27ae60";
+}
+function demToDot(iso) {
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : (iso || "");
+}
+function demFmtMeasured(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
+function demBar(pct) {
+  const p = Math.max(0, Math.min(100, pct || 0));
+  return `<div class="dem-bar"><div class="dem-bar-fill" style="width:${p}%;background:${demColor(pct)}"></div></div>`;
+}
+
+function setupDemandPanel() {
+  const refreshBtn = document.getElementById("demandRefreshBtn");
+  if (!refreshBtn) return;
+  if (!demandState.wired) {
+    demandState.wired = true;
+    refreshBtn.addEventListener("click", () => loadDemand());
+    document.getElementById("demandDaysSelect")?.addEventListener("change", () => loadDemand());
+    document.getElementById("demandRouteSelect")?.addEventListener("change", () => loadDemand());
+    document.getElementById("demandExportBtn")?.addEventListener("click", exportDemandCsv);
+    document.getElementById("demandScanBtn")?.addEventListener("click", triggerDemandScan);
+    document.getElementById("demandAddBtn")?.addEventListener("click", addDemandRoute);
+    // Havuz listesindeki aktif/pasif ve sil butonlari (event delegation — inline onclick YOK, XSS guvenli).
+    document.getElementById("demandPoolList")?.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-act]");
+      if (!btn) return;
+      const id = btn.getAttribute("data-id");
+      const act = btn.getAttribute("data-act");
+      if (act === "toggle") toggleDemandRoute(id, btn.getAttribute("data-active") !== "1");
+      else if (act === "del") deleteDemandRoute(id);
+    });
+  }
+  loadDemandRoutes();
+  loadDemand();
+  loadDemandStatus();
+}
+
+async function loadDemandStatus() {
+  const el = document.getElementById("demandStatusInfo");
+  if (!el) return;
+  try {
+    const s = await apiFetch("/api/analysis/status");
+    const running = s.workerRunning ? "🟢 Tarama çalışıyor" : "⚪ Beklemede";
+    el.textContent = `${running} · ${s.routeCount} aktif rota · ${s.measurements} ölçüm · son: ${demFmtMeasured(s.lastMeasured)} · ufuk ${s.horizonDays} gün`;
+  } catch (e) { el.textContent = ""; }
+}
+
+async function loadDemandRoutes() {
+  try {
+    const data = await apiFetch("/api/analysis/routes");
+    const routes = Array.isArray(data?.routes) ? data.routes : [];
+    const sel = document.getElementById("demandRouteSelect");
+    if (sel) {
+      const cur = sel.value;
+      const withId = routes.filter((r) => r.route_id);
+      sel.innerHTML = `<option value="">Tüm rotalar</option>` +
+        withId.map((r) => `<option value="${escapeHtml(r.route_id)}">${escapeHtml(r.origin)} → ${escapeHtml(r.destination)}</option>`).join("");
+      if (cur) sel.value = cur;
+    }
+    const pool = document.getElementById("demandPoolList");
+    if (pool) {
+      pool.innerHTML = routes.map((r) => {
+        const resolved = r.route_id
+          ? `<span class="dem-chip dem-chip-ok">${escapeHtml(r.route_id)}</span>`
+          : `<span class="dem-chip dem-chip-warn">route_id yok</span>`;
+        return `<div class="dem-pool-row ${r.is_active ? "" : "dem-pool-off"}">
+          <div class="dem-pool-main">
+            <strong>${escapeHtml(r.origin)} → ${escapeHtml(r.destination)}</strong>
+            ${resolved}${r.is_seed ? ` <span class="dem-chip">hazır</span>` : ""}
+          </div>
+          <div class="dem-pool-meta subtle">${r.coverage || 0} sefer ölçüldü · ${demFmtMeasured(r.lastMeasured)}</div>
+          <div class="dem-pool-actions">
+            <button class="btn btn-small btn-ghost" data-act="toggle" data-id="${r.id}" data-active="${r.is_active ? 1 : 0}">${r.is_active ? "Aktif" : "Pasif"}</button>
+            <button class="btn btn-small btn-danger" data-act="del" data-id="${r.id}">Sil</button>
+          </div>
+        </div>`;
+      }).join("") || `<p class="subtle">Rota yok.</p>`;
+    }
+  } catch (e) { /* sessiz */ }
+}
+
+async function addDemandRoute() {
+  const oEl = document.getElementById("demandAddOrigin");
+  const dEl = document.getElementById("demandAddDest");
+  const msg = document.getElementById("demandAddMsg");
+  const origin = (oEl?.value || "").trim();
+  const destination = (dEl?.value || "").trim();
+  if (!origin || !destination) { if (msg) msg.textContent = "Kalkış ve varış girin."; return; }
+  try {
+    const r = await apiFetch("/api/analysis/routes", { method: "POST", body: JSON.stringify({ origin, destination }) });
+    if (msg) msg.textContent = r.resolved ? `Eklendi (route_id: ${r.route_id}).` : "Eklendi, ama şehir tanınmadığı için route_id çözülemedi — tarama bu rotayı atlar.";
+    if (oEl) oEl.value = "";
+    if (dEl) dEl.value = "";
+    loadDemandRoutes();
+  } catch (e) { if (msg) msg.textContent = `Hata: ${e.message}`; }
+}
+
+async function toggleDemandRoute(id, active) {
+  try { await apiFetch(`/api/analysis/routes/${id}`, { method: "PATCH", body: JSON.stringify({ isActive: active }) }); loadDemandRoutes(); }
+  catch (e) { /* sessiz */ }
+}
+async function deleteDemandRoute(id) {
+  if (!confirm("Bu rotayı havuzdan silmek istediğinize emin misiniz?")) return;
+  try { await apiFetch(`/api/analysis/routes/${id}`, { method: "DELETE" }); loadDemandRoutes(); }
+  catch (e) { /* sessiz */ }
+}
+
+async function triggerDemandScan() {
+  const msg = document.getElementById("demandStatusMsg");
+  try {
+    const r = await apiFetch("/api/analysis/scan", { method: "POST" });
+    if (msg) msg.textContent = r.message || "Tarama başlatıldı.";
+    loadDemandStatus();
+  } catch (e) { if (msg) msg.textContent = `Hata: ${e.message}`; }
+}
+
+async function loadDemand() {
+  const statusEl = document.getElementById("demandStatusMsg");
+  const days = document.getElementById("demandDaysSelect")?.value || "15";
+  const routeRef = document.getElementById("demandRouteSelect")?.value || "";
+  if (statusEl) statusEl.textContent = "Analiz yükleniyor...";
+  try {
+    const params = new URLSearchParams();
+    params.set("days", days);
+    if (routeRef) params.set("routeRef", routeRef);
+    const data = await apiFetch(`/api/analysis/demand?${params.toString()}`);
+    demandState.data = data;
+    renderDemand(data);
+    if (statusEl) {
+      statusEl.textContent = data.summary.count
+        ? `${data.summary.count} sefer · ${data.summary.routeCount} rota · ortalama doluluk %${data.summary.avgOccupancy} · son ölçüm ${demFmtMeasured(data.summary.lastMeasuredAt)}`
+        : "Henüz analiz verisi yok. Sistem popüler rotaları arka planda tarıyor (ilk tur ~6 dk sonra başlar). Hemen başlatmak için 'Şimdi Tara'ya basabilirsin.";
+    }
+    loadDemandStatus();
+  } catch (err) {
+    if (statusEl) statusEl.textContent = `Hata: ${err.message}`;
+  }
+}
+
+function renderDemand(data) {
+  const kpi = document.getElementById("demandKpis");
+  if (kpi) {
+    const s = data.summary || {};
+    const card = (label, value, sub, color) =>
+      `<article class="dem-kpi"><div class="dem-kpi-label">${escapeHtml(label)}</div>
+       <div class="dem-kpi-value"${color ? ` style="color:${color}"` : ""}>${escapeHtml(String(value))}</div>
+       ${sub ? `<div class="dem-kpi-sub subtle">${escapeHtml(sub)}</div>` : ""}</article>`;
+    kpi.innerHTML =
+      card("Ölçülen Sefer", s.count || 0, `${s.routeCount || 0} rota`) +
+      card("Ortalama Doluluk", `%${s.avgOccupancy || 0}`, null, demColor(s.avgOccupancy || 0)) +
+      card("Yüksek Talep", s.highCount || 0, `≥%${data.high} dolu`, "#e74c3c") +
+      card("Boş / Zayıf", s.lowCount || 0, `<%${data.low} dolu`, "#27ae60");
+  }
+  renderDemandWeekday(data.byWeekday || []);
+  renderDemandByDate(data.byDate || []);
+  renderDemandRoutes(data.routes || []);
+  renderDemandTop("demandTopFull", data.topFull || [], "🔥");
+  renderDemandTop("demandTopEmpty", data.topEmpty || [], "🧊");
+}
+
+function renderDemandWeekday(byWeekday) {
+  const el = document.getElementById("demandWeekday");
+  if (!el) return;
+  if (!byWeekday.some((w) => w.avg != null)) { el.innerHTML = `<p class="subtle">Gün deseni için yeterli veri yok.</p>`; return; }
+  el.innerHTML = byWeekday.map((w) => `<div class="dem-wd">
+      <div class="dem-wd-name">${escapeHtml(w.name)}</div>
+      ${demBar(w.avg)}
+      <div class="dem-wd-val" style="color:${demColor(w.avg)}">${w.avg == null ? "—" : "%" + w.avg}</div>
+    </div>`).join("");
+}
+
+function renderDemandByDate(byDate) {
+  const el = document.getElementById("demandByDate");
+  if (!el) return;
+  if (!byDate.length) { el.innerHTML = `<p class="subtle">Gelecek gün verisi yok.</p>`; return; }
+  el.innerHTML = byDate.map((d) => `<div class="dem-date">
+      <div class="dem-date-head"><b>${demToDot(d.date)}</b> <span class="subtle">${escapeHtml(d.weekday)}</span></div>
+      ${demBar(d.avg)}
+      <div class="dem-date-val" style="color:${demColor(d.avg)}">%${d.avg} · ${d.seferler} sefer</div>
+    </div>`).join("");
+}
+
+function renderDemandRoutes(routes) {
+  const el = document.getElementById("demandRoutes");
+  if (!el) return;
+  if (!routes.length) { el.innerHTML = `<p class="subtle">Rota verisi yok.</p>`; return; }
+  el.innerHTML = routes.map((r) => {
+    const b = r.busiestDate, q = r.quietestDate;
+    return `<div class="dem-route">
+      <div class="dem-route-head">
+        <strong>${escapeHtml(r.origin)} → ${escapeHtml(r.destination)}</strong>
+        <span class="dem-route-score" style="color:${demColor(r.avgOccupancy)}">%${r.avgOccupancy}</span>
+      </div>
+      ${demBar(r.avgOccupancy)}
+      <div class="dem-route-meta subtle">
+        <span>${r.seferCount} sefer</span>
+        ${b ? `<span>🔥 <b>${demToDot(b.date)}</b> ${escapeHtml(b.weekday)} (%${b.avg})</span>` : ""}
+        ${q ? `<span>🧊 <b>${demToDot(q.date)}</b> ${escapeHtml(q.weekday)} (%${q.avg})</span>` : ""}
+      </div>
+    </div>`;
+  }).join("");
+}
+
+function renderDemandTop(elId, list, icon) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (!list.length) { el.innerHTML = `<p class="subtle">Veri yok.</p>`; return; }
+  el.innerHTML = list.map((s) => `<div class="dem-top-row">
+      <div class="dem-top-main">
+        <b>${escapeHtml(s.origin)} → ${escapeHtml(s.destination)}</b>
+        <span class="subtle">${demToDot(s.journey_date)} ${escapeHtml(s.weekday)} · ${escapeHtml(s.departure_time)} · ${escapeHtml(s.operator)}</span>
+      </div>
+      <div class="dem-top-val" style="color:${demColor(s.occupancy_percent)}">${icon} %${s.occupancy_percent} <span class="subtle">(${s.sold}/${s.total_seats})</span></div>
+    </div>`).join("");
+}
+
+function exportDemandCsv() {
+  const data = demandState.data;
+  const all = new Map();
+  for (const s of [...(data?.topFull || []), ...(data?.topEmpty || [])]) {
+    all.set(`${s.route_ref}|${s.journey_date}|${s.operator}|${s.departure_time}`, s);
+  }
+  const list = [...all.values()];
+  if (!list.length) { alert("Aktarılacak veri yok."); return; }
+  const headers = ["Kalkis", "Varis", "Tarih", "Gun", "Saat", "Firma", "Doluluk %", "Dolu", "Toplam"];
+  const csvRows = list.map((s) => [s.origin, s.destination, demToDot(s.journey_date), s.weekday, s.departure_time, s.operator, s.occupancy_percent, s.sold, s.total_seats]
+    .map((v) => String(v == null ? "" : v).replace(/;/g, ",")).join(";"));
+  const csv = "﻿" + [headers.join(";"), ...csvRows].join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `talep-radari-${new Date().toISOString().slice(0, 10)}.csv`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

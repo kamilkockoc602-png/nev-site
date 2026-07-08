@@ -677,6 +677,79 @@
           </div>
         </div>
 
+        <div id="panelDemand" class="panel-block hidden" data-menu="demand">
+          <h4>Talep Radarı</h4>
+          <p class="subtle">Sistem, hazır popüler hatları arka planda otomatik tarar; ileri tarihlerde hangi sefer/gün yoğun, hangileri boş/zayıf onu gösterir. (oBilet Takip menüsünden bağımsız çalışır.)</p>
+          <p id="demandStatusInfo" class="subtle" style="font-size:0.8rem;"></p>
+
+          <div class="ph-toolbar">
+            <label>
+              <span>Rota</span>
+              <select id="demandRouteSelect"><option value="">Tüm rotalar</option></select>
+            </label>
+            <label>
+              <span>Ufuk</span>
+              <select id="demandDaysSelect">
+                <option value="7">Gelecek 7 gün</option>
+                <option value="15" selected>Gelecek 15 gün</option>
+                <option value="30">Gelecek 30 gün</option>
+              </select>
+            </label>
+            <div class="ph-toolbar-actions">
+              <button id="demandRefreshBtn" class="btn btn-primary" type="button">Yenile</button>
+              <button id="demandScanBtn" class="btn btn-ghost" type="button" title="Popüler rotaları hemen taramaya başlat (arka planda)">⚡ Şimdi Tara</button>
+              <button id="demandExportBtn" class="btn btn-success" type="button">📥 Excel</button>
+            </div>
+          </div>
+
+          <div id="demandKpis" class="dem-kpi-grid"></div>
+
+          <p id="demandStatusMsg" class="subtle">Analiz yükleniyor...</p>
+
+          <div class="dem-split">
+            <section class="dem-card">
+              <h5>📅 Haftanın Günü Deseni</h5>
+              <p class="subtle">Hangi günler ortalama daha dolu?</p>
+              <div id="demandWeekday" class="dem-weekday"></div>
+            </section>
+            <section class="dem-card">
+              <h5>🗓️ Gelecek Günler</h5>
+              <p class="subtle">İleri tarihlerin ortalama doluluğu.</p>
+              <div id="demandByDate" class="dem-dates"></div>
+            </section>
+          </div>
+
+          <section class="dem-card">
+            <h5>🚌 Hat Bazlı Yoğunluk Skoru</h5>
+            <div id="demandRoutes" class="dem-routes"></div>
+          </section>
+
+          <div class="dem-split">
+            <section class="dem-card">
+              <h5>🔥 En Yoğun Seferler</h5>
+              <p class="subtle">Talebin yüksek olduğu seferler (ek sefer / fiyat fırsatı).</p>
+              <div id="demandTopFull" class="dem-top"></div>
+            </section>
+            <section class="dem-card">
+              <h5>🧊 En Boş Seferler</h5>
+              <p class="subtle">Talebin düşük olduğu seferler (dikkat).</p>
+              <div id="demandTopEmpty" class="dem-top"></div>
+            </section>
+          </div>
+
+          <details class="dem-pool-wrap">
+            <summary>⚙️ Rota Havuzu Yönetimi</summary>
+            <p class="subtle">Sistem hazır popüler rotalarla gelir. Buradan yeni şehir çifti ekleyebilir, rotaları aktif/pasif yapabilirsin. (Şehir tanınıyorsa route_id otomatik çözülür.)</p>
+            <div class="dem-add-row">
+              <input id="demandAddOrigin" type="text" placeholder="Kalkış (ör. Adana)" />
+              <input id="demandAddDest" type="text" placeholder="Varış (ör. Ankara)" />
+              <button id="demandAddBtn" class="btn btn-primary btn-small" type="button">+ Rota Ekle</button>
+            </div>
+            <p id="demandAddMsg" class="subtle" style="min-height:1rem;"></p>
+            <div id="demandPoolList" class="dem-pool-list"></div>
+          </details>
+        </div>
+
         <div id="panelOcr" class="panel-block hidden" data-menu="ocr">
           <section class="ocr-tool">
             <h3>Fotograftan Excel Ciktisi</h3>
