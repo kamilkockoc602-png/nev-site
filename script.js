@@ -3924,16 +3924,33 @@ function setupObiletOperatorPicker(root) {
   const renderSelected = () => {
     selectedEl.innerHTML = "";
     if (!selected.size) {
-      selectedEl.textContent = "Firma seciniz...";
+      selectedEl.textContent = "Firma seçiniz...";
+      selectedEl.classList.add("is-placeholder");
       return;
     }
+    selectedEl.classList.remove("is-placeholder");
 
     Array.from(selected)
       .sort((a, b) => a.localeCompare(b, "tr-TR"))
       .forEach((name) => {
         const chip = document.createElement("span");
         chip.className = "obilet-operator-chip";
-        chip.textContent = name;
+        const label = document.createElement("span");
+        label.textContent = name;
+        chip.appendChild(label);
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "obilet-operator-chip-remove";
+        remove.setAttribute("aria-label", `${name} firmasını kaldır`);
+        remove.textContent = "×";
+        remove.addEventListener("click", (e) => {
+          e.stopPropagation();
+          selected.delete(name);
+          syncHiddenInput();
+          renderSelected();
+          renderOptions(searchInput.value);
+        });
+        chip.appendChild(remove);
         selectedEl.appendChild(chip);
       });
   };
@@ -4031,6 +4048,33 @@ function setupObiletOperatorPicker(root) {
     renderSelected();
     renderOptions(searchInput.value);
   });
+
+  // Acilir/kapanir davranis (varsayilan KAPALI). Trigger -> ac/kapa; disari tikla/Escape -> kapat.
+  const pickerEl = root.querySelector(".obilet-operator-picker");
+  const triggerEl = root.querySelector(".obilet-operator-trigger");
+  if (pickerEl && triggerEl) {
+    const closePicker = () => {
+      pickerEl.classList.remove("open");
+      triggerEl.setAttribute("aria-expanded", "false");
+    };
+    const openPicker = () => {
+      pickerEl.classList.add("open");
+      triggerEl.setAttribute("aria-expanded", "true");
+      setTimeout(() => searchInput.focus(), 0);
+    };
+    triggerEl.addEventListener("click", (e) => {
+      if (e.target.closest(".obilet-operator-chip-remove")) return; // chip silme, toggle etmesin
+      if (pickerEl.classList.contains("open")) closePicker();
+      else openPicker();
+    });
+    triggerEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); triggerEl.click(); }
+      else if (e.key === "Escape") closePicker();
+    });
+    document.addEventListener("click", (e) => {
+      if (!pickerEl.contains(e.target)) closePicker();
+    });
+  }
 
   const boot = async () => {
     try {
@@ -5934,7 +5978,9 @@ function setupObiletForm() {
     const selectedEl = row.querySelector(".obilet-operator-selected");
     if (selectedEl) {
       selectedEl.textContent = "Firma seciniz...";
+      selectedEl.classList.add("is-placeholder");
     }
+    row.querySelector(".obilet-operator-picker")?.classList.remove("open");
     const optionsEl = row.querySelector(".obilet-operator-options");
     if (optionsEl) {
       optionsEl.innerHTML = '<div class="obilet-loading">⏳ Firmalar yukleniyor...</div>';

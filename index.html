@@ -540,14 +540,19 @@
                       <span>Firmalar (secmeli)</span>
                       <input class="obilet-operators-hidden" type="hidden" required />
                       <div class="obilet-operator-picker">
-                        <div class="obilet-operator-toolbar">
-                          <input class="obilet-operator-search" type="text" placeholder="Firma ara..." />
-                          <button type="button" class="btn btn-sm btn-ghost obilet-operator-select-all">Tumunu Sec</button>
-                          <button type="button" class="btn btn-sm btn-ghost obilet-operator-clear">Temizle</button>
+                        <div class="obilet-operator-trigger" role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false">
+                          <span class="obilet-operator-selected is-placeholder">Firma seciniz...</span>
+                          <span class="obilet-operator-caret" aria-hidden="true">▾</span>
                         </div>
-                        <div class="obilet-operator-selected">Firma seciniz...</div>
-                        <div class="obilet-operator-options">
-                          <div class="obilet-loading">⏳ Firmalar yukleniyor...</div>
+                        <div class="obilet-operator-panel">
+                          <div class="obilet-operator-toolbar">
+                            <input class="obilet-operator-search" type="text" placeholder="Firma ara..." />
+                            <button type="button" class="btn btn-sm btn-ghost obilet-operator-select-all">Tumunu Sec</button>
+                            <button type="button" class="btn btn-sm btn-ghost obilet-operator-clear">Temizle</button>
+                          </div>
+                          <div class="obilet-operator-options">
+                            <div class="obilet-loading">⏳ Firmalar yukleniyor...</div>
+                          </div>
                         </div>
                       </div>
                     </label>
