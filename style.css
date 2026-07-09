@@ -108,20 +108,21 @@ button {
 }
 
 .login-shell {
-  width: min(1120px, 100%);
+  width: min(430px, 100%);
   margin: 0 auto;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1.2rem;
-  align-items: center;
+  grid-template-columns: 1fr;
+  gap: 0.2rem;
+  justify-items: center;
   animation: fadeUp 1s ease-out;
 }
 
 .login-copy {
   order: 1;
-  padding: 1.4rem 1.1rem;
-  max-width: 520px;
-  text-align: left;
+  padding: 0.2rem;
+  max-width: 340px;
+  width: 100%;
+  text-align: center;
 }
 
 .login-copy h1 {
@@ -137,46 +138,34 @@ button {
 
 .login-orbit {
   order: 2;
-  min-height: 420px;
+  width: 100%;
   display: grid;
   place-items: center;
   position: relative;
   overflow: hidden;
-  padding: 1.4rem;
+  padding: 1.3rem;
   transition: transform 0.28s ease, box-shadow 0.28s ease, border-color 0.28s ease;
 }
 
 .login-core {
-  width: min(280px, 86%);
-  min-height: 96px;
+  width: min(360px, 100%);
   position: relative;
   z-index: 1;
   border: 1px solid rgba(118, 147, 191, 0.42);
   border-radius: 18px;
   background: linear-gradient(165deg, rgba(13, 24, 44, 0.94), rgba(20, 24, 41, 0.94));
   box-shadow: 0 18px 34px rgba(8, 18, 36, 0.35);
-  padding: 1.05rem 1rem;
+  padding: 1.35rem 1.25rem;
   color: #d9efff;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  transition: width 0.34s ease, min-height 0.34s ease, padding 0.34s ease, border-color 0.28s ease, transform 0.28s ease, box-shadow 0.28s ease;
+  transition: border-color 0.28s ease, box-shadow 0.28s ease;
 }
 
-.login-orbit:hover {
-  transform: translateY(-2px);
-  border-color: rgba(123, 223, 247, 0.55);
-  box-shadow: 0 28px 54px rgba(12, 33, 57, 0.34);
-}
-
-.login-orbit:hover .login-core,
 .login-orbit:focus-within .login-core {
-  width: min(360px, 92%);
-  min-height: 320px;
-  padding: 1.25rem 1.1rem;
   border-color: rgba(117, 244, 255, 0.52);
   box-shadow: 0 24px 46px rgba(10, 31, 56, 0.46);
 }
-
 
 .login-core h2 {
   margin: 0.15rem 0 0.25rem;
@@ -186,21 +175,7 @@ button {
 }
 
 .login-form-stack {
-  margin-top: 0.25rem;
-  max-height: 0;
-  opacity: 0;
-  overflow: hidden;
-  pointer-events: none;
-  transform: translateY(6px);
-  transition: max-height 0.34s ease, opacity 0.25s ease, transform 0.25s ease;
-}
-
-.login-orbit:hover .login-form-stack,
-.login-orbit:focus-within .login-form-stack {
-  max-height: 360px;
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0);
+  margin-top: 0.6rem;
 }
 
 .login-form-stack label span {
