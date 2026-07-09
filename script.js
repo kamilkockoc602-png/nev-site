@@ -3444,6 +3444,75 @@ dom.logoutBtn.addEventListener("click", async () => {
   await handleLogout();
 });
 
+// ===== Hesap Ayarlari modali (kullanici kendi kullanici adi + sifresini degistirir) =====
+function setupAccountModal() {
+  const btn = document.getElementById("accountSettingsBtn");
+  const backdrop = document.getElementById("accountModalBackdrop");
+  const form = document.getElementById("accountForm");
+  if (!btn || !backdrop || !form) return;
+  const closeBtn = document.getElementById("accountModalClose");
+  const cancelBtn = document.getElementById("accountCancelBtn");
+  const msg = document.getElementById("accountMsg");
+  const newU = document.getElementById("accountNewUsername");
+  const newP = document.getElementById("accountNewPassword");
+  const newP2 = document.getElementById("accountNewPassword2");
+  const curP = document.getElementById("accountCurrentPassword");
+
+  const open = () => {
+    form.reset();
+    if (msg) { msg.textContent = ""; msg.style.color = ""; }
+    if (newU) newU.placeholder = state.currentUser?.username ? `Mevcut: ${state.currentUser.username}` : "Boş bırakırsan değişmez";
+    backdrop.classList.remove("hidden");
+    setTimeout(() => curP?.focus(), 50);
+  };
+  const close = () => backdrop.classList.add("hidden");
+
+  btn.addEventListener("click", open);
+  if (closeBtn) closeBtn.addEventListener("click", close);
+  if (cancelBtn) cancelBtn.addEventListener("click", close);
+  backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !backdrop.classList.contains("hidden")) close();
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const currentPassword = curP ? curP.value : "";
+    const newUsername = (newU ? newU.value : "").trim();
+    const newPassword = newP ? newP.value : "";
+    const confirmPw = newP2 ? newP2.value : "";
+    const setErr = (t) => { if (msg) { msg.style.color = "#d64545"; msg.textContent = t; } };
+
+    if (!newUsername && !newPassword) return setErr("Yeni kullanıcı adı veya şifre girin.");
+    if (newPassword && newPassword !== confirmPw) return setErr("Yeni şifreler eşleşmiyor.");
+    if (!currentPassword) return setErr("Mevcut şifrenizi girin.");
+
+    const submitBtn = form.querySelector('button[type="submit"]');
+    const oldLabel = submitBtn ? submitBtn.textContent : "";
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Kaydediliyor..."; }
+    try {
+      const payload = { currentPassword };
+      if (newUsername) payload.newUsername = newUsername;
+      if (newPassword) payload.newPassword = newPassword;
+      const r = await apiFetch("/api/account", { method: "PATCH", body: JSON.stringify(payload) });
+      if (r.user) { state.currentUser = r.user; renderSidebarUserCard(); }
+      if (msg) {
+        msg.style.color = "#1f7a1f";
+        const parts = [];
+        if (r.usernameChanged) parts.push("Kullanıcı adı");
+        if (r.passwordChanged) parts.push("şifre");
+        msg.textContent = `${parts.join(" ve ")} güncellendi.`;
+      }
+      setTimeout(close, 1300);
+    } catch (err) {
+      setErr(err.message || "Güncelleme başarısız.");
+    } finally {
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = oldLabel || "Kaydet"; }
+    }
+  });
+}
+setupAccountModal();
+
 // Dashboard "Tümünü Gör" linki - bildirim panelini aç
 if (dom.dashAllNotifsLink) {
   dom.dashAllNotifsLink.addEventListener("click", (e) => {

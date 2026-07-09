@@ -2529,6 +2529,57 @@ app.get("/api/admin/users", requireAuth, requireAdmin, (req, res) => {
   });
 });
 
+// Kullanici KENDI hesabini gunceller (kullanici adi + sifre). Giris yapan HERKES kullanabilir.
+// Guvenlik: mevcut sifre dogrulamasi zorunlu. Sadece kendi hesabini degistirir; rol/yetki degismez.
+app.patch("/api/account", requireAuth, (req, res) => {
+  try {
+    const userId = req.auth.user.id;
+    const row = db.prepare("SELECT id, username, password FROM users WHERE id = ?").get(userId);
+    if (!row) return res.status(404).json({ message: "Kullanici bulunamadi." });
+
+    const currentPassword = typeof req.body?.currentPassword === "string" ? req.body.currentPassword : "";
+    const newUsername = typeof req.body?.newUsername === "string" ? req.body.newUsername.trim() : "";
+    const newPassword = typeof req.body?.newPassword === "string" ? req.body.newPassword : "";
+
+    // Mevcut sifre dogrulamasi (duz metin — mevcut sistemle tutarli).
+    if (row.password !== currentPassword) {
+      return res.status(403).json({ message: "Mevcut sifreniz yanlis." });
+    }
+
+    const wantUsername = Boolean(newUsername) && newUsername !== row.username;
+    const wantPassword = Boolean(newPassword);
+    if (!wantUsername && !wantPassword) {
+      return res.status(400).json({ message: "Degistirilecek yeni bir kullanici adi veya sifre girin." });
+    }
+
+    if (wantUsername) {
+      if (newUsername.length < 3) {
+        return res.status(400).json({ message: "Kullanici adi en az 3 karakter olmali." });
+      }
+      const taken = db.prepare("SELECT id FROM users WHERE username = ? AND id != ?").get(newUsername, userId);
+      if (taken) {
+        return res.status(409).json({ message: "Bu kullanici adi zaten kullaniliyor." });
+      }
+    }
+    if (wantPassword && String(newPassword).length < 4) {
+      return res.status(400).json({ message: "Yeni sifre en az 4 karakter olmali." });
+    }
+
+    db.prepare("UPDATE users SET username = ?, password = ? WHERE id = ?").run(
+      wantUsername ? newUsername : row.username,
+      wantPassword ? newPassword : row.password,
+      userId
+    );
+
+    const updated = db.prepare(
+      "SELECT id, username, full_name, role, title, is_admin, is_active, permissions, created_at, last_seen FROM users WHERE id = ?"
+    ).get(userId);
+    res.json({ ok: true, user: sanitizeUser(updated), usernameChanged: wantUsername, passwordChanged: wantPassword });
+  } catch (e) {
+    res.status(500).json({ message: e.message || "Hesap guncellenemedi." });
+  }
+});
+
 app.post("/api/admin/users", requireAuth, requireAdmin, (req, res) => {
   const username = String(req.body?.username || "").trim();
   const password = String(req.body?.password || "").trim();
