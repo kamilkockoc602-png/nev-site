@@ -83,8 +83,8 @@
                 <div class="password-field">
                   <input id="loginPassword" type="password" placeholder="Sifre" required autocomplete="current-password" />
                   <button type="button" id="loginPasswordToggle" class="password-toggle" aria-label="Sifreyi goster">
-                    <span class="pw-eye-on">👁</span>
-                    <span class="pw-eye-off" hidden>🙈</span>
+                    <span class="pw-eye-on"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></span>
+                    <span class="pw-eye-off" hidden><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></span>
                   </button>
                 </div>
               </label>
@@ -120,7 +120,7 @@
           </div>
           <div class="sidebar-user-meta">
             <span class="sidebar-user-meta-item" id="sidebarUserSession">
-              <span aria-hidden="true">📅</span>
+              <span aria-hidden="true"></span>
               <span id="sidebarUserSessionText">Oturum aktif</span>
             </span>
           </div>
@@ -148,7 +148,7 @@
               </span>
             </button>
             <button id="notifBtn" class="notif-btn" type="button" aria-label="Bildirimler">
-              <span class="notif-icon">🔔</span>
+              <span class="notif-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span>
               <span id="notifBadge" class="notif-badge hidden">0</span>
             </button>
           </div>
@@ -176,7 +176,7 @@
           <!-- 4'lu ana stat kartlari -->
           <div class="dash-kpi-grid">
             <article class="dash-kpi dash-kpi-active">
-              <div class="dash-kpi-icon">🚌</div>
+              <div class="dash-kpi-icon"></div>
               <div class="dash-kpi-body">
                 <p class="dash-kpi-label">Aktif Hat</p>
                 <p class="dash-kpi-value" id="dashActiveTargets">—</p>
@@ -184,7 +184,7 @@
               </div>
             </article>
             <article class="dash-kpi dash-kpi-changes">
-              <div class="dash-kpi-icon">🔄</div>
+              <div class="dash-kpi-icon"></div>
               <div class="dash-kpi-body">
                 <p class="dash-kpi-label">Bugunku Degisiklik</p>
                 <p class="dash-kpi-value" id="dashTodayChanges">—</p>
@@ -192,7 +192,7 @@
               </div>
             </article>
             <article class="dash-kpi dash-kpi-biggest">
-              <div class="dash-kpi-icon">🚨</div>
+              <div class="dash-kpi-icon"></div>
               <div class="dash-kpi-body">
                 <p class="dash-kpi-label">En Buyuk Degisim</p>
                 <p class="dash-kpi-value" id="dashBiggestAmount">—</p>
@@ -200,7 +200,7 @@
               </div>
             </article>
             <article class="dash-kpi dash-kpi-top">
-              <div class="dash-kpi-icon">🔥</div>
+              <div class="dash-kpi-icon"></div>
               <div class="dash-kpi-body">
                 <p class="dash-kpi-label">En Aktif Rakip (30g)</p>
                 <p class="dash-kpi-value dash-kpi-value-sm" id="dashTopOperator">—</p>
@@ -213,7 +213,7 @@
           <div class="dash-split">
             <section class="dash-card">
               <div class="dash-card-head">
-                <h4>📈 Son 7 Gun Trendi</h4>
+                <h4>Son 7 Gun Trendi</h4>
                 <p class="subtle" id="dashTrendSummary">—</p>
               </div>
               <div id="dashTrendChart" class="dash-trend-chart"></div>
@@ -221,7 +221,7 @@
 
             <section class="dash-card">
               <div class="dash-card-head">
-                <h4>🔔 Son Bildirimler</h4>
+                <h4>Son Bildirimler</h4>
                 <a href="#" id="dashAllNotifsLink" class="dash-card-link">Tumunu Gor</a>
               </div>
               <div id="dashNotifList" class="dash-notif-list">
@@ -363,7 +363,7 @@
             <div class="ph-toolbar-actions">
               <button id="phApplyBtn" class="btn btn-primary" type="button">Filtrele</button>
               <button id="phResetBtn" class="btn btn-ghost" type="button">Temizle</button>
-              <button id="phExportBtn" class="btn btn-ghost" type="button">📥 Excel</button>
+              <button id="phExportBtn" class="btn btn-ghost" type="button">Excel</button>
             </div>
           </div>
 
@@ -373,7 +373,7 @@
               <select id="msDateSelect"><option value="">Tüm dönem</option></select>
             </label>
             <div class="ph-toolbar-actions">
-              <button id="msExportBtn" class="btn btn-success" type="button">📊 Pazar Payı Analizi (Excel)</button>
+              <button id="msExportBtn" class="btn btn-success" type="button">Pazar Payı Analizi (Excel)</button>
             </div>
           </div>
 
@@ -416,15 +416,15 @@
             <table class="data-table ph-table">
               <thead>
                 <tr>
-                  <th class="ph-sortable" data-sort="changed_at">Tespit Zamanı <span class="ph-sort-icon">↕</span></th>
-                  <th class="ph-sortable" data-sort="route">Hat <span class="ph-sort-icon">↕</span></th>
-                  <th class="ph-sortable" data-sort="journey_date">Sefer Tarihi <span class="ph-sort-icon">↕</span></th>
-                  <th class="ph-sortable" data-sort="departure_time">Saat <span class="ph-sort-icon">↕</span></th>
-                  <th class="ph-sortable" data-sort="operator">Firma <span class="ph-sort-icon">↕</span></th>
+                  <th class="ph-sortable" data-sort="changed_at">Tespit Zamanı</th>
+                  <th class="ph-sortable" data-sort="route">Hat</th>
+                  <th class="ph-sortable" data-sort="journey_date">Sefer Tarihi</th>
+                  <th class="ph-sortable" data-sort="departure_time">Saat</th>
+                  <th class="ph-sortable" data-sort="operator">Firma</th>
                   <th>Kalkış Durağı</th>
-                  <th class="ph-sortable" data-sort="old_price" style="text-align:right;">Eski <span class="ph-sort-icon">↕</span></th>
-                  <th class="ph-sortable" data-sort="new_price" style="text-align:right;">Yeni <span class="ph-sort-icon">↕</span></th>
-                  <th class="ph-sortable" data-sort="diff" style="text-align:right;">Fark / % <span class="ph-sort-icon">↕</span></th>
+                  <th class="ph-sortable" data-sort="old_price" style="text-align:right;">Eski</th>
+                  <th class="ph-sortable" data-sort="new_price" style="text-align:right;">Yeni</th>
+                  <th class="ph-sortable" data-sort="diff" style="text-align:right;">Fark / %</th>
                   <th>Durum</th>
                 </tr>
               </thead>
@@ -443,7 +443,7 @@
               <h4 id="phDetailTitle" style="margin:0;">Sefer Detayı</h4>
               <p id="phDetailSubtitle" class="subtle" style="margin:0.3rem 0 0;"></p>
             </div>
-            <button id="phDetailClose" type="button" class="btn btn-sm btn-ghost" title="Kapat">✕</button>
+            <button id="phDetailClose" type="button" class="btn btn-sm btn-ghost" title="Kapat"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
           </div>
           <div class="ph-detail-body">
             <div class="ph-detail-stats" id="phDetailStats"></div>
@@ -540,7 +540,7 @@
                       <div class="obilet-operator-picker">
                         <div class="obilet-operator-trigger" role="button" tabindex="0" aria-haspopup="listbox" aria-expanded="false">
                           <span class="obilet-operator-selected is-placeholder">Firma seciniz...</span>
-                          <span class="obilet-operator-caret" aria-hidden="true">▾</span>
+                          <span class="obilet-operator-caret" aria-hidden="true"></span>
                         </div>
                         <div class="obilet-operator-panel">
                           <div class="obilet-operator-toolbar">
@@ -549,7 +549,7 @@
                             <button type="button" class="btn btn-sm btn-ghost obilet-operator-clear">Temizle</button>
                           </div>
                           <div class="obilet-operator-options">
-                            <div class="obilet-loading">⏳ Firmalar yukleniyor...</div>
+                            <div class="obilet-loading">Firmalar yukleniyor...</div>
                           </div>
                         </div>
                       </div>
@@ -576,7 +576,7 @@
           <section>
             <div style="display:flex;justify-content:space-between;align-items:center;gap:0.8rem;flex-wrap:wrap;">
               <h5 style="margin:0;">Takip Listesi</h5>
-              <button id="obiletBulkDatesBtn" class="btn btn-sm btn-ghost" type="button" title="Tüm hatların tarih aralığını birlikte güncelle">📅 Toplu Tarih Güncelle</button>
+              <button id="obiletBulkDatesBtn" class="btn btn-sm btn-ghost" type="button" title="Tüm hatların tarih aralığını birlikte güncelle">Toplu Tarih Güncelle</button>
             </div>
             <div id="obiletTargetsList" class="obilet-targets-list">
               <div class="obilet-empty">Takip listesi yukleniyor...</div>
@@ -603,7 +603,7 @@
             </label>
             <div class="ph-toolbar-actions">
               <button id="occRefreshBtn" class="btn btn-primary" type="button">Yükle</button>
-              <button id="occExportBtn" class="btn btn-ghost" type="button">📥 Excel</button>
+              <button id="occExportBtn" class="btn btn-ghost" type="button">Excel</button>
             </div>
           </div>
 
@@ -631,7 +631,7 @@
 
         <div id="panelSeferTakip" class="panel-block hidden" data-menu="sefer_takip">
           <h4>Sefer Takip</h4>
-          <p class="subtle">Bir seferin son 3 gündeki fiyat değişiklik geçmişi: kaç kez değişti ve eski → güncel fiyat sırası. Tarih, kalkış/varış ve firma seçip ara.</p>
+          <p class="subtle">Bir seferin son 3 gündeki fiyat değişiklik geçmişi: kaç kez değişti ve eski - güncel fiyat sırası. Tarih, kalkış/varış ve firma seçip ara.</p>
 
           <div class="ph-toolbar ph-toolbar-sefer">
             <label>
@@ -642,7 +642,7 @@
               <span>Kalkış</span>
               <input id="stOrigin" type="text" placeholder="ör. Adana" autocomplete="off" />
             </label>
-            <button id="stSwapBtn" class="st-swap-btn" type="button" title="Kalkış ve varışı yer değiştir (ör. Adana↔Ankara)">⇄</button>
+            <button id="stSwapBtn" class="st-swap-btn" type="button" title="Kalkış ve varışı yer değiştir (ör. Adana-Ankara)"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></button>
             <label>
               <span>Varış</span>
               <input id="stDestination" type="text" placeholder="ör. Ankara" autocomplete="off" />
@@ -652,9 +652,9 @@
               <select id="stOperator"><option value="">Tüm firmalar</option></select>
             </label>
             <div class="ph-toolbar-actions">
-              <button id="stSearchBtn" class="btn btn-primary" type="button">🔍 Ara</button>
+              <button id="stSearchBtn" class="btn btn-primary" type="button">Ara</button>
               <button id="stResetBtn" class="btn btn-ghost" type="button">Temizle</button>
-              <button id="stExportBtn" class="btn btn-success" type="button">📥 Excel</button>
+              <button id="stExportBtn" class="btn btn-success" type="button">Excel</button>
             </div>
           </div>
 
@@ -669,7 +669,7 @@
                   <th>Firma</th>
                   <th>Sefer (Hat)</th>
                   <th>Değişiklik</th>
-                  <th>Fiyat Geçmişi (eski → güncel)</th>
+                  <th>Fiyat Geçmişi (eski - güncel)</th>
                   <th>Güncel</th>
                   <th>Doluluk (Yolcu/Koltuk)</th>
                   <th>Son Değişiklik</th>
@@ -700,8 +700,8 @@
             </label>
             <div class="ph-toolbar-actions">
               <button id="demandRefreshBtn" class="btn btn-primary" type="button">Yenile</button>
-              <button id="demandScanBtn" class="btn btn-ghost" type="button" title="Popüler rotaları hemen taramaya başlat (arka planda)">⚡ Şimdi Tara</button>
-              <button id="demandExportBtn" class="btn btn-success" type="button">📥 Excel</button>
+              <button id="demandScanBtn" class="btn btn-ghost" type="button" title="Popüler rotaları hemen taramaya başlat (arka planda)">Şimdi Tara</button>
+              <button id="demandExportBtn" class="btn btn-success" type="button">Excel</button>
             </div>
           </div>
 
@@ -711,37 +711,37 @@
 
           <div class="dem-split">
             <section class="dem-card">
-              <h5>📅 Haftanın Günü Deseni</h5>
+              <h5>Haftanın Günü Deseni</h5>
               <p class="subtle">Hangi günler ortalama daha dolu?</p>
               <div id="demandWeekday" class="dem-weekday"></div>
             </section>
             <section class="dem-card">
-              <h5>🗓️ Gelecek Günler</h5>
+              <h5>Gelecek Günler</h5>
               <p class="subtle">İleri tarihlerin ortalama doluluğu.</p>
               <div id="demandByDate" class="dem-dates"></div>
             </section>
           </div>
 
           <section class="dem-card">
-            <h5>🚌 Hat Bazlı Yoğunluk Skoru</h5>
+            <h5>Hat Bazlı Yoğunluk Skoru</h5>
             <div id="demandRoutes" class="dem-routes"></div>
           </section>
 
           <div class="dem-split">
             <section class="dem-card">
-              <h5>🔥 En Yoğun Seferler</h5>
+              <h5>En Yoğun Seferler</h5>
               <p class="subtle">Talebin yüksek olduğu seferler (ek sefer / fiyat fırsatı).</p>
               <div id="demandTopFull" class="dem-top"></div>
             </section>
             <section class="dem-card">
-              <h5>🧊 En Boş Seferler</h5>
+              <h5>En Boş Seferler</h5>
               <p class="subtle">Talebin düşük olduğu seferler (dikkat).</p>
               <div id="demandTopEmpty" class="dem-top"></div>
             </section>
           </div>
 
           <details class="dem-pool-wrap">
-            <summary>⚙️ Rota Havuzu Yönetimi</summary>
+            <summary>Rota Havuzu Yönetimi</summary>
             <p class="subtle">Sistem hazır popüler rotalarla gelir. Buradan yeni şehir çifti ekleyebilir, rotaları aktif/pasif yapabilirsin. (Şehir tanınıyorsa route_id otomatik çözülür.)</p>
             <div class="dem-add-row">
               <input id="demandAddOrigin" type="text" placeholder="Kalkış (ör. Adana)" />

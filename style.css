@@ -1971,8 +1971,11 @@ body[data-theme="dark"] .delay-badge-late {
 
 .obilet-operator-caret {
   flex: 0 0 auto;
-  color: var(--muted);
-  font-size: 0.8rem;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid var(--muted);
   transition: transform 0.25s ease;
 }
 .obilet-operator-picker.open .obilet-operator-caret {
@@ -2933,6 +2936,9 @@ body[data-theme="light"] .sidebar-user-card {
   background: rgba(15, 157, 143, 0.15);
   border: 1px solid rgba(15, 157, 143, 0.3);
 }
+/* Emojiler kaldirildi: bos kalan dekoratif ikon kaplarini gizle */
+.dash-kpi-icon:empty,
+.obilet-route-icon:empty { display: none; }
 .dash-kpi-active .dash-kpi-icon  { background: rgba(61, 194, 178, 0.15); border-color: rgba(61, 194, 178, 0.4); }
 .dash-kpi-changes .dash-kpi-icon { background: rgba(255, 167, 38, 0.18); border-color: rgba(255, 167, 38, 0.45); }
 .dash-kpi-biggest .dash-kpi-icon { background: rgba(231, 76, 60, 0.18); border-color: rgba(231, 76, 60, 0.45); }

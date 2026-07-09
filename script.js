@@ -1421,10 +1421,10 @@ function relativeTime(input) {
 // ===== Saat-bazlı selamlama =====
 function timeBasedGreeting() {
   const h = new Date().getHours();
-  if (h >= 6 && h < 12) return "Günaydın 👋";
-  if (h >= 12 && h < 18) return "İyi günler ☀️";
-  if (h >= 18 && h < 24) return "İyi akşamlar 🌆";
-  return "İyi geceler 🌙";
+  if (h >= 6 && h < 12) return "Günaydın ";
+  if (h >= 12 && h < 18) return "İyi günler ";
+  if (h >= 18 && h < 24) return "İyi akşamlar ";
+  return "İyi geceler ";
 }
 
 // ===== Dashboard: backend'den çek ve render et =====
@@ -1468,14 +1468,14 @@ function renderDashboardSummary(s) {
   if (s.biggestToday) {
     const b = s.biggestToday;
     const diff = b.new_price - b.old_price;
-    const arrow = diff > 0 ? "▲" : diff < 0 ? "▼" : "•";
+    const arrow = diff > 0 ? "+" : diff < 0 ? "-" : "";
     const color = diff > 0 ? "#27ae60" : diff < 0 ? "#d32f2f" : "#999";
     if (dom.dashBiggestAmount) {
       dom.dashBiggestAmount.textContent = `${arrow} ${Math.abs(diff)} TL`;
       dom.dashBiggestAmount.style.color = color;
     }
     if (dom.dashBiggestDetail) {
-      const route = `${(b.origin || "").toUpperCase()} → ${(b.destination || "").toUpperCase()}`;
+      const route = `${(b.origin || "").toUpperCase()} - ${(b.destination || "").toUpperCase()}`;
       dom.dashBiggestDetail.textContent = `${b.operator} ${b.departure_time} · ${route}`;
     }
   } else {
@@ -3047,7 +3047,7 @@ function renderActivityCell(cell, lastSeen) {
   const st = activityStatus(lastSeen);
   cell.title = lastSeen || "Kayit yok";
   if (st.online) {
-    cell.innerHTML = '<span class="status-badge status-active">🟢 Şu an aktif</span>';
+    cell.innerHTML = '<span class="status-badge status-active">Şu an aktif</span>';
   } else {
     cell.innerHTML = `<span class="subtle"${st.muted ? "" : ' style="color:inherit"'}>${st.text}</span>`;
   }
@@ -3306,7 +3306,7 @@ function openPermissionEditor(userId) {
 // Bir kullanicinin aktiflik durumunu HTML rozetine cevir (Giris Kayitlari ozeti icin).
 function activityBadgeHtml(lastSeen) {
   const st = activityStatus(lastSeen);
-  if (st.online) return '<span class="status-badge status-active">🟢 Şu an aktif</span>';
+  if (st.online) return '<span class="status-badge status-active">Şu an aktif</span>';
   if (st.muted) return '<span class="subtle">Hiç giriş yapmadı</span>';
   return `<span class="status-badge status-passive">${st.text}</span>`;
 }
@@ -3444,7 +3444,7 @@ dom.logoutBtn.addEventListener("click", async () => {
   await handleLogout();
 });
 
-// Dashboard "Tümünü Gör" linki → bildirim panelini aç
+// Dashboard "Tümünü Gör" linki - bildirim panelini aç
 if (dom.dashAllNotifsLink) {
   dom.dashAllNotifsLink.addEventListener("click", (e) => {
     e.preventDefault();
@@ -4122,7 +4122,7 @@ function openBulkDatesModal() {
   backdrop.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;padding:1rem;";
   backdrop.innerHTML = `
     <div style="background:#1c2530;border:1px solid rgba(255,255,255,0.12);border-radius:14px;max-width:460px;width:100%;padding:1.4rem;">
-      <h4 style="margin:0 0 0.6rem;">📅 Toplu Tarih Güncelle</h4>
+      <h4 style="margin:0 0 0.6rem;">Toplu Tarih Güncelle</h4>
       <p class="subtle" style="margin:0 0 1rem;">Aşağıdaki tarih aralığı <b>tüm aktif hatlara</b> uygulanacak (${targets.length} hat).</p>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.8rem;">
         <label style="display:flex;flex-direction:column;gap:0.3rem;"><span>Başlangıç</span><input id="obDateStart" type="date" value="${defStart}" /></label>
@@ -4149,7 +4149,7 @@ function openBulkDatesModal() {
     try {
       const r = await apiFetch("/api/obilet/targets/bulk-dates", { method: "POST", body: JSON.stringify({ date, endDate }) });
       msg.style.color = "#27ae60";
-      msg.textContent = `✅ ${r.updated} hat güncellendi. Fiyatlar arka planda çekiliyor...`;
+      msg.textContent = `${r.updated} hat güncellendi. Fiyatlar arka planda çekiliyor...`;
       setTimeout(async () => { close(); await renderObiletTargets(); }, 800);
     } catch (err) {
       msg.style.color = "#e0796f";
@@ -4261,7 +4261,7 @@ function phToDot(iso) {
   return m ? `${m[3]}.${m[2]}.${m[1]}` : iso || "-";
 }
 
-// DD.MM.YYYY HH:mm:ss → sortable timestamp (yaklasik). Backend Istanbul timezone ile yaziyor.
+// DD.MM.YYYY HH:mm:ss - sortable timestamp (yaklasik). Backend Istanbul timezone ile yaziyor.
 function phChangedAtSortKey(s) {
   const m = String(s || "").match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
   if (!m) return 0;
@@ -4338,7 +4338,7 @@ function renderPriceHistory() {
     const isDecrease = diff < 0;
     // Firma perspektifi: rakibin artisi = YESIL (iyi haber), rakibin dususu = KIRMIZI (rekabet baskisi)
     const color = isIncrease ? "#27ae60" : isDecrease ? "#d32f2f" : "#666";
-    const arrow = isIncrease ? "▲" : isDecrease ? "▼" : "•";
+    const arrow = isIncrease ? "+" : isDecrease ? "-" : "";
     const pct = r.old_price > 0 ? ((diff / r.old_price) * 100).toFixed(1) : "0.0";
     const pctStr = (diff >= 0 ? "+" : "") + pct + "%";
     const badge = isIncrease
@@ -4350,7 +4350,7 @@ function renderPriceHistory() {
     return `
       <tr class="ph-row" data-idx="${idx}">
         <td style="white-space:nowrap;">${phEscape(r.changed_at)}</td>
-        <td><strong>${phEscape((r.origin || "").toUpperCase())}</strong> → <strong>${phEscape((r.destination || "").toUpperCase())}</strong></td>
+        <td><strong>${phEscape((r.origin || "").toUpperCase())}</strong> - <strong>${phEscape((r.destination || "").toUpperCase())}</strong></td>
         <td>${phToDot(r.journey_date)}</td>
         <td style="text-align:center;font-family:monospace;">${phEscape(r.departure_time)}</td>
         <td>${phEscape(r.operator)}</td>
@@ -4380,10 +4380,10 @@ function renderPriceHistorySortIcons() {
     const icon = th.querySelector(".ph-sort-icon");
     if (!icon) return;
     if (th.dataset.sort === priceHistoryState.sortKey) {
-      icon.textContent = priceHistoryState.sortDir === "asc" ? "▲" : "▼";
+      icon.textContent = priceHistoryState.sortDir === "asc" ? "+" : "-";
       th.classList.add("ph-sort-active");
     } else {
-      icon.textContent = "↕";
+      icon.textContent = "";
       th.classList.remove("ph-sort-active");
     }
   });
@@ -4428,18 +4428,18 @@ function renderPriceHistoryRouteCards() {
     return `
       <article class="ph-route-card" data-target-id="${g.target_id}" tabindex="0" role="button">
         <header class="ph-route-card-head">
-          <span class="ph-route-icon">🚌</span>
-          <h5>${phEscape((g.origin || "").toUpperCase())} → ${phEscape((g.destination || "").toUpperCase())}</h5>
+          <span class="ph-route-icon"></span>
+          <h5>${phEscape((g.origin || "").toUpperCase())} - ${phEscape((g.destination || "").toUpperCase())}</h5>
           <button class="btn btn-small btn-ghost ph-route-excel-btn" type="button"
             data-target-id="${g.target_id}"
             data-origin="${phEscape(g.origin || "")}"
             data-destination="${phEscape(g.destination || "")}"
-            title="Bu hattı Excel'e aktar">📥</button>
+            title="Bu hattı Excel'e aktar"></button>
         </header>
         <div class="ph-route-card-grid">
           <div><span class="ph-rc-label">Değişiklik</span><span class="ph-rc-value">${g.total}</span></div>
-          <div><span class="ph-rc-label">Artış</span><span class="ph-rc-value" style="color:#27ae60;">▲ ${g.up}</span></div>
-          <div><span class="ph-rc-label">Düşüş</span><span class="ph-rc-value" style="color:#d32f2f;">▼ ${g.down}</span></div>
+          <div><span class="ph-rc-label">Artış</span><span class="ph-rc-value" style="color:#27ae60;">${g.up}</span></div>
+          <div><span class="ph-rc-label">Düşüş</span><span class="ph-rc-value" style="color:#d32f2f;">${g.down}</span></div>
           <div><span class="ph-rc-label">Ort. fark</span><span class="ph-rc-value" style="color:${avgColor};">${avgSign}${avgDiff} TL</span></div>
         </div>
         ${topOp ? `<footer class="ph-route-card-foot">En aktif: <strong>${phEscape(topOp[0])}</strong> · ${topOp[1]} değişim</footer>` : ""}
@@ -4530,7 +4530,7 @@ async function openPriceHistoryDetail(row) {
   dom.phDetailPanel.setAttribute("aria-hidden", "false");
   if (dom.phDetailBackdrop) dom.phDetailBackdrop.classList.remove("hidden");
 
-  dom.phDetailTitle.textContent = `${(row.origin || "").toUpperCase()} → ${(row.destination || "").toUpperCase()}`;
+  dom.phDetailTitle.textContent = `${(row.origin || "").toUpperCase()} - ${(row.destination || "").toUpperCase()}`;
   dom.phDetailSubtitle.textContent = `${row.operator} · ${row.departure_time} · ${row.departure_stop || "-"}`;
   dom.phDetailStats.innerHTML = `<p class="subtle">Yükleniyor...</p>`;
   dom.phDetailChart.innerHTML = "";
@@ -4565,11 +4565,11 @@ async function openPriceHistoryDetail(row) {
       dom.phDetailHistory.innerHTML = history.slice().reverse().map(h => {
         const diff = h.new_price - h.old_price;
         const color = diff > 0 ? "#27ae60" : diff < 0 ? "#d32f2f" : "#888";
-        const arrow = diff > 0 ? "▲" : diff < 0 ? "▼" : "•";
+        const arrow = diff > 0 ? "+" : diff < 0 ? "-" : "";
         return `<div class="ph-detail-history-row">
           <span style="opacity:0.75;font-size:12px;">${phEscape(h.changed_at)}</span>
           <span style="text-decoration:line-through;opacity:0.7;">${h.old_price} TL</span>
-          <span>→</span>
+          <span>-</span>
           <strong style="color:${color};">${h.new_price} TL</strong>
           <span style="color:${color};">${arrow} ${Math.abs(diff)} TL</span>
         </div>`;
@@ -4730,7 +4730,7 @@ async function populatePriceHistoryTargetSelect() {
     const targets = Array.isArray(data?.targets) ? data.targets : [];
     const currentVal = dom.phTargetSelect.value;
     dom.phTargetSelect.innerHTML = `<option value="">Tüm hatlar</option>` +
-      targets.map(t => `<option value="${t.id}">${(t.origin || "").toUpperCase()} → ${(t.destination || "").toUpperCase()}</option>`).join("");
+      targets.map(t => `<option value="${t.id}">${(t.origin || "").toUpperCase()} - ${(t.destination || "").toUpperCase()}</option>`).join("");
     if (currentVal) dom.phTargetSelect.value = currentVal;
   } catch (e) { /* sessiz */ }
 }
@@ -4919,7 +4919,7 @@ async function populateOccupancyTargetSelect() {
     const targets = Array.isArray(data?.targets) ? data.targets : [];
     const cur = sel.value;
     sel.innerHTML = `<option value="">Tüm hatlar</option>` +
-      targets.map((t) => `<option value="${t.id}">${occEsc((t.origin || "").toUpperCase())} → ${occEsc((t.destination || "").toUpperCase())}</option>`).join("");
+      targets.map((t) => `<option value="${t.id}">${occEsc((t.origin || "").toUpperCase())} - ${occEsc((t.destination || "").toUpperCase())}</option>`).join("");
     if (cur) sel.value = cur;
   } catch (e) { /* sessiz */ }
 }
@@ -4994,7 +4994,7 @@ function occRowHtml(r) {
   const sold = (r.total_seats || 0) - (r.available_seats || 0);
   const p = r.occupancy_percent || 0;
   return `<tr>
-    <td>${occEsc((r.origin || "").toUpperCase())} → ${occEsc((r.destination || "").toUpperCase())}</td>
+    <td>${occEsc((r.origin || "").toUpperCase())} - ${occEsc((r.destination || "").toUpperCase())}</td>
     <td>${occToDot(r.journey_date)}</td>
     <td>${occEsc(r.departure_time || "")}</td>
     <td>${occEsc(r.operator || "")}</td>
@@ -5108,7 +5108,7 @@ async function loadDemandStatus() {
   if (!el) return;
   try {
     const s = await apiFetch("/api/analysis/status");
-    const running = s.workerRunning ? "🟢 Tarama çalışıyor" : "⚪ Beklemede";
+    const running = s.workerRunning ? "Tarama çalışıyor" : "Beklemede";
     el.textContent = `${running} · ${s.routeCount} aktif rota · ${s.measurements} ölçüm · son: ${demFmtMeasured(s.lastMeasured)} · ufuk ${s.horizonDays} gün`;
   } catch (e) { el.textContent = ""; }
 }
@@ -5122,7 +5122,7 @@ async function loadDemandRoutes() {
       const cur = sel.value;
       const withId = routes.filter((r) => r.route_id);
       sel.innerHTML = `<option value="">Tüm rotalar</option>` +
-        withId.map((r) => `<option value="${escapeHtml(r.route_id)}">${escapeHtml(r.origin)} → ${escapeHtml(r.destination)}</option>`).join("");
+        withId.map((r) => `<option value="${escapeHtml(r.route_id)}">${escapeHtml(r.origin)} - ${escapeHtml(r.destination)}</option>`).join("");
       if (cur) sel.value = cur;
     }
     const pool = document.getElementById("demandPoolList");
@@ -5133,7 +5133,7 @@ async function loadDemandRoutes() {
           : `<span class="dem-chip dem-chip-warn">route_id yok</span>`;
         return `<div class="dem-pool-row ${r.is_active ? "" : "dem-pool-off"}">
           <div class="dem-pool-main">
-            <strong>${escapeHtml(r.origin)} → ${escapeHtml(r.destination)}</strong>
+            <strong>${escapeHtml(r.origin)} - ${escapeHtml(r.destination)}</strong>
             ${resolved}${r.is_seed ? ` <span class="dem-chip">hazır</span>` : ""}
           </div>
           <div class="dem-pool-meta subtle">${r.coverage || 0} sefer ölçüldü · ${demFmtMeasured(r.lastMeasured)}</div>
@@ -5222,8 +5222,8 @@ function renderDemand(data) {
   renderDemandWeekday(data.byWeekday || []);
   renderDemandByDate(data.byDate || []);
   renderDemandRoutes(data.routes || []);
-  renderDemandTop("demandTopFull", data.topFull || [], "🔥");
-  renderDemandTop("demandTopEmpty", data.topEmpty || [], "🧊");
+  renderDemandTop("demandTopFull", data.topFull || [], "");
+  renderDemandTop("demandTopEmpty", data.topEmpty || [], "");
 }
 
 function renderDemandWeekday(byWeekday) {
@@ -5256,14 +5256,14 @@ function renderDemandRoutes(routes) {
     const b = r.busiestDate, q = r.quietestDate;
     return `<div class="dem-route">
       <div class="dem-route-head">
-        <strong>${escapeHtml(r.origin)} → ${escapeHtml(r.destination)}</strong>
+        <strong>${escapeHtml(r.origin)} - ${escapeHtml(r.destination)}</strong>
         <span class="dem-route-score" style="color:${demColor(r.avgOccupancy)}">%${r.avgOccupancy}</span>
       </div>
       ${demBar(r.avgOccupancy)}
       <div class="dem-route-meta subtle">
         <span>${r.seferCount} sefer</span>
-        ${b ? `<span>🔥 <b>${demToDot(b.date)}</b> ${escapeHtml(b.weekday)} (%${b.avg})</span>` : ""}
-        ${q ? `<span>🧊 <b>${demToDot(q.date)}</b> ${escapeHtml(q.weekday)} (%${q.avg})</span>` : ""}
+        ${b ? `<span><b>${demToDot(b.date)}</b> ${escapeHtml(b.weekday)} (%${b.avg})</span>` : ""}
+        ${q ? `<span><b>${demToDot(q.date)}</b> ${escapeHtml(q.weekday)} (%${q.avg})</span>` : ""}
       </div>
     </div>`;
   }).join("");
@@ -5275,7 +5275,7 @@ function renderDemandTop(elId, list, icon) {
   if (!list.length) { el.innerHTML = `<p class="subtle">Veri yok.</p>`; return; }
   el.innerHTML = list.map((s) => `<div class="dem-top-row">
       <div class="dem-top-main">
-        <b>${escapeHtml(s.origin)} → ${escapeHtml(s.destination)}</b>
+        <b>${escapeHtml(s.origin)} - ${escapeHtml(s.destination)}</b>
         <span class="subtle">${demToDot(s.journey_date)} ${escapeHtml(s.weekday)} · ${escapeHtml(s.departure_time)} · ${escapeHtml(s.operator)}</span>
       </div>
       <div class="dem-top-val" style="color:${demColor(s.occupancy_percent)}">${icon} %${s.occupancy_percent} <span class="subtle">(${s.sold}/${s.total_seats})</span></div>
@@ -5387,7 +5387,7 @@ function setupSeferTakipPanel() {
       el.addEventListener("focus", selectAll);
       el.addEventListener("click", selectAll);
     });
-    // Yön değiştir: Kalkış ↔ Varış yer değiştir ve otomatik tekrar ara.
+    // Yön değiştir: Kalkış - Varış yer değiştir ve otomatik tekrar ara.
     const swapBtn = document.getElementById("stSwapBtn");
     if (swapBtn) swapBtn.addEventListener("click", () => {
       const o = document.getElementById("stOrigin");
@@ -5396,7 +5396,7 @@ function setupSeferTakipPanel() {
       const tmp = o.value; o.value = d.value; d.value = tmp;
       searchSeferTakip();
     });
-    // Admin: satırdaki 🔄 ile o seferin GERÇEK dolulugunu HEMEN çek (event delegation).
+    // Admin: satırdaki ile o seferin GERÇEK dolulugunu HEMEN çek (event delegation).
     const stBody = document.getElementById("stTableBody");
     if (stBody) stBody.addEventListener("click", async (e) => {
       const b = e.target.closest(".st-seat-refresh");
@@ -5404,7 +5404,7 @@ function setupSeferTakipPanel() {
       e.preventDefault();
       const { tid, date, time, op } = b.dataset;
       const old = b.textContent;
-      b.disabled = true; b.textContent = "⏳";
+      b.disabled = true; b.textContent = "";
       try {
         const r = await apiFetch("/api/obilet/seat-refresh", {
           method: "POST",
@@ -5413,13 +5413,13 @@ function setupSeferTakipPanel() {
         const cell = b.closest("td");
         if (r.ok && cell) {
           const pct = r.total ? Math.round((r.sold / r.total) * 100) : 0;
-          cell.innerHTML = `<b style="color:${occColor(pct)}">${r.sold}/${r.total}</b> <span style="opacity:.7">(%${pct})</span> <span title="Gerçek koltuk haritasından" style="color:#2ecc71;">✓</span>`;
+          cell.innerHTML = `<b style="color:${occColor(pct)}">${r.sold}/${r.total}</b> <span style="opacity:.7">(%${pct})</span> <span title="Gerçek koltuk haritasından" style="color:#2ecc71;"></span>`;
         } else {
-          b.textContent = "⚠"; b.title = r.message || "Alınamadı";
+          b.textContent = ""; b.title = r.message || "Alınamadı";
           setTimeout(() => { b.textContent = old; b.disabled = false; }, 2500);
         }
       } catch (err) {
-        b.textContent = "⚠"; b.title = err.message || "Hata";
+        b.textContent = ""; b.title = err.message || "Hata";
         setTimeout(() => { b.textContent = old; b.disabled = false; }, 2500);
       }
     });
@@ -5469,12 +5469,12 @@ const ST_PAGE = 50; // Kademeli yukleme adim boyu (kasmayi onlemek icin hepsini 
 
 // Tek bir sefer satirinin HTML'i.
 function stRowHtml(j) {
-  // Fiyat geçmişi: eski → ... → güncel, renkli oklarla.
+  // Fiyat geçmişi: eski - ... - güncel, renkli oklarla.
   const seq = (j.prices || []).map((p, i, arr) => {
     let color = "#c9d1d9";
     if (i > 0) color = p < arr[i - 1] ? "#2ecc71" : p > arr[i - 1] ? "#e74c3c" : "#c9d1d9";
     return `<b style="color:${color}">${p}</b>`;
-  }).join(" <span style='opacity:.5'>→</span> ");
+  }).join(" <span style='opacity:.5'>-</span> ");
   const changeBadge = `<span style="background:#31507a;color:#fff;border-radius:10px;padding:1px 8px;font-size:0.8rem;">${j.changeCount}x</span>`;
   // Doluluk: yolcu / toplam koltuk + yuzde renkli.
   let dolCell = "<span style='opacity:.5'>-</span>";
@@ -5486,14 +5486,14 @@ function stRowHtml(j) {
   if (j.target_id != null) {
     dolCell += ` <button class="st-seat-refresh" title="Bu seferin gerçek koltuk doluluğunu hemen çek"
       data-tid="${j.target_id}" data-date="${occEsc(j.journey_date || "")}" data-time="${occEsc(j.departure_time || "")}" data-op="${occEsc(j.operator || "")}"
-      style="margin-left:6px;border:none;border-radius:6px;background:#2f6fb0;color:#fff;cursor:pointer;font-size:0.85rem;padding:1px 7px;">🔄</button>`;
+      style="margin-left:6px;border:none;border-radius:6px;background:#2f6fb0;color:#fff;cursor:pointer;font-size:0.85rem;padding:1px 7px;"></button>`;
   }
   return `<tr>
     <td>${occToDot(j.journey_date)}</td>
     <td>${occEsc(j.departure_time || "")}</td>
     <td>${occEsc(j.operator || "")}</td>
     <td>
-      <b>${occEsc((j.origin || "").toUpperCase())} → ${occEsc((j.destination || "").toUpperCase())}</b>
+      <b>${occEsc((j.origin || "").toUpperCase())} - ${occEsc((j.destination || "").toUpperCase())}</b>
       ${j.departure_stop ? `<div style="font-size:0.78rem;opacity:0.6;">${occEsc(j.departure_stop)}</div>` : ""}
     </td>
     <td style="text-align:center;">${changeBadge}</td>
@@ -5561,10 +5561,10 @@ function exportSeferTakipExcel() {
       occToDot(j.journey_date),
       j.departure_time || "",
       j.operator || "",
-      `${(j.origin || "").toUpperCase()} → ${(j.destination || "").toUpperCase()}`,
+      `${(j.origin || "").toUpperCase()} - ${(j.destination || "").toUpperCase()}`,
       j.departure_stop || "",
       `${j.changeCount}x`,
-      (j.prices || []).join(" → "),
+      (j.prices || []).join(" - "),
       j.currentPrice != null ? j.currentPrice : "",
       j.yolcu != null ? j.yolcu : "",
       j.totalSeats != null ? j.totalSeats : "",
@@ -5593,7 +5593,7 @@ function openObiletEditModal(t) {
   backdrop.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;padding:1rem;";
   backdrop.innerHTML = `
     <div style="background:#1c2530;border:1px solid rgba(255,255,255,0.12);border-radius:14px;max-width:560px;width:100%;max-height:90vh;overflow:auto;padding:1.4rem;">
-      <h4 style="margin:0 0 1rem;">✏️ Hat Düzenle — ${esc((t.origin || "").toUpperCase())} → ${esc((t.destination || "").toUpperCase())}</h4>
+      <h4 style="margin:0 0 1rem;">Hat Düzenle — ${esc((t.origin || "").toUpperCase())} - ${esc((t.destination || "").toUpperCase())}</h4>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.8rem;">
         <label style="display:flex;flex-direction:column;gap:0.3rem;"><span>Kalkış</span><input id="oeOrigin" type="text" value="${esc(t.origin)}" /></label>
         <label style="display:flex;flex-direction:column;gap:0.3rem;"><span>Varış</span><input id="oeDest" type="text" value="${esc(t.destination)}" /></label>
@@ -5634,7 +5634,7 @@ function openObiletEditModal(t) {
     try {
       await apiFetch(`/api/obilet/targets/${t.id}`, { method: "PATCH", body: JSON.stringify(body) });
       msg.style.color = "#27ae60";
-      msg.textContent = "✅ Kaydedildi. Fiyatlar arka planda güncelleniyor...";
+      msg.textContent = "Kaydedildi. Fiyatlar arka planda güncelleniyor...";
       setTimeout(async () => { close(); await renderObiletTargets(); }, 700);
     } catch (err) {
       msg.style.color = "#e0796f";
@@ -5647,7 +5647,7 @@ async function renderObiletTargets() {
   const listEl = document.getElementById("obiletTargetsList");
   if (!listEl) return;
 
-  listEl.innerHTML = `<div class="obilet-loading">⏳ Yükleniyor...</div>`;
+  listEl.innerHTML = `<div class="obilet-loading">Yükleniyor...</div>`;
   try {
     const result = await apiFetch("/api/obilet/targets");
     obiletState.targets = result.targets || [];
@@ -5661,7 +5661,7 @@ function renderObiletTargetCards(listEl) {
   if (!obiletState.targets.length) {
     listEl.innerHTML = `
       <div class="obilet-empty">
-        <span>📋</span>
+        <span></span>
         <p>Henüz takip edilen hat yok. Aşağıdaki formu kullanarak yeni bir hat ekleyin.</p>
       </div>`;
     return;
@@ -5683,35 +5683,35 @@ function renderObiletTargetCards(listEl) {
       <div class="obilet-target-card" data-id="${t.id}">
         <div class="obilet-card-header">
           <div class="obilet-card-route">
-            <span class="obilet-route-icon">🚌</span>
+            <span class="obilet-route-icon"></span>
             <div>
-              <strong>${t.origin.toUpperCase()} ➔ ${t.destination.toUpperCase()}</strong>
+              <strong>${t.origin.toUpperCase()} - ${t.destination.toUpperCase()}</strong>
               <span class="obilet-date-badge">${periodLabel}</span>
             </div>
           </div>
           <div class="obilet-card-actions">
-            <button class="btn btn-sm btn-ghost obilet-refresh-btn" data-id="${t.id}" title="Güncelle">🔄</button>
-            ${isAdmin ? `<button class="btn btn-sm btn-primary obilet-priority-btn" data-id="${t.id}" title="Sıra beklemeden hemen tara (admin)">⚡ Anlık Tara</button>` : ""}
-            ${isAdmin ? `<button class="btn btn-sm btn-ghost obilet-seatprobe-btn" data-id="${t.id}" title="Bir seferin GERÇEK koltuk haritasını çekip liste değeriyle karşılaştır (test)">🔬 Koltuk Testi</button>` : ""}
-            <button class="btn btn-sm btn-ghost obilet-edit-btn" data-id="${t.id}" title="Düzenle">✏️ Düzenle</button>
-            <button class="btn btn-sm btn-success obilet-excel-btn" data-id="${t.id}" title="Excel İndir">📥 Excel</button>
-            <button class="btn btn-sm btn-ghost obilet-expand-btn" data-id="${t.id}" title="Fiyatları Göster">📊 Fiyatlar</button>
-            <button class="btn btn-sm btn-danger obilet-delete-btn" data-id="${t.id}" title="Sil">🗑</button>
+            <button class="btn btn-sm btn-ghost obilet-refresh-btn" data-id="${t.id}" title="Güncelle"></button>
+            ${isAdmin ? `<button class="btn btn-sm btn-primary obilet-priority-btn" data-id="${t.id}" title="Sıra beklemeden hemen tara (admin)">Anlık Tara</button>` : ""}
+            ${isAdmin ? `<button class="btn btn-sm btn-ghost obilet-seatprobe-btn" data-id="${t.id}" title="Bir seferin GERÇEK koltuk haritasını çekip liste değeriyle karşılaştır (test)">Koltuk Testi</button>` : ""}
+            <button class="btn btn-sm btn-ghost obilet-edit-btn" data-id="${t.id}" title="Düzenle">Düzenle</button>
+            <button class="btn btn-sm btn-success obilet-excel-btn" data-id="${t.id}" title="Excel İndir">Excel</button>
+            <button class="btn btn-sm btn-ghost obilet-expand-btn" data-id="${t.id}" title="Fiyatları Göster">Fiyatlar</button>
+            <button class="btn btn-sm btn-danger obilet-delete-btn" data-id="${t.id}" title="Sil">Sil</button>
           </div>
         </div>
         <div class="obilet-card-meta">
-          <span class="obilet-tag">🏢 ${t.operators}</span>
-          ${departureStopFilter ? `<span class="obilet-tag">📍 ${departureStopFilter}</span>` : ""}
-          <span class="obilet-tag">📧 ${emails.length ? emails.join(", ") : "-"}</span>
-          ${t.created_by ? `<span class="obilet-tag" title="Hatti ekleyen kullanici">👤 ${t.created_by}</span>` : ""}
+          <span class="obilet-tag">${t.operators}</span>
+          ${departureStopFilter ? `<span class="obilet-tag">${departureStopFilter}</span>` : ""}
+          <span class="obilet-tag">${emails.length ? emails.join(", ") : "-"}</span>
+          ${t.created_by ? `<span class="obilet-tag" title="Hatti ekleyen kullanici">${t.created_by}</span>` : ""}
           <span class="obilet-tag ${t.is_active ? 'obilet-active' : 'obilet-passive'}">
-            ${t.is_active ? '✅ Aktif' : '⏸ Pasif'}
+            ${t.is_active ? 'Aktif' : 'Pasif'}
           </span>
-          <span class="obilet-tag ${statusClass}">🧭 ${syncStatus || "Henüz kontrol edilmedi"}</span>
-          ${syncAt ? `<span class="obilet-tag">🕒 ${syncAt}</span>` : ""}
+          <span class="obilet-tag ${statusClass}">${syncStatus || "Henüz kontrol edilmedi"}</span>
+          ${syncAt ? `<span class="obilet-tag">${syncAt}</span>` : ""}
         </div>
         <div class="obilet-prices-area hidden" id="pricesArea-${t.id}">
-          <div class="obilet-loading">⏳ Fiyatlar yükleniyor...</div>
+          <div class="obilet-loading">Fiyatlar yükleniyor...</div>
         </div>
       </div>`;
   }).join("");
@@ -5745,10 +5745,10 @@ function renderObiletTargetCards(listEl) {
       const id = btn.dataset.id;
       const oldText = btn.textContent;
       btn.disabled = true;
-      btn.textContent = "⚡ Başlatılıyor...";
+      btn.textContent = "Başlatılıyor...";
       try {
         const r = await apiFetch(`/api/obilet/targets/${id}/priority-refresh`, { method: "POST" });
-        btn.textContent = "⚡ Tarıyor...";
+        btn.textContent = "Tarıyor...";
         const statusEl = document.getElementById("obiletActionStatus");
         if (statusEl) { statusEl.style.color = "#27ae60"; statusEl.textContent = r.message || "Öncelikli tarama başlatıldı."; }
         // Birkaç saniye sonra listeyi tazele (sonuç düşsün).
@@ -5774,7 +5774,7 @@ function renderObiletTargetCards(listEl) {
       const operator = prompt("Hangi firma? (örn Enver Geçgel — boş bırakırsan o saatteki ilk firma)", (target.operators || "").split(",")[0].trim());
       const oldText = btn.textContent;
       btn.disabled = true;
-      btn.textContent = "🔬 Çekiliyor...";
+      btn.textContent = "Çekiliyor...";
       try {
         const params = new URLSearchParams({ date });
         if (time) params.set("time", time.trim());
@@ -5782,9 +5782,9 @@ function renderObiletTargetCards(listEl) {
         const r = await apiFetch(`/api/obilet/targets/${id}/seatmap-probe?${params.toString()}`, { method: "POST" });
         let list = "";
         if (Array.isArray(r.seferler) && r.seferler.length) {
-          list = "\n\nBu saatteki firmalar:\n" + r.seferler.map(s => `• ${s.firma}: ${(s.total!=null&&s.avail!=null)?(s.total-s.avail):"?"}/${s.total} dolu`).join("\n");
+          list = "\n\nBu saatteki firmalar:\n" + r.seferler.map(s => `${s.firma}: ${(s.total!=null&&s.avail!=null)?(s.total-s.avail):"?"}/${s.total} dolu`).join("\n");
         }
-        alert(`🔬 KOLTUK TESTİ SONUCU\n\n${r.ozet}${list}\n\n(Detay: Railway loglarında "[SeatProbe]". Liste ile gerçek harita farklıysa liste güvenilmez demektir.)`);
+        alert(`KOLTUK TESTİ SONUCU\n\n${r.ozet}${list}\n\n(Detay: Railway loglarında "[SeatProbe]". Liste ile gerçek harita farklıysa liste güvenilmez demektir.)`);
       } catch (err) {
         alert("Koltuk testi başarısız: " + err.message);
       } finally {
@@ -5804,9 +5804,9 @@ function renderObiletTargetCards(listEl) {
       const originalText = btn.textContent;
       try {
         btn.disabled = true;
-        btn.textContent = "⏳";
+        btn.textContent = "";
         const result = await apiFetch(`/api/obilet/targets/${id}/refresh`, { method: "POST" });
-        btn.textContent = "✅";
+        btn.textContent = "";
 
         setTimeout(() => {
           btn.textContent = originalText;
@@ -5823,7 +5823,7 @@ function renderObiletTargetCards(listEl) {
       } catch (err) {
         // 409 = "zaten kuyrukta" uyarisi (hata degil, bilgilendirme)
         const isQueueWarning = err.payload?.queued === false;
-        btn.textContent = isQueueWarning ? "⏸" : "❌";
+        btn.textContent = isQueueWarning ? "" : "";
         setTimeout(() => {
           btn.textContent = originalText;
           btn.disabled = false;
@@ -5848,7 +5848,7 @@ function renderObiletTargetCards(listEl) {
       const originalText = btn.textContent;
       try {
         btn.disabled = true;
-        btn.textContent = "⏳";
+        btn.textContent = "";
         
         // Fiyat geçmişini al
         const prices = await apiFetch(`/api/obilet/targets/${id}/prices`);
@@ -5871,13 +5871,13 @@ function renderObiletTargetCards(listEl) {
         link.download = fileName;
         link.click();
         
-        btn.textContent = "✅";
+        btn.textContent = "";
         setTimeout(() => {
           btn.textContent = originalText;
           btn.disabled = false;
         }, 2000);
       } catch (err) {
-        btn.textContent = "❌";
+        btn.textContent = "";
         setTimeout(() => {
           btn.textContent = originalText;
           btn.disabled = false;
@@ -5900,7 +5900,7 @@ function renderObiletTargetCards(listEl) {
       }
 
       pricesArea.classList.remove("hidden");
-      pricesArea.innerHTML = `<div class="obilet-loading">⏳ Fiyatlar yükleniyor...</div>`;
+      pricesArea.innerHTML = `<div class="obilet-loading">Fiyatlar yükleniyor...</div>`;
 
       try {
         const result = await apiFetch(`/api/obilet/prices/${id}`);
@@ -5983,7 +5983,7 @@ function setupObiletForm() {
     row.querySelector(".obilet-operator-picker")?.classList.remove("open");
     const optionsEl = row.querySelector(".obilet-operator-options");
     if (optionsEl) {
-      optionsEl.innerHTML = '<div class="obilet-loading">⏳ Firmalar yukleniyor...</div>';
+      optionsEl.innerHTML = '<div class="obilet-loading">Firmalar yukleniyor...</div>';
     }
   };
 
@@ -6083,7 +6083,7 @@ function setupObiletForm() {
     try {
       submitBtn.disabled = true;
       if (addRowBtn) addRowBtn.disabled = true;
-      submitBtn.textContent = "⏳ Ekleniyor...";
+      submitBtn.textContent = "Ekleniyor...";
       msgEl.textContent = "";
 
       let successCount = 0;
@@ -6105,7 +6105,7 @@ function setupObiletForm() {
         msgEl.textContent = `Bazilari eklenemedi (${errors.length}). ${errors[0]}`;
       } else {
         msgEl.style.color = "#1f7a1f";
-        msgEl.textContent = `✅ ${successCount} hat basariyla eklendi! Fiyatlar arka planda cekiliyor...`;
+        msgEl.textContent = `${successCount} hat basariyla eklendi! Fiyatlar arka planda cekiliyor...`;
         const rows = getRows();
         const firstRow = rows[0] || null;
         rows.slice(1).forEach((row) => row.remove());

@@ -835,7 +835,7 @@ function isJourneyInFuture(journeyDate, departureTime) {
   
   // Today: compare departure time with current time
   const depTimeStr = String(departureTime || "").trim().substring(0, 5); // "17:00"
-  return depTimeStr > now; // "17:00" > "20:36"? false → excluded
+  return depTimeStr > now; // "17:00" > "20:36"? false - excluded
 }
 
 function shiftIsoDate(dateIso, dayOffset) {
@@ -2333,7 +2333,7 @@ setInterval(() => {
 autoSyncReportingDates().catch(() => null);
 
 // Eski fiyat degisiklik kayitlarini otomatik temizle.
-// changed_at formati: DD.MM.YYYY HH:mm:ss → SQL'de YYYY-MM-DD'ye cevirip kesim tarihiyle kiyasla.
+// changed_at formati: DD.MM.YYYY HH:mm:ss - SQL'de YYYY-MM-DD'ye cevirip kesim tarihiyle kiyasla.
 function cleanupOldPriceHistory() {
   if (!PRICE_HISTORY_RETENTION_DAYS || PRICE_HISTORY_RETENTION_DAYS <= 0) {
     return; // 0 veya gecersiz = temizlik kapali
@@ -3972,7 +3972,7 @@ async function getObiletSession() {
 // oBilet İstasyon ID önbelleği
 const obiletStationIdCache = new Map();
 
-// oBilet API: Şehir → İstasyon ID bul
+// oBilet API: Şehir - İstasyon ID bul
 async function getObiletStationId(cityName, session) {
   const key = slugTr(cityName);
   if (obiletStationIdCache.has(key)) return obiletStationIdCache.get(key);
@@ -4003,7 +4003,7 @@ async function getObiletStationId(cityName, session) {
       
       if (match?.id) {
         obiletStationIdCache.set(key, match.id);
-        console.log(`[oBilet] İstasyon bulundu: ${cityName} → ID:${match.id} (${match.name})`);
+        console.log(`[oBilet] İstasyon bulundu: ${cityName} - ID:${match.id} (${match.name})`);
         return match.id;
       }
     }
@@ -4025,7 +4025,7 @@ async function fetchObiletJourneysViaApi(origin, destination, dateIso) {
     ]);
 
     if (!originId || !destId) {
-      console.log(`[oBilet API] İstasyon ID bulunamadı: ${origin}(${originId}) → ${destination}(${destId})`);
+      console.log(`[oBilet API] İstasyon ID bulunamadı: ${origin}(${originId}) - ${destination}(${destId})`);
       return [];
     }
 
@@ -4053,7 +4053,7 @@ async function fetchObiletJourneysViaApi(origin, destination, dateIso) {
     });
 
     if (!res.ok) {
-      console.log(`[oBilet API] HTTP ${res.status} - ${origin} → ${destination}`);
+      console.log(`[oBilet API] HTTP ${res.status} - ${origin} - ${destination}`);
       return [];
     }
 
@@ -4061,7 +4061,7 @@ async function fetchObiletJourneysViaApi(origin, destination, dateIso) {
     const items = Array.isArray(data?.data) ? data.data : [];
 
     if (!items.length) {
-      console.log(`[oBilet API] Sonuç boş: ${origin} → ${destination} ${dateIso}`);
+      console.log(`[oBilet API] Sonuç boş: ${origin} - ${destination} ${dateIso}`);
       return [];
     }
 
@@ -4121,10 +4121,10 @@ async function fetchObiletJourneysViaApi(origin, destination, dateIso) {
       journeys.push({ operator, time: depTime, price, departureStop: depStop, arrivalStop: arrStop });
     }
 
-    console.log(`[oBilet API] ${origin}→${destination} ${dateIso}: ${journeys.length} sefer bulundu`);
+    console.log(`[oBilet API] ${origin}-${destination} ${dateIso}: ${journeys.length} sefer bulundu`);
     if (journeys.length > 0) {
       journeys.slice(0, 5).forEach(j => 
-        console.log(`  → ${j.operator} ${j.time}: ${j.price} TL (${j.departureStop})`)
+        console.log(`  - ${j.operator} ${j.time}: ${j.price} TL (${j.departureStop})`)
       );
     }
     return journeys;
@@ -4193,7 +4193,7 @@ async function scrapeObilet(origin, destination, dateIso, routeId = null, seatOp
   if (apiResult.length > 0) return apiResult;
 
   // 4) Puppeteer fallback (browser-API + route discovery)
-  console.log(`[oBilet] API başarısız, Puppeteer deneniyor: ${origin}→${destination} ${dateIso}`);
+  console.log(`[oBilet] API başarısız, Puppeteer deneniyor: ${origin}-${destination} ${dateIso}`);
   return scrapeObiletViaPuppeteer(origin, destination, dateIso);
 }
 
@@ -4827,7 +4827,7 @@ async function sendPriceChangeEmail(emailList, target, changes) {
 
   const changeRows = changes.map(c => {
     const isDrop = c.newPrice < c.oldPrice;
-    const direction = isDrop ? "📉 Fiyat DÜŞTÜ" : "📈 Fiyat YÜKSELDİ";
+    const direction = isDrop ? "Fiyat DÜŞTÜ" : "Fiyat YÜKSELDİ";
     // Firma perspektifi: rakip artisi = YESIL (iyi), rakip dususu = KIRMIZI (rekabet baskisi)
     const directionColor = isDrop ? "#c0392b" : "#27ae60";
     return `
@@ -4856,7 +4856,7 @@ async function sendPriceChangeEmail(emailList, target, changes) {
         <div style="background-color: #f8f9fa; border-left: 4px solid #2a5298; padding: 15px; border-radius: 4px; margin-bottom: 25px;">
           <h3 style="margin: 0 0 5px 0; color: #2c3e50; font-size: 15px; font-family: sans-serif;">Güzergah Bilgileri</h3>
           <p style="margin: 0; color: #555555; font-size: 14px; font-family: sans-serif; line-height: 1.5;">
-            <strong>Hat:</strong> ${target.origin.toUpperCase()} ➔ ${target.destination.toUpperCase()} <br/>
+            <strong>Hat:</strong> ${target.origin.toUpperCase()} - ${target.destination.toUpperCase()} <br/>
             <strong>Tarih:</strong> ${formattedDate}
           </p>
         </div>
@@ -5038,7 +5038,7 @@ function tgChangesGrouped(rows) {
     for (let i = 0; i < tableRows.length; i += MAX_ROWS) {
       const slice = tableRows.slice(i, i + MAX_ROWS);
       const partLabel = partCount > 1 ? ` (${Math.floor(i / MAX_ROWS) + 1}/${partCount})` : "";
-      const header = `🚌 <b>${tgEscape(g.route)}</b> · ${tgEscape(g.operator)}${partLabel}${occLabel}`;
+      const header = `<b>${tgEscape(g.route)}</b> · ${tgEscape(g.operator)}${partLabel}${occLabel}`;
       blocks.push(header + "\n" + tgTable(cols, slice, { compact: true }));
     }
   }
@@ -5127,7 +5127,7 @@ async function sendObiletTelegramAlert(target, changes) {
   }));
   tgAttachOccupancy(rows); // her degisikligin yanina bos/dolu koltuk
   const text =
-    `🔔 <b>Fiyat Değişikliği</b> · ${changes.length} değişim\n\n` +
+    `<b>Fiyat Değişikliği</b> · ${changes.length} değişim\n\n` +
     tgChangesGrouped(rows);
 
   for (const chatId of chatIds) {
@@ -5226,7 +5226,7 @@ function telegramNotifyChatIds(target) {
   }
   return [...set];
 }
-// Abonelik klavyesi: her hat icin ✅ (abone) / ⬜ (degil) butonu.
+// Abonelik klavyesi: her hat icin (abone) / (degil) butonu.
 function tgBuildAboneKeyboard(chatId) {
   const routes = db.prepare("SELECT id, origin, destination FROM obilet_targets ORDER BY origin, destination").all();
   const subs = new Set(
@@ -5234,7 +5234,7 @@ function tgBuildAboneKeyboard(chatId) {
   );
   return {
     inline_keyboard: routes.map((r) => [{
-      text: `${subs.has(r.id) ? "✅" : "⬜"} ${(r.origin || "").toUpperCase()} → ${(r.destination || "").toUpperCase()}`,
+      text: `${subs.has(r.id) ? "" : ""} ${(r.origin || "").toUpperCase()} - ${(r.destination || "").toUpperCase()}`,
       callback_data: "sub:" + r.id,
     }]),
   };
@@ -5246,7 +5246,7 @@ function tgFullName(u) {
 // ---- Komut cevaplari ----
 function tgCmdYardim(isAdmin) {
   let t =
-    "🤖 <b>KK oBilet Fiyat Takip Botu</b>\n\n" +
+    "<b>KK oBilet Fiyat Takip Botu</b>\n\n" +
     "Kullanabileceğin komutlar:\n\n" +
     "/durum — Sistem özeti (kaç hat, son değişiklik)\n" +
     "/takip — Toplam izlenen sefer (hat bazında)\n" +
@@ -5263,7 +5263,7 @@ function tgCmdYardim(isAdmin) {
     "/yardim — Bu menü";
   if (isAdmin) {
     t +=
-      "\n\n👑 <b>Yönetici komutları:</b>\n" +
+      "\n\n<b>Yönetici komutları:</b>\n" +
       "/bekleyenler — Onay bekleyen kullanıcılar\n" +
       "/kullanicilar — Onaylı kullanıcılar\n" +
       "/onayla &lt;id&gt; — Kullanıcıyı onayla\n" +
@@ -5275,10 +5275,10 @@ function tgCmdYardim(isAdmin) {
 // Onay bekleyenleri listele (admin).
 function tgListPending() {
   const rows = db.prepare("SELECT chat_id, first_name, last_name, username, requested_at FROM telegram_users WHERE status = 'pending' ORDER BY requested_at").all();
-  if (!rows.length) return "✅ Onay bekleyen kullanıcı yok.";
-  return "⏳ <b>Onay Bekleyenler</b>\n\n" + rows.map((r) => {
+  if (!rows.length) return "Onay bekleyen kullanıcı yok.";
+  return "<b>Onay Bekleyenler</b>\n\n" + rows.map((r) => {
     const uname = r.username ? ` @${tgEscape(r.username)}` : "";
-    return `👤 ${tgEscape(tgFullName(r))}${uname}\n🆔 <code>${tgEscape(r.chat_id)}</code>\n   /onayla ${tgEscape(r.chat_id)}`;
+    return `${tgEscape(tgFullName(r))}${uname}\n<code>${tgEscape(r.chat_id)}</code>\n   /onayla ${tgEscape(r.chat_id)}`;
   }).join("\n\n");
 }
 
@@ -5286,11 +5286,11 @@ function tgListPending() {
 function tgListApproved() {
   const rows = db.prepare("SELECT chat_id, first_name, last_name, username FROM telegram_users WHERE status = 'approved' ORDER BY approved_at").all();
   const adminCount = TELEGRAM_DEFAULT_CHAT_IDS.length;
-  let t = `👥 <b>Onaylı Kullanıcılar (${rows.length} + ${adminCount} yönetici)</b>\n\n`;
+  let t = `<b>Onaylı Kullanıcılar (${rows.length} + ${adminCount} yönetici)</b>\n\n`;
   if (rows.length) {
     t += rows.map((r) => {
       const uname = r.username ? ` @${tgEscape(r.username)}` : "";
-      return `✅ ${tgEscape(tgFullName(r))}${uname} — <code>${tgEscape(r.chat_id)}</code>`;
+      return `${tgEscape(tgFullName(r))}${uname} — <code>${tgEscape(r.chat_id)}</code>`;
     }).join("\n");
   } else {
     t += "(Henüz onaylı kullanıcı yok, sadece yöneticiler.)";
@@ -5306,16 +5306,16 @@ async function tgAdminApprove(adminChatId, targetIdRaw) {
   if (!u) return sendTelegramMessage(adminChatId, `Kayıt bulunamadı: ${tgEscape(targetId)}`);
   db.prepare("UPDATE telegram_users SET status = 'approved', approved_at = ?, approved_by = ? WHERE chat_id = ?")
     .run(nowStamp(), String(adminChatId), targetId);
-  await sendTelegramMessage(adminChatId, `✅ Onaylandı: ${tgEscape(tgFullName(u))} (${tgEscape(targetId)})`);
+  await sendTelegramMessage(adminChatId, `Onaylandı: ${tgEscape(tgFullName(u))} (${tgEscape(targetId)})`);
   await sendTelegramMessage(targetId,
-    "✅ <b>Erişimin onaylandı!</b>\n\n" +
-    "🔔 Şimdi hangi hatların fiyat değişikliklerinde bildirim almak istediğini seç. <b>Seçmezsen bildirim gelmez.</b>\n\n" +
-    "Aşağıdaki listeden hatlara dokun (✅ açık / ⬜ kapalı). İstediğin zaman /abone ile değiştirebilirsin. Komutlar: /yardim");
+    "<b>Erişimin onaylandı!</b>\n\n" +
+    "Şimdi hangi hatların fiyat değişikliklerinde bildirim almak istediğini seç. <b>Seçmezsen bildirim gelmez.</b>\n\n" +
+    "Aşağıdaki listeden hatlara dokun (açık / kapalı). İstediğin zaman /abone ile değiştirebilirsin. Komutlar: /yardim");
   // Onay sonrasi dogrudan abonelik klavyesini gonder — kisi elle yazmadan secsin.
   await telegramPost("sendMessage", {
     chat_id: String(targetId),
     parse_mode: "HTML",
-    text: "🔔 <b>Bildirim almak istediğin hatları seç:</b>",
+    text: "<b>Bildirim almak istediğin hatları seç:</b>",
     reply_markup: tgBuildAboneKeyboard(targetId),
   });
 }
@@ -5331,7 +5331,7 @@ async function tgAdminBlock(adminChatId, targetIdRaw) {
   } else {
     db.prepare("UPDATE telegram_users SET status = 'blocked' WHERE chat_id = ?").run(targetId);
   }
-  await sendTelegramMessage(adminChatId, `⛔ Engellendi: ${tgEscape(targetId)}`);
+  await sendTelegramMessage(adminChatId, `Engellendi: ${tgEscape(targetId)}`);
 }
 
 // Admin: /duyuru <metin> — mesaji TUM onayli kullanicilara (+ adminlere) gonderir.
@@ -5354,7 +5354,7 @@ async function tgAdminBroadcast(adminChatId, fullText) {
     if (ok) sent++; else failed++;
     await new Promise((r) => setTimeout(r, 50)); // Telegram rate-limit dostu
   }
-  await sendTelegramMessage(adminChatId, `📢 Duyuru gönderildi: <b>${sent}</b> kişi${failed ? ` (${failed} başarısız)` : ""}.`);
+  await sendTelegramMessage(adminChatId, `Duyuru gönderildi: <b>${sent}</b> kişi${failed ? ` (${failed} başarısız)` : ""}.`);
 }
 
 // Yeni talebi adminlere butonlu mesajla bildir.
@@ -5362,14 +5362,14 @@ function tgNotifyAdminsNewRequest(chat, from) {
   const name = `${from.first_name || ""} ${from.last_name || ""}`.trim() || "(isimsiz)";
   const uname = from.username ? `@${from.username}` : "(kullanıcı adı yok)";
   const text =
-    "🔔 <b>Yeni erişim talebi</b>\n\n" +
-    `👤 ${tgEscape(name)} ${tgEscape(uname)}\n` +
-    `🆔 <code>${tgEscape(String(chat.id))}</code>\n\n` +
+    "<b>Yeni erişim talebi</b>\n\n" +
+    `${tgEscape(name)} ${tgEscape(uname)}\n` +
+    `<code>${tgEscape(String(chat.id))}</code>\n\n` +
     "Bu kişi botu kullanmak istiyor. Onaylıyor musun?";
   const reply_markup = {
     inline_keyboard: [[
-      { text: "✅ Onayla", callback_data: `approve:${chat.id}` },
-      { text: "⛔ Reddet", callback_data: `block:${chat.id}` },
+      { text: "Onayla", callback_data: `approve:${chat.id}` },
+      { text: "Reddet", callback_data: `block:${chat.id}` },
     ]],
   };
   for (const adminId of TELEGRAM_DEFAULT_CHAT_IDS) {
@@ -5394,11 +5394,11 @@ function tgCmdDurum() {
       ? tgChangesGrouped(lastRows)
       : "Henüz değişiklik kaydı yok.";
     return (
-      "📊 <b>Sistem Durumu</b>\n\n" +
-      `🚌 Takip edilen hat: <b>${targets}</b>\n` +
-      `🏷️ İzlenen sefer/fiyat: <b>${prices}</b>\n` +
-      `📅 Bugünkü değişiklik: <b>${changesToday}</b>\n\n` +
-      "🕒 <b>Son 10 değişiklik:</b>\n" + lastBlock
+      "<b>Sistem Durumu</b>\n\n" +
+      `Takip edilen hat: <b>${targets}</b>\n` +
+      `İzlenen sefer/fiyat: <b>${prices}</b>\n` +
+      `Bugünkü değişiklik: <b>${changesToday}</b>\n\n` +
+      "<b>Son 10 değişiklik:</b>\n" + lastBlock
     );
   } catch (e) {
     return "Durum alınamadı: " + tgEscape(e.message);
@@ -5409,8 +5409,8 @@ function tgCmdHatlar() {
   try {
     const rows = db.prepare("SELECT origin, destination FROM obilet_targets ORDER BY origin, destination").all();
     if (!rows.length) return "Takip edilen hat yok.";
-    const lines = rows.map((r, i) => `${i + 1}. ${tgEscape((r.origin || "").toUpperCase())} → ${tgEscape((r.destination || "").toUpperCase())}`);
-    return `🚌 <b>Takip Edilen Hatlar (${rows.length})</b>\n\n` + lines.join("\n");
+    const lines = rows.map((r, i) => `${i + 1}. ${tgEscape((r.origin || "").toUpperCase())} - ${tgEscape((r.destination || "").toUpperCase())}`);
+    return `<b>Takip Edilen Hatlar (${rows.length})</b>\n\n` + lines.join("\n");
   } catch (e) {
     return "Hatlar alınamadı: " + tgEscape(e.message);
   }
@@ -5423,7 +5423,7 @@ function tgCmdSon() {
     ).all();
     if (!rows.length) return "Henüz fiyat değişikliği kaydı yok.";
     tgAttachOccupancy(rows);
-    return "🕒 <b>Son 50 Fiyat Değişikliği</b>\n\n" + tgChangesGrouped(rows);
+    return "<b>Son 50 Fiyat Değişikliği</b>\n\n" + tgChangesGrouped(rows);
   } catch (e) {
     return "Kayıtlar alınamadı: " + tgEscape(e.message);
   }
@@ -5444,7 +5444,7 @@ function tgCmdFiyatlar() {
       fiyat: r.min_price === r.max_price ? `${r.min_price}` : `${r.min_price}-${r.max_price}`,
       sefer: String(r.n),
     }));
-    return "🏷️ <b>Güncel Fiyatlar</b>\n" + tgTable(
+    return "<b>Güncel Fiyatlar</b>\n" + tgTable(
       [
         { key: "hat", label: "Hat", align: "l", max: 16 },
         { key: "fiyat", label: "Fiyat", align: "r" },
@@ -5462,7 +5462,7 @@ function tgCmdHatChangesByTarget(targetId) {
   try {
     const t = db.prepare("SELECT id, origin, destination FROM obilet_targets WHERE id = ?").get(targetId);
     if (!t) return "Hat bulunamadı.";
-    const head = `🚌 <b>${tgEscape((t.origin || "").toUpperCase())} → ${tgEscape((t.destination || "").toUpperCase())}</b> — Fiyat Değişiklikleri`;
+    const head = `<b>${tgEscape((t.origin || "").toUpperCase())} - ${tgEscape((t.destination || "").toUpperCase())}</b> — Fiyat Değişiklikleri`;
     const rows = db.prepare(
       "SELECT target_id, origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history WHERE target_id = ? ORDER BY id DESC LIMIT 50"
     ).all(targetId);
@@ -5488,7 +5488,7 @@ function tgCmdHat(args) {
       targets.find((x) => norm(x.origin) === origin && norm(x.destination) === destination) ||
       targets.find((x) => norm(x.origin).includes(origin) && norm(x.destination).includes(destination));
     if (!t) {
-      return `"${tgEscape(args[0].toUpperCase())} → ${tgEscape(args[args.length - 1].toUpperCase())}" hattı takipte değil.\n/hatlar ile listeyi görebilirsin.`;
+      return `"${tgEscape(args[0].toUpperCase())} - ${tgEscape(args[args.length - 1].toUpperCase())}" hattı takipte değil.\n/hatlar ile listeyi görebilirsin.`;
     }
     return tgCmdHatChangesByTarget(t.id);
   } catch (e) {
@@ -5504,13 +5504,13 @@ async function tgSendHatSecimi(chatId) {
     return;
   }
   const inline_keyboard = routes.map((r) => [{
-    text: `${(r.origin || "").toUpperCase()} → ${(r.destination || "").toUpperCase()}`,
+    text: `${(r.origin || "").toUpperCase()} - ${(r.destination || "").toUpperCase()}`,
     callback_data: "h:" + r.id,
   }]);
   await telegramPost("sendMessage", {
     chat_id: String(chatId),
     parse_mode: "HTML",
-    text: "🚌 <b>Hat seç</b> — değişikliklerini görmek istediğin hatta dokun:",
+    text: "<b>Hat seç</b> — değişikliklerini görmek istediğin hatta dokun:",
     reply_markup: { inline_keyboard },
   });
 }
@@ -5521,8 +5521,8 @@ function tgCmdGuncelByTarget(targetId) {
   try {
     const t = db.prepare("SELECT id, origin, destination FROM obilet_targets WHERE id = ?").get(targetId);
     if (!t) return "Hat bulunamadı.";
-    const routeUp = `${(t.origin || "").toUpperCase()} → ${(t.destination || "").toUpperCase()}`;
-    const head = `🚌 <b>${tgEscape(routeUp)}</b> — Değişmeyen Fiyatlar`;
+    const routeUp = `${(t.origin || "").toUpperCase()} - ${(t.destination || "").toUpperCase()}`;
+    const head = `<b>${tgEscape(routeUp)}</b> — Değişmeyen Fiyatlar`;
 
     // Fiyati degismis sefer kimlikleri (gecmiste kaydi olanlar).
     const changedKeys = new Set(
@@ -5571,7 +5571,7 @@ function tgCmdGuncelByTarget(targetId) {
         fiyat: String(p.price),
         not: "değişmedi",
       }));
-      blocks.push(`👤 <b>${tgEscape(op)}</b>\n` + tgTable(cols, tableRows));
+      blocks.push(`<b>${tgEscape(op)}</b>\n` + tgTable(cols, tableRows));
     }
     const countLabel = total > CAP ? `${CAP}/${total}` : `${total}`;
     return `${head} (${countLabel} sefer)\n\n` + blocks.join("\n\n");
@@ -5594,7 +5594,7 @@ function tgCmdGuncel(args) {
       targets.find((x) => norm(x.origin) === origin && norm(x.destination) === destination) ||
       targets.find((x) => norm(x.origin).includes(origin) && norm(x.destination).includes(destination));
     if (!t) {
-      return `"${tgEscape(args[0].toUpperCase())} → ${tgEscape(args[args.length - 1].toUpperCase())}" hattı takipte değil.\n/hatlar ile listeyi görebilirsin.`;
+      return `"${tgEscape(args[0].toUpperCase())} - ${tgEscape(args[args.length - 1].toUpperCase())}" hattı takipte değil.\n/hatlar ile listeyi görebilirsin.`;
     }
     return tgCmdGuncelByTarget(t.id);
   } catch (e) {
@@ -5610,13 +5610,13 @@ async function tgSendGuncelSecimi(chatId) {
     return;
   }
   const inline_keyboard = routes.map((r) => [{
-    text: `${(r.origin || "").toUpperCase()} → ${(r.destination || "").toUpperCase()}`,
+    text: `${(r.origin || "").toUpperCase()} - ${(r.destination || "").toUpperCase()}`,
     callback_data: "g:" + r.id,
   }]);
   await telegramPost("sendMessage", {
     chat_id: String(chatId),
     parse_mode: "HTML",
-    text: "🚌 <b>Hat seç</b> — değişmeyen fiyatlarını görmek istediğin hatta dokun:",
+    text: "<b>Hat seç</b> — değişmeyen fiyatlarını görmek istediğin hatta dokun:",
     reply_markup: { inline_keyboard },
   });
 }
@@ -5634,14 +5634,14 @@ function tgCmdSeferTakip(firmaQuery) {
     if (!matched) return `"${tgEscape(firmaQuery)}" için sefer takip verisi yok.`;
 
     const { journeys } = computeJourneyTracking({ operator: matched });
-    if (!journeys.length) return `🏢 <b>${tgEscape(matched)}</b>\n\nSon 3 günde fiyat değişikliği yok.`;
+    if (!journeys.length) return `<b>${tgEscape(matched)}</b>\n\nSon 3 günde fiyat değişikliği yok.`;
 
     const dm = (s) => { const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? `${m[3]}.${m[2]}` : String(s || ""); };
     const tableRows = journeys.slice(0, 40).map((j) => ({
       guzergah: `${(j.origin || "").toUpperCase()}>${(j.destination || "").toUpperCase()}`,
       sefer: `${dm(j.journey_date)} ${j.departure_time || ""}`.trim(),
       deg: `${j.changeCount}x`,
-      gecmis: (j.prices || []).join("→"),
+      gecmis: (j.prices || []).join("-"),
       guncel: String(j.currentPrice),
       dolu: (j.totalSeats != null && j.yolcu != null) ? `${j.yolcu}/${j.totalSeats}` : "-",
     }));
@@ -5658,7 +5658,7 @@ function tgCmdSeferTakip(firmaQuery) {
     for (let i = 0; i < tableRows.length; i += MAX) {
       blocks.push(tgTable(cols, tableRows.slice(i, i + MAX), { compact: true }));
     }
-    const head = `🏢 <b>${tgEscape(matched)}</b> · Sefer Takip (${journeys.length} sefer${journeys.length > 40 ? ", ilk 40" : ""})`;
+    const head = `<b>${tgEscape(matched)}</b> · Sefer Takip (${journeys.length} sefer${journeys.length > 40 ? ", ilk 40" : ""})`;
     return head + "\n" + blocks.join("\n\n");
   } catch (e) {
     return "Sefer takip alınamadı: " + tgEscape(e.message);
@@ -5681,7 +5681,7 @@ async function tgSendSeferSecimi(chatId) {
   await telegramPost("sendMessage", {
     chat_id: String(chatId),
     parse_mode: "HTML",
-    text: "🏢 <b>Firma seç</b> — sefer takibini görmek istediğin firmaya dokun:",
+    text: "<b>Firma seç</b> — sefer takibini görmek istediğin firmaya dokun:",
     reply_markup: { inline_keyboard },
   });
 }
@@ -5699,12 +5699,12 @@ function tgCmdTakip() {
        ORDER BY n DESC
     `).all();
     let t =
-      "📡 <b>Takip Özeti</b>\n\n" +
-      `🚌 Aktif hat: <b>${activeTargets}</b>\n` +
-      `🏷️ Toplam izlenen sefer: <b>${totalJourneys}</b>\n`;
+      "<b>Takip Özeti</b>\n\n" +
+      `Aktif hat: <b>${activeTargets}</b>\n` +
+      `Toplam izlenen sefer: <b>${totalJourneys}</b>\n`;
     if (perRoute.length) {
       t += "\n<b>Hat bazında:</b>\n" + perRoute
-        .map((r) => `• ${tgEscape((r.origin || "").toUpperCase())} → ${tgEscape((r.destination || "").toUpperCase())}: <b>${r.n}</b> sefer`)
+        .map((r) => `${tgEscape((r.origin || "").toUpperCase())} - ${tgEscape((r.destination || "").toUpperCase())}: <b>${r.n}</b> sefer`)
         .join("\n");
     }
     return t;
@@ -5721,7 +5721,7 @@ function tgCmdDusenler() {
     ).all();
     if (!rows.length) return "Son dönemde fiyat düşüşü kaydı yok.";
     tgAttachOccupancy(rows);
-    return "🔻 <b>Son Fiyat Düşüşleri</b>\n\n" + tgChangesGrouped(rows);
+    return "<b>Son Fiyat Düşüşleri</b>\n\n" + tgChangesGrouped(rows);
   } catch (e) {
     return "Düşüşler alınamadı: " + tgEscape(e.message);
   }
@@ -5765,7 +5765,7 @@ function tgCmdFirma(name) {
     const shown = matched.slice(0, 50); // son 50 (tek mesaja sigsin)
     tgAttachOccupancy(shown);
     const countLabel = matched.length > 50 ? `son 50 / ${matched.length}` : `${matched.length}`;
-    return `🏢 <b>${title}</b> — Fiyat Değişiklikleri (${countLabel})\n\n` +
+    return `<b>${title}</b> — Fiyat Değişiklikleri (${countLabel})\n\n` +
       tgChangesGrouped(shown);
   } catch (e) {
     return "Firma değişiklikleri alınamadı: " + tgEscape(e.message);
@@ -5788,7 +5788,7 @@ async function tgSendFirmaSecimi(chatId) {
   await telegramPost("sendMessage", {
     chat_id: String(chatId),
     parse_mode: "HTML",
-    text: "🏢 <b>Firma seç</b> — değişikliklerini görmek istediğin firmaya dokun:",
+    text: "<b>Firma seç</b> — değişikliklerini görmek istediğin firmaya dokun:",
     reply_markup: { inline_keyboard },
   });
 }
@@ -5896,15 +5896,15 @@ async function handleTelegramUpdate(update) {
       // Ilk temas: pending kaydet + adminlere butonlu bildirim gonder.
       telegramRegisterPending(chat, from);
       await sendTelegramMessage(chatId,
-        "👋 <b>Merhaba!</b> Burası KK oBilet fiyat takip botu.\n\n" +
-        "Bu bot özeldir; kullanabilmen için önce <b>yönetici onayı</b> gerekiyor. Talebin <b>iletildi</b> ✅\n\n" +
-        "Onaylanınca sana haber vereceğim ve hangi hatların bildirimini almak istediğini seçeceksin. ⏳");
+        "<b>Merhaba!</b> Burası KK oBilet fiyat takip botu.\n\n" +
+        "Bu bot özeldir; kullanabilmen için önce <b>yönetici onayı</b> gerekiyor. Talebin <b>iletildi</b> \n\n" +
+        "Onaylanınca sana haber vereceğim ve hangi hatların bildirimini almak istediğini seçeceksin. ");
       tgNotifyAdminsNewRequest(chat, from);
       console.log(`[Telegram] Yeni erisim talebi: ${tgFullName(from)} (chat ${chatId})`);
     } else if (u.status === "blocked") {
-      await sendTelegramMessage(chatId, "⛔ Erişimin engellenmiş.");
+      await sendTelegramMessage(chatId, "Erişimin engellenmiş.");
     } else {
-      await sendTelegramMessage(chatId, "⏳ Onayın hâlâ bekleniyor. Yönetici onaylayınca haber vereceğim.");
+      await sendTelegramMessage(chatId, "Onayın hâlâ bekleniyor. Yönetici onaylayınca haber vereceğim.");
     }
     return;
   }
@@ -5953,12 +5953,12 @@ async function handleTelegramUpdate(update) {
     return;
   }
 
-  // /abone — bildirim almak istedigi hatlari sec (✅/⬜ toggle).
+  // /abone — bildirim almak istedigi hatlari sec (/toggle).
   if (cmd === "/abone") {
     await telegramPost("sendMessage", {
       chat_id: String(chatId),
       parse_mode: "HTML",
-      text: "🔔 <b>Bildirim Aboneliği</b>\nFiyat değişikliği bildirimi almak istediğin hatlara dokun (✅ açık, ⬜ kapalı):",
+      text: "<b>Bildirim Aboneliği</b>\nFiyat değişikliği bildirimi almak istediğin hatlara dokun (açık, kapalı):",
       reply_markup: tgBuildAboneKeyboard(chatId),
     });
     return;
@@ -5972,7 +5972,7 @@ async function handleTelegramUpdate(update) {
        WHERE s.chat_id = ? ORDER BY t.origin, t.destination
     `).all(String(chatId));
     const reply = subs.length
-      ? "🔔 <b>Aboneliklerin</b>\n\n" + subs.map((r) => `• ${tgEscape((r.origin || "").toUpperCase())} → ${tgEscape((r.destination || "").toUpperCase())}`).join("\n") + "\n\nDeğiştirmek için /abone"
+      ? "<b>Aboneliklerin</b>\n\n" + subs.map((r) => `${tgEscape((r.origin || "").toUpperCase())} - ${tgEscape((r.destination || "").toUpperCase())}`).join("\n") + "\n\nDeğiştirmek için /abone"
       : "Henüz hiçbir hatta abone değilsin, bu yüzden bildirim almıyorsun.\n/abone ile hat seç.";
     await sendTelegramMessage(chatId, reply);
     return;
@@ -6121,7 +6121,7 @@ async function sendObiletCycleStatusEmail(emailList, target, trackedJourneys, ch
       </div>
       <div style="padding:20px;background:#ffffff;">
         <p style="margin:0 0 12px 0;color:#333333;">Merhaba,</p>
-        <p style="margin:0 0 10px 0;color:#333333;"><strong>Hat:</strong> ${target.origin.toUpperCase()} → ${target.destination.toUpperCase()}</p>
+        <p style="margin:0 0 10px 0;color:#333333;"><strong>Hat:</strong> ${target.origin.toUpperCase()} - ${target.destination.toUpperCase()}</p>
         <p style="margin:0 0 10px 0;color:#333333;"><strong>Tarih Araligi:</strong> ${dateLabel}</p>
         <p style="margin:0 0 16px 0;color:#333333;"><strong>Kontrol Zamani:</strong> ${checkedAt}</p>
 
@@ -6464,7 +6464,7 @@ async function processObiletTarget(target) {
             );
           } else {
             if (DEBUG_OBILET_PRICE) {
-              console.log(`[oBilet ${target.origin}→${target.destination}] ${journeyKey}: Pending ${previousPendingCount}→${pendingCount} (${previous.price}→${newPrice}TL)`);
+              console.log(`[oBilet ${target.origin}-${target.destination}] ${journeyKey}: Pending ${previousPendingCount}-${pendingCount} (${previous.price}-${newPrice}TL)`);
             }
             db.prepare(
               "UPDATE obilet_prices SET operator = ?, departure_stop = ?, arrival_stop = ?, last_updated = ?, pending_price = ?, pending_seen_count = ? WHERE id = ?"
@@ -6555,7 +6555,7 @@ async function processObiletTarget(target) {
 let obiletTaskRunning = false;
 const obiletPendingManualTargets = new Set(); // target.id'leri — ayni hatta duplicate basmayi engeller
 let obiletPendingFullRefresh = false;          // "tum hatlari yenile" tek bir kuyrukta tutulur
-const obiletPriorityQueue = [];                // ⚡ Anlik Tara: siranin ONUNE gecen hatlar (paralel degil!)
+const obiletPriorityQueue = [];                // Anlik Tara: siranin ONUNE gecen hatlar (paralel degil!)
 
 // Acquire / release helpers: lock'u atomic almak icin.
 async function acquireObiletLock(timeoutMs = 120000) {
@@ -6598,7 +6598,7 @@ async function refreshObiletPricesTask() {
       return;
     }
     
-    // Priority-farkinda dongu: her adimda once ⚡ Anlik Tara kuyrugunu bosalt (siranin onune gecer),
+    // Priority-farkinda dongu: her adimda once Anlik Tara kuyrugunu bosalt (siranin onune gecer),
     // sonra sirasi gelen normal hatti isle. Boylece Anlik Tara PARALEL degil, kuyrukta oncelikli.
     const processedIds = new Set();
     let idx = 0;
@@ -6609,7 +6609,7 @@ async function refreshObiletPricesTask() {
         const pid = obiletPriorityQueue.shift();
         if (processedIds.has(pid)) continue;
         target = db.prepare("SELECT * FROM obilet_targets WHERE id = ? AND is_active = 1").get(pid);
-        if (target) console.log(`[Takip Görevi] ⚡ Öncelikli hat sıranın önüne alındı: ${target.origin} -> ${target.destination}`);
+        if (target) console.log(`[Takip Görevi] Öncelikli hat sıranın önüne alındı: ${target.origin} -> ${target.destination}`);
       } else {
         while (idx < targets.length && processedIds.has(targets[idx].id)) idx++;
         if (idx >= targets.length) break;
@@ -6992,18 +6992,18 @@ app.post("/api/obilet/targets/:id/priority-refresh", requireAuth, requireAdmin, 
     const target = db.prepare("SELECT * FROM obilet_targets WHERE id = ?").get(targetId);
     if (!target) return res.status(404).json({ message: "Hat bulunamadi." });
 
-    // ⚡ PARALEL DEGIL: hatti oncelik kuyruguna al. Tarama calisiyorsa siranin ONUNE gecer;
+    // PARALEL DEGIL: hatti oncelik kuyruguna al. Tarama calisiyorsa siranin ONUNE gecer;
     // calismiyorsa hemen baslat. Boylece ayni anda iki tarama olmaz (Cloudflare'i tetiklemez).
     if (!obiletPriorityQueue.includes(target.id)) obiletPriorityQueue.push(target.id);
 
     let msg;
     if (obiletTaskRunning) {
-      setObiletTargetSyncStatus(target.id, "⚡ Öncelikli sıraya alındı, çalışan taramanın önüne geçecek...");
-      msg = `⚡ Öncelikli sıraya alındı: ${target.origin} → ${target.destination}. Çalışan tarama bu hattı hemen (bir sonraki adımda) işleyecek.`;
+      setObiletTargetSyncStatus(target.id, "Öncelikli sıraya alındı, çalışan taramanın önüne geçecek...");
+      msg = `Öncelikli sıraya alındı: ${target.origin} - ${target.destination}. Çalışan tarama bu hattı hemen (bir sonraki adımda) işleyecek.`;
     } else {
-      setObiletTargetSyncStatus(target.id, "⚡ Öncelikli tarama başlatılıyor...");
+      setObiletTargetSyncStatus(target.id, "Öncelikli tarama başlatılıyor...");
       setTimeout(() => { refreshObiletPricesTask().catch(() => null); }, 100);
-      msg = `⚡ Öncelikli tarama başlatıldı: ${target.origin} → ${target.destination}. Birkaç dakikada sonuç görünecek.`;
+      msg = `Öncelikli tarama başlatıldı: ${target.origin} - ${target.destination}. Birkaç dakikada sonuç görünecek.`;
     }
     console.log(`[Öncelikli Tarama] ${target.origin} -> ${target.destination} (admin: ${req.auth.user.username}) kuyruga alindi (calisan tarama: ${obiletTaskRunning}).`);
     res.json({ ok: true, message: msg });
@@ -8411,8 +8411,8 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
       else eksikList.push(info.time);
     }
     console.log(`[Doluluk İşçisi]   ${dateIso}: ${ok}/${seenT.size} sefer (fetch=${viaFetch},tik=${viaClick})`);
-    console.log(`[Doluluk İşçisi]     ✓ ${okList.join("  ") || "(yok)"}`);
-    if (eksikList.length) console.log(`[Doluluk İşçisi]     ✗ EKSIK: ${eksikList.join(", ")}`);
+    console.log(`[Doluluk İşçisi]     ${okList.join("  ") || "(yok)"}`);
+    if (eksikList.length) console.log(`[Doluluk İşçisi]     EKSIK: ${eksikList.join(", ")}`);
     return written;
   } finally {
     try { await page.close(); } catch {}
@@ -8740,8 +8740,8 @@ app.post("/api/telegram/test", requireAuth, async (req, res) => {
     return res.status(400).json({ message: "Sohbet ID tanimli degil (TELEGRAM_CHAT_ID)." });
   }
   const text =
-    "✅ <b>Test bildirimi</b>\n" +
-    "KK oBilet fiyat takip botu çalışıyor. Fiyat değişikliklerinde bildirim buraya gelecek. 🚌";
+    "<b>Test bildirimi</b>\n" +
+    "KK oBilet fiyat takip botu çalışıyor. Fiyat değişikliklerinde bildirim buraya gelecek. ";
   let sent = 0;
   for (const chatId of TELEGRAM_DEFAULT_CHAT_IDS) {
     if (await sendTelegramMessage(chatId, text)) sent++;
