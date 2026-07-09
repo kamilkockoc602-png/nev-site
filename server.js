@@ -4742,7 +4742,7 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso, seatOperators
       // GERCEK DOLULUK (opsiyonel): takip edilen operatorlerin seferleri icin koltuk haritasindan
       // gercek dolu say. Tamamen izole — hata olsa bile fiyat/sefer verisini etkilemez.
       if (seatOperators && seatOperators.length) {
-        try { await attachRealOccupancy(page, capturedJourneys, idsByKey, seatOperators); }
+        try { await attachRealOccupancy(page, capturedJourneys, idsByKey, seatOperators, dateIso); }
         catch (e) { if (DEBUG_OBILET_PRICE) console.warn(`[Doluluk] gercek koltuk cekme hatasi: ${e.message}`); }
       }
       return capturedJourneys;
@@ -6294,7 +6294,11 @@ async function processObiletTarget(target) {
     // attachRealOccupancy tiklamasiz POST ile ceker, takip edilen firmalarla + tarih basi ust
     // sinirla (asagida) yuku bounded tutar. "*" (tum firma) hatlarinda cok agir olacagi icin atlanir.
     const REAL_SEATMAP_ENABLED = true;
-    const seatOps = (acceptAllOperators || !REAL_SEATMAP_ENABLED) ? null : targetOperators;
+    // GERCEK koltuk haritasi TUM hedefler icin acik (firma-ozel VE tum-firma). Tum-firma hatlarinda
+    // "*" sentineli ile calisir; attachRealOccupancy tarih basi 25 sefer ust siniri + YALNIZCA GELECEK
+    // seferlerle yuku bounded tutar. Boylece occupancy her zaman GERCEK haritadan gelir; guvenilmez
+    // liste available-seats degeri occupancy'ye ARTIK HIC yazilmaz (bayat oldugunda yanlis dusuk cikiyordu).
+    const seatOps = !REAL_SEATMAP_ENABLED ? null : (acceptAllOperators ? ["*"] : targetOperators);
 
     const trackedJourneys = [];
     const changes = [];     // [{ journey_date, operator, departure_time, oldPrice, newPrice }] — mail tetikleyici tek liste
@@ -6408,16 +6412,13 @@ async function processObiletTarget(target) {
             let total, avail, occ, source;
             const rT = Number(j.realTotal), rS = Number(j.realSold);
             if (Number.isFinite(rT) && rT > 0 && Number.isFinite(rS)) {
-              // 1) GERCEK koltuk haritasindan (dogru kaynak — /json/sefer SVG sayimi).
+              // TEK KAYNAK: GERCEK koltuk haritasi (/json/sefer SVG sayimi). Canli dogrulandi (21:29 => 35/6).
               total = rT; const sold = Math.max(0, Math.min(rT, rS));
               avail = rT - sold; occ = Math.round((sold / rT) * 100); source = "gercek";
-            } else if (j.seatInfoReliable === true && Number.isFinite(Number(j.totalSeats)) && Number(j.totalSeats) > 0 && Number.isFinite(Number(j.availableSeats))) {
-              // 2) Yedek: liste available-seats (gercek harita cekilemediyse en azindan bir deger goster).
-              // NOT: liste degeri bazen yanlis olabilir ama BOS birakmaktan iyidir — gercek gelince ustune yazilir.
-              total = Number(j.totalSeats); avail = Number(j.availableSeats);
-              occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100))); source = "liste";
             } else {
-              // 3) Hicbir guvenilir veri yok -> yazma ("-").
+              // Gercek harita cekilemedi -> YAZMA. Liste available-seats BAZI otobuslerde BAYAT/yanlis
+              // (canli kanit: liste 9 bos derken gercek 6 bos). Yanlis dusuk doluluk gostermektense hic
+              // yazmayiz; onceki GERCEK deger korunur (temizlik silmez), hic yoksa "-" gosterilir.
               occSkippedNoInfo++;
               continue;
             }
@@ -6446,15 +6447,22 @@ async function processObiletTarget(target) {
         // (Cloudflare/timeout) o tarihin dolulugunu YANLISLIKLA silmemek icin.
         if (journeys.length > 0) {
           try {
+            // Bu taramada GORULEN tum seferler (gercek deger yazilamasa bile). Cleanup bunu baz alir:
+            // sefer HALA listede ise onceki GERCEK degerini KORU (gecici cekim hatasinda YANLISLIKLA silme);
+            // yalnizca listede OLMAYAN (iptal/tasinmis) veya eski guvenilmez 'liste' kaynakli satirlari sil.
+            const currentOccKeys = new Set(
+              dayTracked.map((j) => `${normalizeObiletOperatorName(j.operator) || j.operator}|${j.time}`)
+            );
             const occRowsForDate = db.prepare(
-              "SELECT id, operator, departure_time FROM obilet_occupancy WHERE target_id = ? AND journey_date = ?"
+              "SELECT id, operator, departure_time, source FROM obilet_occupancy WHERE target_id = ? AND journey_date = ?"
             ).all(target.id, journeyDate);
             for (const o of occRowsForDate) {
               // KALKAN (gecmis) sefer: kalkmadan onceki SON doluluk degeri DONSUN, SILME.
               // Boylece kullanici "bu arac 30/41 ile cikmis" diye kalkis dolulugunu gorebilir.
               if (!isJourneyInFuture(journeyDate, o.departure_time)) continue;
-              // GELECEK sefer bu turda listede yok (iptal) -> sil.
-              if (!writtenOccKeys.has(`${o.operator}|${o.departure_time}`)) {
+              const gone = !currentOccKeys.has(`${o.operator}|${o.departure_time}`); // artik listede yok -> iptal
+              const staleListRow = o.source === "liste"; // eski guvenilmez liste degeri -> temizle (gercek/"-" ile degisir)
+              if (gone || staleListRow) {
                 db.prepare("DELETE FROM obilet_occupancy WHERE id = ?").run(o.id);
               }
             }
@@ -7211,12 +7219,15 @@ async function fetchSeferSeatsWithBody(page, seferId, bodyTemplate, templateId) 
 
 // Takip edilen operatorlerin seferlerine GERCEK doluluk ekle (koltuk haritasindan). journeys uzerine
 // realSold/realTotal yazar. idsByKey: operator+saat -> tum listeleme id'leri (mukerrerde gecerli olani sec).
-async function attachRealOccupancy(page, journeys, idsByKey, seatOperators) {
+async function attachRealOccupancy(page, journeys, idsByKey, seatOperators, dateIso = null) {
   const REAL_SEATMAP_MAX_PER_CALL = 25; // tarih basi ust sinir (yuku/Cloudflare'i bounded tut)
-  const wanted = (seatOperators || []).map((o) => normalizeObiletOperatorName(o)).filter(Boolean);
-  if (!wanted.length) return; // guvenlik: filtre yoksa 100+ sefer cekme
+  const allFirms = (seatOperators || []).includes("*"); // tum-firma hedefi: operator filtresi yok
+  const wanted = allFirms ? [] : (seatOperators || []).map((o) => normalizeObiletOperatorName(o)).filter(Boolean);
+  if (!allFirms && !wanted.length) return; // guvenlik: filtre yoksa cekme
+  // YALNIZCA gelecek seferler — gecmis kalkanlar 25'lik cap slotunu bosa harcamasin (tarih verilmezse hepsi).
+  const isFuture = (j) => !dateIso || isJourneyInFuture(dateIso, j.time);
   const targets = journeys
-    .filter((j) => wanted.some((op) => isObiletOperatorMatch(op, j.operator)))
+    .filter((j) => isFuture(j) && (allFirms || wanted.some((op) => isObiletOperatorMatch(op, j.operator))))
     .slice(0, REAL_SEATMAP_MAX_PER_CALL);
   let ok = 0;
   for (const j of targets) {
