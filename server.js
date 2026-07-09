@@ -6295,10 +6295,15 @@ async function processObiletTarget(target) {
           .prepare("SELECT id, operator, departure_time, journey_date, departure_stop, arrival_stop, price FROM obilet_prices WHERE target_id = ? AND journey_date = ?")
           .all(target.id, journeyDate);
 
+        // Kalkan (gecmis) seferi HEMEN silme: fiyat satirini 10 gun daha tut ki Sefer Takip'te
+        // kalkis fiyati + donmus koltuk sayisi gorunsun ("bu arac 30/41 ile cikmis, 900 TL").
+        const pastKeepFrom = shiftIsoDate(todayIsoInIstanbul(), -10);
         for (const row of existingRows) {
-          // Geçmiş kalkış: sessizce sil.
+          // Geçmiş kalkış: 10 gunden ESKI ise sil; degilse KORU (yakin gecmisi Sefer Takip'te goster).
           if (!isJourneyInFuture(row.journey_date, row.departure_time)) {
-            db.prepare("DELETE FROM obilet_prices WHERE id = ?").run(row.id);
+            if (row.journey_date < pastKeepFrom) {
+              db.prepare("DELETE FROM obilet_prices WHERE id = ?").run(row.id);
+            }
             continue;
           }
           // Filtre dışı satırlar (firma/durak): hiç değerlendirme.
