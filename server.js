@@ -41,6 +41,9 @@ const OBILET_PRICE_CONFIRM_RUNS =
   Number.isFinite(OBILET_PRICE_CONFIRM_RUNS_RAW) && OBILET_PRICE_CONFIRM_RUNS_RAW > 0
     ? OBILET_PRICE_CONFIRM_RUNS_RAW
     : 1;
+// Gelecek tarihli bir sefer kac tur UST USTE gorunmezse fiyat satiri silinsin (iptal tespiti).
+// >1 tutulur ki tek aksak/eksik tarama fiyat satirlarini SILMESIN. Gorulunce sayac sifirlanir.
+const OBILET_ABSENT_DELETE_RUNS = 3;
 const OBILET_SUBJECT_CHANGE = String(process.env.OBILET_SUBJECT_CHANGE || "oBilet Fiyat Raporu").trim();
 const OBILET_SUBJECT_NO_CHANGE = String(process.env.OBILET_SUBJECT_NO_CHANGE || "oBilet Fiyat Raporu").trim();
 const OBILET_SUBJECT_PRICE_ALERT = String(process.env.OBILET_SUBJECT_PRICE_ALERT || "oBilet Fiyat Degisikligi").trim();
@@ -667,6 +670,8 @@ try { db.exec("ALTER TABLE obilet_prices ADD COLUMN departure_stop TEXT NOT NULL
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN arrival_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN pending_price INTEGER"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN pending_seen_count INTEGER NOT NULL DEFAULT 0"); } catch(e) {}
+// Kac tur UST USTE gorunmedi (iptal tespiti icin). Tek aksak taramada sefer silinmesin diye.
+try { db.exec("ALTER TABLE obilet_prices ADD COLUMN absent_count INTEGER NOT NULL DEFAULT 0"); } catch(e) {}
 
 // Sehir adi -> oBilet station ID eslemesi (otomatik ogrenilen). Her basarili taramada doldurulur.
 db.exec(`
@@ -6284,9 +6289,11 @@ async function processObiletTarget(target) {
     const departureStopFilterKey = normalizeSearchText(departureStopFilter);
     const queryOriginPrimary = departureStopFilter || target.origin;
     // GERCEK doluluk icin koltuk haritasi cekilecek operatorler — SADECE belirli firma seciliyse.
-    // GECICI KAPALI: bulk POST fetch'in dogru govdesi henuz bilinmiyor (fetch HTML donuyor, %100
-    // basarisiz + zaman kaybi). Probe ile govde bulununca REAL_SEATMAP_ENABLED=true yapilacak.
-    const REAL_SEATMAP_ENABLED = false;
+    // ACIK: POST("{}") govdesi calisiyor (canli dogrulandi: 15:30 seferi liste 5 derken gercek 14).
+    // Liste available-seats BAZI otobuslerde BAYAT; gercek koltuk haritasi (SVG) her zaman dogru.
+    // attachRealOccupancy tiklamasiz POST ile ceker, takip edilen firmalarla + tarih basi ust
+    // sinirla (asagida) yuku bounded tutar. "*" (tum firma) hatlarinda cok agir olacagi icin atlanir.
+    const REAL_SEATMAP_ENABLED = true;
     const seatOps = (acceptAllOperators || !REAL_SEATMAP_ENABLED) ? null : targetOperators;
 
     const trackedJourneys = [];
@@ -6340,35 +6347,49 @@ async function processObiletTarget(target) {
           dayTracked.map((j) => buildJourneyIdentityKey(j.operator, j.time, j.departureStop))
         );
 
-        // VAR OLAN DB SATIRLARI: geçmiş saatleri ve bu turda gorulmeyen kayitlari sil.
-        // Iptal/eklenen seferleri raporlamiyoruz — sadece fiyat degisikligi mail tetikler.
-        const existingRows = db
-          .prepare("SELECT id, operator, departure_time, journey_date, departure_stop, arrival_stop, price FROM obilet_prices WHERE target_id = ? AND journey_date = ?")
-          .all(target.id, journeyDate);
-
-        // Kalkan (gecmis) seferi HEMEN silme: fiyat satirini 10 gun daha tut ki Sefer Takip'te
-        // kalkis fiyati + donmus koltuk sayisi gorunsun ("bu arac 30/41 ile cikmis, 900 TL").
-        const pastKeepFrom = shiftIsoDate(todayIsoInIstanbul(), -10);
-        for (const row of existingRows) {
-          // Geçmiş kalkış: 10 gunden ESKI ise sil; degilse KORU (yakin gecmisi Sefer Takip'te goster).
-          if (!isJourneyInFuture(row.journey_date, row.departure_time)) {
-            if (row.journey_date < pastKeepFrom) {
-              db.prepare("DELETE FROM obilet_prices WHERE id = ?").run(row.id);
+        // VAR OLAN DB SATIRLARI temizligi — VERI KAYBINI ONLE:
+        //  1) YALNIZCA scrape BASARILIYSA (journeys.length>0) temizle. Tarama Cloudflare/timeout
+        //     yuzunden BOS donduyse HICBIR SEY SILME (yoksa o tarihin tum fiyatlari gider).
+        //  2) Gecmis kalkan seferi HEMEN silme: 10 gun tut (Sefer Takip'te kalkis dolulugu gorunsun).
+        //  3) Gelecek seferi TEK turda gorulmedi diye HEMEN silme -> yoklama sayaci; ust uste
+        //     OBILET_ABSENT_DELETE_RUNS tur gorunmezse sil. Gorulunce sayac sifirlanir. Boylece
+        //     tek aksak/eksik tarama fiyat satirlarini SILEMEZ.
+        if (journeys.length > 0) {
+          const existingRows = db
+            .prepare("SELECT id, operator, departure_time, journey_date, departure_stop, arrival_stop, price, absent_count FROM obilet_prices WHERE target_id = ? AND journey_date = ?")
+            .all(target.id, journeyDate);
+          const pastKeepFrom = shiftIsoDate(todayIsoInIstanbul(), -10);
+          for (const row of existingRows) {
+            // Geçmiş kalkış: 10 gunden ESKI ise sil; degilse KORU (yakin gecmisi Sefer Takip'te goster).
+            if (!isJourneyInFuture(row.journey_date, row.departure_time)) {
+              if (row.journey_date < pastKeepFrom) {
+                db.prepare("DELETE FROM obilet_prices WHERE id = ?").run(row.id);
+              }
+              continue;
             }
-            continue;
-          }
-          // Filtre dışı satırlar (firma/durak): hiç değerlendirme.
-          const operatorMatched = acceptAllOperators || targetOperators.some((op) => isObiletOperatorMatch(op, row.operator));
-          if (!operatorMatched) continue;
-          if (departureStopFilterKey) {
-            const rowStopKey = normalizeSearchText(row.departure_stop || "");
-            if (!rowStopKey.includes(departureStopFilterKey)) continue;
-          }
+            // Filtre dışı satırlar (firma/durak): hiç değerlendirme (sayaca da dokunma).
+            const operatorMatched = acceptAllOperators || targetOperators.some((op) => isObiletOperatorMatch(op, row.operator));
+            if (!operatorMatched) continue;
+            if (departureStopFilterKey) {
+              const rowStopKey = normalizeSearchText(row.departure_stop || "");
+              if (!rowStopKey.includes(departureStopFilterKey)) continue;
+            }
 
-          const rowKey = buildJourneyIdentityKey(row.operator, row.departure_time, row.departure_stop);
-          if (!currentKeys.has(rowKey)) {
-            // Bu sefer bu turda yok — DB'den sessizce kaldir (iptal/yeni sefer maili istemiyoruz).
-            db.prepare("DELETE FROM obilet_prices WHERE id = ?").run(row.id);
+            const rowKey = buildJourneyIdentityKey(row.operator, row.departure_time, row.departure_stop);
+            if (currentKeys.has(rowKey)) {
+              // Sefer bu turda GORULDU -> yoklama sayacini sifirla (silinme adayligindan cikar).
+              if ((row.absent_count || 0) !== 0) {
+                db.prepare("UPDATE obilet_prices SET absent_count = 0 WHERE id = ?").run(row.id);
+              }
+            } else {
+              // Bu turda YOK -> sayaci artir; sadece ust uste yeterince tur gorunmezse sil.
+              const nextAbsent = (row.absent_count || 0) + 1;
+              if (nextAbsent >= OBILET_ABSENT_DELETE_RUNS) {
+                db.prepare("DELETE FROM obilet_prices WHERE id = ?").run(row.id);
+              } else {
+                db.prepare("UPDATE obilet_prices SET absent_count = ? WHERE id = ?").run(nextAbsent, row.id);
+              }
+            }
           }
         }
 
@@ -7191,9 +7212,12 @@ async function fetchSeferSeatsWithBody(page, seferId, bodyTemplate, templateId) 
 // Takip edilen operatorlerin seferlerine GERCEK doluluk ekle (koltuk haritasindan). journeys uzerine
 // realSold/realTotal yazar. idsByKey: operator+saat -> tum listeleme id'leri (mukerrerde gecerli olani sec).
 async function attachRealOccupancy(page, journeys, idsByKey, seatOperators) {
+  const REAL_SEATMAP_MAX_PER_CALL = 25; // tarih basi ust sinir (yuku/Cloudflare'i bounded tut)
   const wanted = (seatOperators || []).map((o) => normalizeObiletOperatorName(o)).filter(Boolean);
   if (!wanted.length) return; // guvenlik: filtre yoksa 100+ sefer cekme
-  const targets = journeys.filter((j) => wanted.some((op) => isObiletOperatorMatch(op, j.operator)));
+  const targets = journeys
+    .filter((j) => wanted.some((op) => isObiletOperatorMatch(op, j.operator)))
+    .slice(0, REAL_SEATMAP_MAX_PER_CALL);
   let ok = 0;
   for (const j of targets) {
     const ids = idsByKey.get(j.matchKey) || [];
