@@ -6345,21 +6345,16 @@ async function processObiletTarget(target) {
               continue;
             }
             if (DEBUG_OBILET_PRICE) console.log(`[Doluluk] ${journeyDate} ${j.time} ${occOp}: ${total - avail}/${total} dolu (%${occ}) [${source}]`);
-            // ONEMLI: liste-yedegi, Doluluk İşçisi'nin yazdigi GERCEK degeri EZMESIN.
-            // Mevcut satir 'gercek' ise, liste ile ustune yazma (sadece koru).
-            const exOcc = db.prepare("SELECT source FROM obilet_occupancy WHERE target_id=? AND journey_date=? AND operator=? AND departure_time=?")
-              .get(target.id, j.journey_date, occOp, j.time);
-            if (source === "liste" && exOcc && exOcc.source === "gercek") {
-              writtenOccKeys.add(`${occOp}|${j.time}`); // gercek degeri koru (silinmesin, ezilmesin)
-            } else {
-              db.prepare(`
-                INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(target_id, journey_date, operator, departure_time)
-                DO UPDATE SET departure_stop = excluded.departure_stop, total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated, source = excluded.source
-              `).run(target.id, j.journey_date, occOp, j.time, j.departureStop || "", total, avail, occ, now, source);
-              writtenOccKeys.add(`${occOp}|${j.time}`);
-            }
+            // Ayri "Doluluk İşçisi" KAPATILDI; tek dogru kaynak LISTE degeri. Bu yuzden liste degeri
+            // eski/yanlis (eski isci'nin yazdigi) 'gercek' satirin UZERINE serbestce yazar — koruma
+            // kaldirildi. Boylece koltuklar bir sonraki fiyat taramasinda dogru degere guncellenir.
+            db.prepare(`
+              INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated, source)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT(target_id, journey_date, operator, departure_time)
+              DO UPDATE SET departure_stop = excluded.departure_stop, total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated, source = excluded.source
+            `).run(target.id, j.journey_date, occOp, j.time, j.departureStop || "", total, avail, occ, now, source);
+            writtenOccKeys.add(`${occOp}|${j.time}`);
           } catch (occErr) {
             if (DEBUG_OBILET_PRICE) console.warn(`[Doluluk] yazma hatasi: ${occErr.message}`);
           }
@@ -8248,7 +8243,11 @@ setInterval(() => {
 // haritasini (/json/sefer, tiklama ile) okur, obilet_occupancy'yi 'gercek' kaynakli gunceller.
 // ASLA silmez (okuyamadigi seferin mevcut degeri kalir). Fiyat taramasi calisiyorsa BEKLER.
 let occupancyWorkerRunning = false;
-const OCCUPANCY_WORKER_ENABLED = true;
+// KAPALI: Bu ayri "Doluluk İşçisi" koltuk haritasini TIKLAMA ile aciyordu ve bazen YANLIS otobusu
+// acip eksik/yanlis sayiyordu (or. 6/42). Artik doluluk TEK dogru kaynaktan gelir: fiyat taramasinin
+// listedeki available-seats degeri (gercek koltuk haritasiyla birebir ayni oldugu dogrulandi).
+// Iki tarama cakismasin + oBilet yuku azalsin diye bu isci kapatildi.
+const OCCUPANCY_WORKER_ENABLED = false;
 const OCCUPANCY_NEAR_DAYS = 7;          // 1 hafta (bugun + 6 gun)
 const OCCUPANCY_WORKER_INTERVAL_MS = 15 * 60 * 1000; // 15 dk
 const OCCUPANCY_MAX_SEFER_PER_DATE = 20;
