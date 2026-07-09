@@ -6373,6 +6373,10 @@ async function processObiletTarget(target) {
               "SELECT id, operator, departure_time FROM obilet_occupancy WHERE target_id = ? AND journey_date = ?"
             ).all(target.id, journeyDate);
             for (const o of occRowsForDate) {
+              // KALKAN (gecmis) sefer: kalkmadan onceki SON doluluk degeri DONSUN, SILME.
+              // Boylece kullanici "bu arac 30/41 ile cikmis" diye kalkis dolulugunu gorebilir.
+              if (!isJourneyInFuture(journeyDate, o.departure_time)) continue;
+              // GELECEK sefer bu turda listede yok (iptal) -> sil.
               if (!writtenOccKeys.has(`${o.operator}|${o.departure_time}`)) {
                 db.prepare("DELETE FROM obilet_occupancy WHERE id = ?").run(o.id);
               }
@@ -7475,7 +7479,7 @@ app.get("/api/obilet/occupancy", requireAuth, (req, res) => {
     const operator = String(req.query.operator || "").trim();
     const today = todayIsoInIstanbul();
     // 3 gunden eski doluluk kayitlarini temizle (yakin gecmis kalsin — Sefer Takip'te kalkis dolulugu).
-    try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(shiftIsoDate(today, -3)); } catch (e) {}
+    try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(shiftIsoDate(today, -10)); } catch (e) {}
     // Ayni sefer icin ESKI kopya doluluk satirlarini sil (durak yazimi degisince olusan mukerrer kayitlar);
     // her sefer icin sadece EN GUNCEL satir kalsin.
     try {
@@ -7833,7 +7837,7 @@ app.get("/api/obilet/journey-tracking", requireAuth, (req, res) => {
 // Pazar payi verisini hesaplar (hat + firma bazinda). date bos ise tum gelecek seferler.
 function computeMarketShare(date) {
   const today = todayIsoInIstanbul();
-  try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(shiftIsoDate(today, -3)); } catch (e) {}
+  try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(shiftIsoDate(today, -10)); } catch (e) {}
   const availableDates = db.prepare(
     "SELECT DISTINCT journey_date FROM obilet_occupancy WHERE journey_date >= ? ORDER BY journey_date"
   ).all(today).map((r) => r.journey_date);
