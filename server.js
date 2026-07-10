@@ -7201,13 +7201,18 @@ async function fetchSeferRealSeats(page, seferId) {
     } catch (e) { return { __error: String(e && e.message || e) }; }
   }, seferId).catch((e) => ({ __error: String(e && e.message || e) }));
 
-  for (let attempt = 1; attempt <= 2; attempt++) {
+  // 3 deneme, artan backoff (1.5s, 3s). GERCEK harita occupancy'nin TEK guvenilir kaynagi; bazi
+  // firmalarin (orn. Enver) LISTE degeri bayat oldugu icin gercek harita tutmazsa "eksik" deger
+  // gorunur. Gecici Cloudflare/challenge'i atlatmak icin biraz daha israrci deneriz. Basarili
+  // cekim ilk turda doner (ek maliyet yok); sadece basarisizlikta ekstra deneme yapilir.
+  const backoffs = [1500, 3000];
+  for (let attempt = 1; attempt <= 3; attempt++) {
     const json = await doFetch();
     if (json && !json.__error && !json.__html) {
       const c = countSeatsFromSeferJson(json);
       if (c) return c;
     }
-    if (attempt === 1) await new Promise((r) => setTimeout(r, 1500)); // kisa bekleyip tekrar dene
+    if (attempt < 3) await new Promise((r) => setTimeout(r, backoffs[attempt - 1]));
   }
   return null;
 }
