@@ -5560,7 +5560,7 @@ function stRowHtml(j) {
   return `<tr>
     <td>${occToDot(j.journey_date)}</td>
     <td>${occEsc(j.departure_time || "")}</td>
-    <td>${occEsc(j.operator || "")}${j.plate ? `<div style="font-size:0.72rem;opacity:0.65;">Plaka: ${occEsc(j.plate)}</div>` : ""}</td>
+    <td>${occEsc(j.operator || "")}</td>
     <td>
       <b>${occEsc((j.origin || "").toUpperCase())} - ${occEsc((j.destination || "").toUpperCase())}</b>
       ${j.departure_stop ? `<div style="font-size:0.78rem;opacity:0.6;">${occEsc(j.departure_stop)}</div>` : ""}
@@ -5570,6 +5570,7 @@ function stRowHtml(j) {
     <td><b>${j.currentPrice} TL</b></td>
     <td>${dolCell}</td>
     <td style="font-size:0.82rem;opacity:0.8;">${occEsc(j.lastChangedAt || "")}</td>
+    <td>${j.plate ? `<b>${occEsc(j.plate)}</b>` : `<span style="opacity:.45">NULL</span>`}</td>
   </tr>`;
 }
 
@@ -5578,7 +5579,7 @@ function stLoadMoreRowHtml(total, shown) {
   const remaining = total - shown;
   if (remaining <= 0) return "";
   const next = Math.min(ST_PAGE, remaining);
-  return `<tr id="stLoadMoreRow"><td colspan="9" style="text-align:center;padding:0.9rem;">
+  return `<tr id="stLoadMoreRow"><td colspan="10" style="text-align:center;padding:0.9rem;">
     <button id="stLoadMore" class="btn btn-primary" type="button">+${next} daha göster <span style="opacity:.75">(${remaining} kaldı)</span></button>
   </td></tr>`;
 }
@@ -5604,7 +5605,7 @@ function renderSeferTakip(journeys) {
   const body = document.getElementById("stTableBody");
   if (!body) return;
   if (!journeys.length) {
-    body.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#888;">Kayıt yok</td></tr>`;
+    body.innerHTML = `<tr><td colspan="10" style="text-align:center;color:#888;">Kayıt yok</td></tr>`;
     seferTakipState.shown = 0;
     return;
   }
@@ -5622,7 +5623,7 @@ function exportSeferTakipExcel() {
   if (!XLSX) { alert("Excel kütüphanesi yüklenemedi."); return; }
   const aoa = [[
     "Sefer Tarihi", "Saat", "Firma", "Güzergah", "Kalkış Durağı",
-    "Değişiklik", "Fiyat Geçmişi", "Güncel (TL)", "Yolcu", "Koltuk", "Doluluk %", "Son Değişiklik",
+    "Değişiklik", "Fiyat Geçmişi", "Güncel (TL)", "Yolcu", "Koltuk", "Doluluk %", "Son Değişiklik", "Plaka",
   ]];
   for (const j of journeys) {
     const pct = (j.totalSeats && j.yolcu != null) ? Math.round((j.yolcu / j.totalSeats) * 100) : "";
@@ -5639,10 +5640,11 @@ function exportSeferTakipExcel() {
       j.totalSeats != null ? j.totalSeats : "",
       pct === "" ? "" : pct / 100,
       j.lastChangedAt || "",
+      j.plate ? j.plate : "NULL",
     ]);
   }
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!cols"] = [{ wch: 12 }, { wch: 7 }, { wch: 22 }, { wch: 20 }, { wch: 16 }, { wch: 10 }, { wch: 30 }, { wch: 11 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 20 }];
+  ws["!cols"] = [{ wch: 12 }, { wch: 7 }, { wch: 22 }, { wch: 20 }, { wch: 16 }, { wch: 10 }, { wch: 30 }, { wch: 11 }, { wch: 8 }, { wch: 8 }, { wch: 10 }, { wch: 20 }, { wch: 12 }];
   // Doluluk % kolonunu (K) yuzde formatina cevir.
   const range = XLSX.utils.decode_range(ws["!ref"]);
   for (let r = 1; r <= range.e.r; r++) {
