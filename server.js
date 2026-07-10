@@ -8614,7 +8614,9 @@ setInterval(() => { runOccupancyWorker().catch(() => null); }, OCCUPANCY_WORKER_
 // firmalar icin okur ve analysis_occupancy_history'ye APPEND eder. Mevcut fiyat/doluluk
 // iscilerine DOKUNMAZ; kendi reentrancy kilidi + nazik tempo ile calisir.
 let analysisWorkerRunning = false;
-const ANALYSIS_WORKER_ENABLED = true;
+// Talep Radari GECICI OLARAK KAPALI (kullanici istegi). Arka planda populer hatlari tarayan analiz
+// iscisi calismaz -> ek tarama yuku de olmaz. Tekrar acmak icin: false -> true (+ script.js'de menu).
+const ANALYSIS_WORKER_ENABLED = false;
 const ANALYSIS_HORIZON_DAYS = 15;                        // gelecek 15 gun
 const ANALYSIS_MAX_SEFER_PER_DATE = 30;                  // tarih basina en fazla sefer (tum firmalar)
 const ANALYSIS_WORKER_INTERVAL_MS = 3 * 60 * 60 * 1000;  // 3 saat
