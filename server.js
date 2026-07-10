@@ -6313,14 +6313,16 @@ async function processObiletTarget(target) {
     const departureStopFilter = String(target.departure_stop_filter || "").trim();
     const departureStopFilterKey = normalizeSearchText(departureStopFilter);
     const queryOriginPrimary = departureStopFilter || target.origin;
-    // GERCEK koltuk haritasi cekimi KAPALI (kullanici karari, 2026-07). Neden: Railway'in sunucu IP'sinde
-    // Cloudflare /json/sefer POST'unu neredeyse HER seferde engelliyor ("cekilemedi (retry)") -> gercek
-    // harita tutmuyor, occupancy zaten liste degerine dusuyordu; ama tutmayan istekler + retry SISTEMI
-    // YORUYORDU (surekli istek). Bu yuzden otomatik gercek cekim kapatildi; doluluk artik dogrudan oBilet
-    // LISTE degerinden (available-seats) gelir — hafif, ek istek yok. Not: manuel "anlik cek" butonu
-    // (/api/obilet/seat-refresh) hala gercek harita ceker (kullanici tek sefer icin tetikler, yuk yapmaz).
-    // Tekrar acmak icin: false -> true.
-    const REAL_SEATMAP_ENABLED = false;
+    // GERCEK doluluk icin koltuk haritasi cekilecek operatorler — SADECE belirli firma seciliyse.
+    // ACIK: POST("{}") govdesi calisiyor (canli dogrulandi: 15:30 seferi liste 5 derken gercek 14).
+    // Liste available-seats BAZI otobuslerde BAYAT; gercek koltuk haritasi (SVG) her zaman dogru.
+    // attachRealOccupancy tiklamasiz POST ile ceker, takip edilen firmalarla + tarih basi ust
+    // sinirla (asagida) yuku bounded tutar. "*" (tum firma) hatlarinda cok agir olacagi icin atlanir.
+    const REAL_SEATMAP_ENABLED = true;
+    // GERCEK koltuk haritasi TUM hedefler icin acik (firma-ozel VE tum-firma). Tum-firma hatlarinda
+    // "*" sentineli ile calisir; attachRealOccupancy tarih basi 25 sefer ust siniri + YALNIZCA GELECEK
+    // seferlerle yuku bounded tutar. Boylece occupancy her zaman GERCEK haritadan gelir; guvenilmez
+    // liste available-seats degeri occupancy'ye ARTIK HIC yazilmaz (bayat oldugunda yanlis dusuk cikiyordu).
     const seatOps = !REAL_SEATMAP_ENABLED ? null : (acceptAllOperators ? ["*"] : targetOperators);
 
     const trackedJourneys = [];
@@ -6440,15 +6442,12 @@ async function processObiletTarget(target) {
               total = rT; const sold = Math.max(0, Math.min(rT, rS));
               avail = rT - sold; occ = Math.round((sold / rT) * 100); source = "gercek";
             } else if (j.seatInfoReliable === true && Number.isFinite(Number(j.totalSeats)) && Number(j.totalSeats) > 0 && Number.isFinite(Number(j.availableSeats))) {
-              // 2) ANA KAYNAK (gercek cekim kapaliyken): oBilet liste available-seats degeri.
-              //    KORUMA (yalnizca gercek cekim ACIKKEN gecerli): taze bir 'gercek' satiri liste ile
-              //    bozulmasin. Gercek cekim KAPALIYKEN eski 'gercek' satirlar artik tazelenmedigi icin
-              //    BAYAT -> liste serbestce guncellesin (aksi halde eski deger sonsuza kadar takili kalir).
-              if (REAL_SEATMAP_ENABLED) {
-                const ex = db.prepare("SELECT source FROM obilet_occupancy WHERE target_id=? AND journey_date=? AND operator=? AND departure_time=?")
-                  .get(target.id, j.journey_date, occOp, j.time);
-                if (ex && ex.source === "gercek") { continue; } // onceki GERCEK degeri koru, liste ile bozma
-              }
+              // 2) YEDEK: liste available-seats — gercek harita bu turda cekilemediyse "-" yerine deger goster.
+              //    KRITIK KORUMA: mevcut 'gercek' satirin UZERINE ASLA YAZMA. Gercek dogrudur; liste bazi
+              //    (ozellikle dolu) otobuslerde BAYAT olabilir. Boylece bir kez gercek yazilinca liste bozmaz.
+              const ex = db.prepare("SELECT source FROM obilet_occupancy WHERE target_id=? AND journey_date=? AND operator=? AND departure_time=?")
+                .get(target.id, j.journey_date, occOp, j.time);
+              if (ex && ex.source === "gercek") { continue; } // onceki GERCEK degeri koru, liste ile bozma
               total = Number(j.totalSeats); avail = Number(j.availableSeats);
               occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100))); source = "liste";
             } else {
@@ -6460,17 +6459,14 @@ async function processObiletTarget(target) {
             // Doluluk YALNIZCA gercek koltuk haritasi (source='gercek') veya guvenilir liste (source='liste')
             // ile yazilir. GERCEK her zaman ustune yazabilir; LISTE mevcut 'gercek' satiri BOZMAZ (yukaridaki
             // koruma, satir 6445). Fiyat takibinden tamamen bagimsiz ayri tablo (obilet_occupancy).
-            // Plaka yalnizca GERCEK harita cekiminde gelir (liste yedeginde bos). Plaka HER ZAMAN
-            // gosterilen (en dolu) aracin plakasiyla TUTARLI olsun diye: her gercek yazimda o taramanin
-            // aracinin plakasi yazilir (yoksa bos). Boylece kopya-arac "en dolu" degisiminde eski aracin
-            // plakasi yeni aracin dolulugunun yaninda YANLIS gorunmez. Not: liste yazimlari zaten mevcut
-            // 'gercek' satiri atliyor (yukaridaki koruma) -> gercek plaka liste ile ASLA silinmez.
+            // Plaka yalnizca GERCEK harita cekiminde gelir; liste yedeginde bos. Mevcut plakayi
+            // bos ile silmemek icin: gercek+plaka varsa yaz, yoksa mevcut plakayi KORU (COALESCE).
             const plateVal = (source === "gercek" && j.realPlate) ? String(j.realPlate).trim() : "";
             db.prepare(`
               INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated, source, plate)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(target_id, journey_date, operator, departure_time)
-              DO UPDATE SET departure_stop = excluded.departure_stop, total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated, source = excluded.source, plate = excluded.plate
+              DO UPDATE SET departure_stop = excluded.departure_stop, total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated, source = excluded.source, plate = CASE WHEN excluded.plate != '' THEN excluded.plate ELSE obilet_occupancy.plate END
             `).run(target.id, j.journey_date, occOp, j.time, j.departureStop || "", total, avail, occ, now, source, plateVal);
             writtenOccKeys.add(`${occOp}|${j.time}`);
           } catch (occErr) {
