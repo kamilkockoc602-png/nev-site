@@ -4701,16 +4701,14 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso, seatOperators
         if (seenKeys.has(key)) {
           // KOPYA arac: oBilet ayni firma+saate 2. (bazen 3.) otobus koyar (orn. 00:30'da biri 37/41
           // DOLU, biri 15/40). Occupancy TEK satirda gosterildigi icin kullanici oBilet'te DOLU araci
-          // gorur; bos kopyayi gostermek "yanlis" gorunur. Bu yuzden EN DOLU aracin (en cok satilan)
-          // koltuk degerini tutariz. NOT: yalnizca occupancy alanlari guncellenir; fiyat ayni oldugu
-          // icin (iki arac da ayni ucret) FIYAT/degisiklik mantigi HIC etkilenmez.
+          // gorur; bos kopyayi gostermek "yanlis" gorunur. Bu yuzden EN DOLU = EN AZ BOS (min available,
+          // yani "Son X Koltuk"taki X en kucuk olan) aracin koltuk degerini tutariz. NOT: yalnizca occupancy
+          // alanlari guncellenir; iki arac ayni ucret oldugu icin FIYAT/degisiklik mantigi HIC etkilenmez.
           if (Number.isFinite(totalSeats) && Number.isFinite(availableSeats)) {
             const existing = capturedJourneys.find((cj) => cj.matchKey === key);
             if (existing) {
-              const newSold = totalSeats - availableSeats;
-              const exSold = (Number.isFinite(existing.totalSeats) && Number.isFinite(existing.availableSeats))
-                ? existing.totalSeats - existing.availableSeats : -1;
-              if (newSold > exSold) {
+              const exAvail = Number.isFinite(existing.availableSeats) ? existing.availableSeats : Infinity;
+              if (availableSeats < exAvail) { // daha az bos = daha dolu arac -> onu tut
                 existing.totalSeats = totalSeats;
                 existing.availableSeats = availableSeats;
                 existing.seatInfoReliable = seatInfoReliable;
@@ -6451,9 +6449,9 @@ async function processObiletTarget(target) {
               continue;
             }
             if (DEBUG_OBILET_PRICE) console.log(`[Doluluk] ${journeyDate} ${j.time} ${occOp}: ${total - avail}/${total} dolu (%${occ}) [${source}]`);
-            // Ayri "Doluluk İşçisi" KAPATILDI; tek dogru kaynak LISTE degeri. Bu yuzden liste degeri
-            // eski/yanlis (eski isci'nin yazdigi) 'gercek' satirin UZERINE serbestce yazar — koruma
-            // kaldirildi. Boylece koltuklar bir sonraki fiyat taramasinda dogru degere guncellenir.
+            // Doluluk YALNIZCA gercek koltuk haritasi (source='gercek') veya guvenilir liste (source='liste')
+            // ile yazilir. GERCEK her zaman ustune yazabilir; LISTE mevcut 'gercek' satiri BOZMAZ (yukaridaki
+            // koruma, satir 6445). Fiyat takibinden tamamen bagimsiz ayri tablo (obilet_occupancy).
             db.prepare(`
               INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated, source)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -7263,12 +7261,25 @@ async function attachRealOccupancy(page, journeys, idsByKey, seatOperators, date
     let best = null;
     for (const id of ids) {
       const c = await fetchSeferRealSeats(page, id);
-      if (c && (best == null || c.sold > best.sold)) best = c;
+      // EN DOLU = EN AZ BOS (min available) — kullanicinin oBilet'te gordugu "Son X Koltuk" budur.
+      // Kopya araclarda (ayni saatte >1 otobus) en dolu olani sec.
+      if (c && (best == null || (c.total - c.sold) < (best.total - best.sold))) best = c;
       await new Promise((r) => setTimeout(r, 400)); // Cloudflare burst'u onlemek icin ara
     }
     if (best) {
-      j.realSold = best.sold;
-      j.realTotal = best.total;
+      // KOPYA-REGRESYON KORUMASI: real yalnizca BASARILI cekilen id'ler arasindan sectigi icin, DOLU
+      // kopyanin haritasi cekilemeyip (Cloudflare) BOS kopya cekilirse real bos araci gosterir ve dogru
+      // (dolu) degeri ezer. Liste dolu araci biliyorsa (daha az bos) real'i YAZMA -> write liste-fullest'i
+      // kullanir. YALNIZCA kopya seferlerde devreye girer; tekil seferde real her zaman gecerlidir.
+      const isDup = ids.length > 1;
+      const listReliable = j.seatInfoReliable === true && Number.isFinite(j.totalSeats) && Number.isFinite(j.availableSeats);
+      const bestAvail = best.total - best.sold;
+      if (isDup && listReliable && j.availableSeats < bestAvail) {
+        if (DEBUG_OBILET_PRICE) console.log(`[Doluluk] ${j.operator} ${j.time}: KOPYA; real bos araci okudu (bos ${bestAvail}) > liste-fullest (bos ${j.availableSeats}) -> liste-fullest kullanilacak`);
+      } else {
+        j.realSold = best.sold;
+        j.realTotal = best.total;
+      }
       ok++;
       if (DEBUG_OBILET_PRICE) console.log(`[Doluluk] GERCEK ${j.operator} ${j.time}: ${best.sold}/${best.total} dolu (liste ${(j.totalSeats != null && j.availableSeats != null) ? j.totalSeats - j.availableSeats : "?"} diyordu)`);
     } else if (DEBUG_OBILET_PRICE) {
