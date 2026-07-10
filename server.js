@@ -664,6 +664,9 @@ try {
 // Kaynak: 'gercek' (koltuk haritasi) | 'liste' (available-seats yedek). Gercek cekilemezse onceki
 // 'gercek' satiri korunur, 'liste' satiri silinir (yanlis deger gostermemek icin).
 try { db.exec("ALTER TABLE obilet_occupancy ADD COLUMN source TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+// Atanan otobus plakasi — /json/sefer yanitindan gelir (kalkisa yakin atanir; ileri tarihte bos).
+// Yalnizca GERCEK koltuk haritasi cekildiginde (source='gercek') dolar; liste yedeginde bos kalir.
+try { db.exec("ALTER TABLE obilet_occupancy ADD COLUMN plate TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN journey_date TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN departure_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
@@ -6452,12 +6455,15 @@ async function processObiletTarget(target) {
             // Doluluk YALNIZCA gercek koltuk haritasi (source='gercek') veya guvenilir liste (source='liste')
             // ile yazilir. GERCEK her zaman ustune yazabilir; LISTE mevcut 'gercek' satiri BOZMAZ (yukaridaki
             // koruma, satir 6445). Fiyat takibinden tamamen bagimsiz ayri tablo (obilet_occupancy).
+            // Plaka yalnizca GERCEK harita cekiminde gelir; liste yedeginde bos. Mevcut plakayi
+            // bos ile silmemek icin: gercek+plaka varsa yaz, yoksa mevcut plakayi KORU (COALESCE).
+            const plateVal = (source === "gercek" && j.realPlate) ? String(j.realPlate).trim() : "";
             db.prepare(`
-              INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated, source)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated, source, plate)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(target_id, journey_date, operator, departure_time)
-              DO UPDATE SET departure_stop = excluded.departure_stop, total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated, source = excluded.source
-            `).run(target.id, j.journey_date, occOp, j.time, j.departureStop || "", total, avail, occ, now, source);
+              DO UPDATE SET departure_stop = excluded.departure_stop, total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated, source = excluded.source, plate = CASE WHEN excluded.plate != '' THEN excluded.plate ELSE obilet_occupancy.plate END
+            `).run(target.id, j.journey_date, occOp, j.time, j.departureStop || "", total, avail, occ, now, source, plateVal);
             writtenOccKeys.add(`${occOp}|${j.time}`);
           } catch (occErr) {
             if (DEBUG_OBILET_PRICE) console.warn(`[Doluluk] yazma hatasi: ${occErr.message}`);
@@ -7180,7 +7186,12 @@ function countSeatsFromSeferJson(json) {
     if (DEBUG_OBILET_PRICE) console.log(`[Doluluk] Guvenilmez koltuk haritasi atlandi: dolu=${sold} bos=${empty} toplam=${total} partial=${partial}`);
     return null;
   }
-  return { total, sold, empty, unknown: other, partial: false };
+  // Atanan otobus plakasi (varsa) — /json/sefer yanitinin ust seviyesinde "plate" alani. Kalkisa
+  // yakin atanir; ileri tarihli seferlerde cogunlukla null gelir.
+  const plateRaw = (json && json.plate != null) ? json.plate
+    : (json && json.data && json.data.plate != null ? json.data.plate : null);
+  const plate = plateRaw != null ? String(plateRaw).trim() : "";
+  return { total, sold, empty, unknown: other, partial: false, plate };
 }
 
 // Bir seferin GERCEK koltuk sayimini /json/sefer/{id}'den al. oBilet bunu POST + json ister
@@ -7284,6 +7295,7 @@ async function attachRealOccupancy(page, journeys, idsByKey, seatOperators, date
       } else {
         j.realSold = best.sold;
         j.realTotal = best.total;
+        j.realPlate = best.plate || ""; // atanan otobus plakasi (varsa) — occupancy ile birlikte yazilir
       }
       ok++;
       if (DEBUG_OBILET_PRICE) console.log(`[Doluluk] GERCEK ${j.operator} ${j.time}: ${best.sold}/${best.total} dolu (liste ${(j.totalSeats != null && j.availableSeats != null) ? j.totalSeats - j.availableSeats : "?"} diyordu)`);
@@ -7642,7 +7654,7 @@ app.get("/api/obilet/occupancy", requireAuth, (req, res) => {
     if (operator) { conditions.push("o.operator = ?"); params.push(operator); }
     const rows = db.prepare(`
       SELECT o.target_id, t.origin, t.destination, o.journey_date, o.operator, o.departure_time,
-             o.departure_stop, o.total_seats, o.available_seats, o.occupancy_percent, o.last_updated
+             o.departure_stop, o.total_seats, o.available_seats, o.occupancy_percent, o.plate, o.last_updated
         FROM obilet_occupancy o
         LEFT JOIN obilet_targets t ON t.id = o.target_id
        WHERE ${conditions.join(" AND ")}
@@ -7910,7 +7922,7 @@ function computeJourneyTracking({ date, origin, destination, operator } = {}) {
   const occMap = new Map();
   try {
     const occRows = db.prepare(
-      "SELECT target_id, journey_date, operator, departure_time, total_seats, available_seats, last_updated FROM obilet_occupancy"
+      "SELECT target_id, journey_date, operator, departure_time, total_seats, available_seats, plate, last_updated FROM obilet_occupancy"
     ).all();
     const tsKey = (s) => {
       const m = String(s || "").match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
@@ -7940,12 +7952,13 @@ function computeJourneyTracking({ date, origin, destination, operator } = {}) {
     const totalSeats = occ && occ.total_seats != null ? occ.total_seats : null;
     const availableSeats = occ && occ.available_seats != null ? occ.available_seats : null;
     const yolcu = (totalSeats != null && availableSeats != null) ? (totalSeats - availableSeats) : null;
+    const plate = occ && occ.plate ? String(occ.plate) : "";
     return {
       target_id: s.target_id,
       journey_date: s.journey_date, origin: s.origin, destination: s.destination,
       operator: s.operator, departure_time: s.departure_time, departure_stop: s.departure_stop,
       changeCount, prices, currentPrice: s.price,
-      totalSeats, availableSeats, yolcu, lastChangedAt,
+      totalSeats, availableSeats, yolcu, plate, lastChangedAt,
     };
   }).sort((a, b) =>
     String(a.journey_date).localeCompare(String(b.journey_date)) ||

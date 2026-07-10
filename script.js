@@ -5066,7 +5066,7 @@ function occRowHtml(r) {
     <td>${occEsc((r.origin || "").toUpperCase())} - ${occEsc((r.destination || "").toUpperCase())}</td>
     <td>${occToDot(r.journey_date)}</td>
     <td>${occEsc(r.departure_time || "")}</td>
-    <td>${occEsc(r.operator || "")}</td>
+    <td>${occEsc(r.operator || "")}${r.plate ? `<div style="font-size:0.72rem;opacity:0.65;">Plaka: ${occEsc(r.plate)}</div>` : ""}</td>
     <td><b style="color:${occColor(p)}">%${p}</b></td>
     <td>${sold} / ${r.total_seats || 0}</td>
     <td>${r.available_seats || 0}</td>
@@ -5101,10 +5101,10 @@ function occBindLoadMore(rows) {
 function exportOccupancyCsv() {
   const rows = occupancyState.rows;
   if (!rows.length) { alert("Aktarılacak veri yok."); return; }
-  const headers = ["Kalkis", "Varis", "Sefer Tarihi", "Saat", "Firma", "Doluluk %", "Dolu", "Toplam", "Bos"];
+  const headers = ["Kalkis", "Varis", "Sefer Tarihi", "Saat", "Firma", "Plaka", "Doluluk %", "Dolu", "Toplam", "Bos"];
   const csvRows = rows.map((r) => {
     const sold = (r.total_seats || 0) - (r.available_seats || 0);
-    return [r.origin || "", r.destination || "", occToDot(r.journey_date), r.departure_time || "", r.operator || "", r.occupancy_percent || 0, sold, r.total_seats || 0, r.available_seats || 0]
+    return [r.origin || "", r.destination || "", occToDot(r.journey_date), r.departure_time || "", r.operator || "", r.plate || "", r.occupancy_percent || 0, sold, r.total_seats || 0, r.available_seats || 0]
       .map((v) => String(v).replace(/;/g, ",")).join(";");
   });
   const csv = "﻿" + [headers.join(";"), ...csvRows].join("\n");
@@ -5560,7 +5560,7 @@ function stRowHtml(j) {
   return `<tr>
     <td>${occToDot(j.journey_date)}</td>
     <td>${occEsc(j.departure_time || "")}</td>
-    <td>${occEsc(j.operator || "")}</td>
+    <td>${occEsc(j.operator || "")}${j.plate ? `<div style="font-size:0.72rem;opacity:0.65;">Plaka: ${occEsc(j.plate)}</div>` : ""}</td>
     <td>
       <b>${occEsc((j.origin || "").toUpperCase())} - ${occEsc((j.destination || "").toUpperCase())}</b>
       ${j.departure_stop ? `<div style="font-size:0.78rem;opacity:0.6;">${occEsc(j.departure_stop)}</div>` : ""}
