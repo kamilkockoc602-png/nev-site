@@ -7216,18 +7216,17 @@ async function fetchSeferRealSeats(page, seferId) {
     } catch (e) { return { __error: String(e && e.message || e) }; }
   }, seferId).catch((e) => ({ __error: String(e && e.message || e) }));
 
-  // 3 deneme, artan backoff (1.5s, 3s). GERCEK harita occupancy'nin TEK guvenilir kaynagi; bazi
-  // firmalarin (orn. Enver) LISTE degeri bayat oldugu icin gercek harita tutmazsa "eksik" deger
-  // gorunur. Gecici Cloudflare/challenge'i atlatmak icin biraz daha israrci deneriz. Basarili
-  // cekim ilk turda doner (ek maliyet yok); sadece basarisizlikta ekstra deneme yapilir.
-  const backoffs = [1500, 3000];
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  // HIZ: 2 deneme + kisa backoff (700ms). Onceden 3 deneme + 1.5s/3s backoff idi -> tarama yavasliyordu.
+  // Basarili cekim ZATEN ilk denemede doner (plaka + gercek doluluk gelir); yalnizca basarisizlikta 1 kez
+  // daha (kisa) dener. Railway'de Cloudflare bir seferi KALICI engelliyorsa uc uc retry fayda vermiyordu,
+  // sadece suru yiyordu -> kisaltildi. Boylece plakalar korunur ama tarama belirgin hizlanir.
+  for (let attempt = 1; attempt <= 2; attempt++) {
     const json = await doFetch();
     if (json && !json.__error && !json.__html) {
       const c = countSeatsFromSeferJson(json);
       if (c) return c;
     }
-    if (attempt < 3) await new Promise((r) => setTimeout(r, backoffs[attempt - 1]));
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 700));
   }
   return null;
 }
