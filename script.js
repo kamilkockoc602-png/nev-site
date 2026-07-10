@@ -5756,7 +5756,6 @@ function renderObiletTargetCards(listEl) {
             </div>
           </div>
           <div class="obilet-card-actions">
-            <button class="btn btn-sm btn-ghost obilet-refresh-btn" data-id="${t.id}" title="Güncelle"></button>
             ${isAdmin ? `<button class="btn btn-sm btn-primary obilet-priority-btn" data-id="${t.id}" title="Sıra beklemeden hemen tara (admin)">Anlık Tara</button>` : ""}
             ${isAdmin ? `<button class="btn btn-sm btn-ghost obilet-seatprobe-btn" data-id="${t.id}" title="Bir seferin GERÇEK koltuk haritasını çekip liste değeriyle karşılaştır (test)">Koltuk Testi</button>` : ""}
             <button class="btn btn-sm btn-ghost obilet-edit-btn" data-id="${t.id}" title="Düzenle">Düzenle</button>
