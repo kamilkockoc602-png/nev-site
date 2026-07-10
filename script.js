@@ -2950,7 +2950,7 @@ async function handleLogin(username, password) {
 
     setToken(result.token);
     state.currentUser = result.user;
-    showMessage("Giris basarili.", false);
+    showMessage("Signed in successfully.", false);
 
     showOverlay(true);
     await pause(1100);
@@ -2965,7 +2965,7 @@ async function handleLogin(username, password) {
     await renderControlIntegrationPanel().catch(() => null);
     startNotificationPolling();
   } catch (error) {
-    showMessage(error.message || "Giris basarisiz.");
+    showMessage(error.message || "Sign-in failed.");
   }
 }
 
@@ -3429,7 +3429,7 @@ if (dom.loginPasswordToggle && dom.loginPassword) {
     dom.loginPassword.type = isPwd ? "text" : "password";
     dom.loginPasswordToggle.setAttribute(
       "aria-label",
-      isPwd ? "Sifreyi gizle" : "Sifreyi goster"
+      isPwd ? "Hide password" : "Show password"
     );
     const eyeOn = dom.loginPasswordToggle.querySelector(".pw-eye-on");
     const eyeOff = dom.loginPasswordToggle.querySelector(".pw-eye-off");

@@ -2479,7 +2479,7 @@ app.post("/api/login", (req, res) => {
   const password = String(req.body?.password || "").trim();
 
   if (!username || !password) {
-    res.status(400).json({ message: "Kullanici adi ve sifre zorunlu." });
+    res.status(400).json({ message: "Username and password are required." });
     return;
   }
 
@@ -2491,7 +2491,7 @@ app.post("/api/login", (req, res) => {
 
   if (!user || user.password !== password) {
     logAttempt({ username, status: "fail", reason: "Hatali kimlik", ip: req.ip });
-    res.status(401).json({ message: "Kullanici adi veya sifre hatali." });
+    res.status(401).json({ message: "Invalid username or password." });
     return;
   }
 
