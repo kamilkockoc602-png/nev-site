@@ -5756,6 +5756,7 @@ function renderObiletTargetCards(listEl) {
             </div>
           </div>
           <div class="obilet-card-actions">
+            <button class="btn btn-sm btn-ghost obilet-refresh-btn" data-id="${t.id}" title="Bu hattı hemen güncelle">Güncelle</button>
             ${isAdmin ? `<button class="btn btn-sm btn-primary obilet-priority-btn" data-id="${t.id}" title="Sıra beklemeden hemen tara (admin)">Anlık Tara</button>` : ""}
             ${isAdmin ? `<button class="btn btn-sm btn-ghost obilet-seatprobe-btn" data-id="${t.id}" title="Bir seferin GERÇEK koltuk haritasını çekip liste değeriyle karşılaştır (test)">Koltuk Testi</button>` : ""}
             <button class="btn btn-sm btn-ghost obilet-edit-btn" data-id="${t.id}" title="Düzenle">Düzenle</button>
@@ -5866,12 +5867,11 @@ function renderObiletTargetCards(listEl) {
       const target = obiletState.targets.find(t => t.id == id);
       if (!target) return;
 
-      const originalText = btn.textContent;
+      const originalText = btn.textContent || "Güncelle";
       try {
         btn.disabled = true;
-        btn.textContent = "";
+        btn.textContent = "...";
         const result = await apiFetch(`/api/obilet/targets/${id}/refresh`, { method: "POST" });
-        btn.textContent = "";
 
         setTimeout(() => {
           btn.textContent = originalText;
@@ -5888,7 +5888,6 @@ function renderObiletTargetCards(listEl) {
       } catch (err) {
         // 409 = "zaten kuyrukta" uyarisi (hata degil, bilgilendirme)
         const isQueueWarning = err.payload?.queued === false;
-        btn.textContent = isQueueWarning ? "" : "";
         setTimeout(() => {
           btn.textContent = originalText;
           btn.disabled = false;
