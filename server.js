@@ -5039,13 +5039,13 @@ function tgDate2(s) {
 function tgAttachOccupancy(rows) {
   try {
     if (!rows || !rows.length) return rows;
-    const occ = db.prepare("SELECT target_id, operator, journey_date, departure_time, total_seats, available_seats FROM obilet_occupancy").all();
+    const occ = db.prepare("SELECT target_id, operator, journey_date, departure_time, total_seats, available_seats, plate FROM obilet_occupancy").all();
     if (!occ.length) return rows;
     const map = new Map();
     for (const o of occ) map.set(`${o.target_id}|${o.operator}|${o.journey_date}|${o.departure_time}`, o);
     for (const r of rows) {
       const m = map.get(`${r.target_id}|${r.operator}|${r.journey_date}|${r.departure_time}`);
-      if (m) { r.total_seats = m.total_seats; r.available_seats = m.available_seats; }
+      if (m) { r.total_seats = m.total_seats; r.available_seats = m.available_seats; r.plate = m.plate; }
     }
   } catch (e) { /* yok say */ }
   return rows;
@@ -5083,6 +5083,8 @@ function tgChangesGrouped(rows) {
       { key: "fark", label: "Fark", align: "r" },
     ];
     if (hasOcc) cols.push({ key: "dol", label: "Dolu", align: "r" });
+    // Plaka: atanmis otobus plakasi; atanmamis (ileri tarih) seferde "NULL". Her zaman gosterilir.
+    cols.push({ key: "plaka", label: "Plaka", align: "l", max: 11 });
 
     // Sefer: yil olmadan "DD.MM HH:MM" (yer kazanir, telefona sigsin).
     const dm = (s) => { const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})$/); return m ? `${m[3]}.${m[2]}` : String(s || ""); };
@@ -5100,6 +5102,8 @@ function tgChangesGrouped(rows) {
           row.dol = `${Math.max(0, r.total_seats - r.available_seats)}/${r.total_seats}`;
         } else { row.dol = "—"; }
       }
+      // Plaka: varsa yaz, yoksa NULL (istenen davranis).
+      row.plaka = (r.plate && String(r.plate).trim()) ? String(r.plate).trim() : "NULL";
       return row;
     });
     // Grup ortalama dolulugu — basliga kalin yazilir (tablo icinde kalin mumkun degil).
