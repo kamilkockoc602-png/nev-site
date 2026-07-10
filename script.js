@@ -5551,12 +5551,7 @@ function stRowHtml(j) {
     const pct = j.totalSeats ? Math.round((j.yolcu / j.totalSeats) * 100) : 0;
     dolCell = `<b style="color:${occColor(pct)}">${j.yolcu}/${j.totalSeats}</b> <span style="opacity:.7">(%${pct})</span>`;
   }
-  // Bu seferin GERCEK dolulugunu HEMEN kontrol et butonu (tum kullanicilar).
-  if (j.target_id != null) {
-    dolCell += ` <button class="st-seat-refresh" title="Bu seferin gerçek koltuk doluluğunu hemen çek"
-      data-tid="${j.target_id}" data-date="${occEsc(j.journey_date || "")}" data-time="${occEsc(j.departure_time || "")}" data-op="${occEsc(j.operator || "")}"
-      style="margin-left:6px;border:none;border-radius:6px;background:#2f6fb0;color:#fff;cursor:pointer;font-size:0.85rem;padding:1px 7px;"></button>`;
-  }
+  // "Anlik cek" butonu kaldirildi — koltuk/plaka artik dogru geldigi icin gereksiz.
   return `<tr>
     <td>${occToDot(j.journey_date)}</td>
     <td>${occEsc(j.departure_time || "")}</td>
