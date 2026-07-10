@@ -2827,7 +2827,8 @@ async function activatePanel(menuKey) {
     dom.contentCard.classList.add("panel-switching");
   }
 
-  await pause(120);
+  // Menu gecisinde spinner gorunsun diye kisa bekleme (yaklasik yarim tur donus).
+  await pause(420);
   if (switchSeq !== state.panelSwitchSeq) {
     return;
   }
