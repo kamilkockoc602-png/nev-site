@@ -6412,13 +6412,21 @@ async function processObiletTarget(target) {
             let total, avail, occ, source;
             const rT = Number(j.realTotal), rS = Number(j.realSold);
             if (Number.isFinite(rT) && rT > 0 && Number.isFinite(rS)) {
-              // TEK KAYNAK: GERCEK koltuk haritasi (/json/sefer SVG sayimi). Canli dogrulandi (21:29 => 35/6).
+              // 1) BIRINCIL: GERCEK koltuk haritasi (/json/sefer SVG sayimi). Her zaman dogru (canli dogrulandi:
+              //    21:29 => 35/6). Mevcut her degerin (liste dahil) UZERINE yazar.
               total = rT; const sold = Math.max(0, Math.min(rT, rS));
               avail = rT - sold; occ = Math.round((sold / rT) * 100); source = "gercek";
+            } else if (j.seatInfoReliable === true && Number.isFinite(Number(j.totalSeats)) && Number(j.totalSeats) > 0 && Number.isFinite(Number(j.availableSeats))) {
+              // 2) YEDEK: liste available-seats — gercek harita bu turda cekilemediyse "-" yerine deger goster.
+              //    KRITIK KORUMA: mevcut 'gercek' satirin UZERINE ASLA YAZMA. Gercek dogrudur; liste bazi
+              //    (ozellikle dolu) otobuslerde BAYAT olabilir. Boylece bir kez gercek yazilinca liste bozmaz.
+              const ex = db.prepare("SELECT source FROM obilet_occupancy WHERE target_id=? AND journey_date=? AND operator=? AND departure_time=?")
+                .get(target.id, j.journey_date, occOp, j.time);
+              if (ex && ex.source === "gercek") { continue; } // onceki GERCEK degeri koru, liste ile bozma
+              total = Number(j.totalSeats); avail = Number(j.availableSeats);
+              occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100))); source = "liste";
             } else {
-              // Gercek harita cekilemedi -> YAZMA. Liste available-seats BAZI otobuslerde BAYAT/yanlis
-              // (canli kanit: liste 9 bos derken gercek 6 bos). Yanlis dusuk doluluk gostermektense hic
-              // yazmayiz; onceki GERCEK deger korunur (temizlik silmez), hic yoksa "-" gosterilir.
+              // 3) Hicbir guvenilir veri yok -> yazma ("-").
               occSkippedNoInfo++;
               continue;
             }
@@ -6448,21 +6456,21 @@ async function processObiletTarget(target) {
         if (journeys.length > 0) {
           try {
             // Bu taramada GORULEN tum seferler (gercek deger yazilamasa bile). Cleanup bunu baz alir:
-            // sefer HALA listede ise onceki GERCEK degerini KORU (gecici cekim hatasinda YANLISLIKLA silme);
-            // yalnizca listede OLMAYAN (iptal/tasinmis) veya eski guvenilmez 'liste' kaynakli satirlari sil.
+            // sefer HALA listede ise onceki degerini KORU (gecici cekim hatasinda YANLISLIKLA silme,
+            // "-" gostermeyelim); yalnizca listede OLMAYAN (iptal/tasinmis) gelecek seferi sil.
             const currentOccKeys = new Set(
               dayTracked.map((j) => `${normalizeObiletOperatorName(j.operator) || j.operator}|${j.time}`)
             );
             const occRowsForDate = db.prepare(
-              "SELECT id, operator, departure_time, source FROM obilet_occupancy WHERE target_id = ? AND journey_date = ?"
+              "SELECT id, operator, departure_time FROM obilet_occupancy WHERE target_id = ? AND journey_date = ?"
             ).all(target.id, journeyDate);
             for (const o of occRowsForDate) {
               // KALKAN (gecmis) sefer: kalkmadan onceki SON doluluk degeri DONSUN, SILME.
               // Boylece kullanici "bu arac 30/41 ile cikmis" diye kalkis dolulugunu gorebilir.
               if (!isJourneyInFuture(journeyDate, o.departure_time)) continue;
-              const gone = !currentOccKeys.has(`${o.operator}|${o.departure_time}`); // artik listede yok -> iptal
-              const staleListRow = o.source === "liste"; // eski guvenilmez liste degeri -> temizle (gercek/"-" ile degisir)
-              if (gone || staleListRow) {
+              // GELECEK sefer bu turda listede yok (iptal/tasinmis) -> sil. Listede olan ama bu tur
+              // degeri tazelenemeyen (gecici hata) satir KORUNUR — onceki deger gosterilmeye devam eder.
+              if (!currentOccKeys.has(`${o.operator}|${o.departure_time}`)) {
                 db.prepare("DELETE FROM obilet_occupancy WHERE id = ?").run(o.id);
               }
             }
