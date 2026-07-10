@@ -4698,7 +4698,27 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso, seatOperators
           if (!idsByKey.has(key)) idsByKey.set(key, []);
           if (!idsByKey.get(key).includes(seferId)) idsByKey.get(key).push(seferId);
         }
-        if (seenKeys.has(key)) continue;
+        if (seenKeys.has(key)) {
+          // KOPYA arac: oBilet ayni firma+saate 2. (bazen 3.) otobus koyar (orn. 00:30'da biri 37/41
+          // DOLU, biri 15/40). Occupancy TEK satirda gosterildigi icin kullanici oBilet'te DOLU araci
+          // gorur; bos kopyayi gostermek "yanlis" gorunur. Bu yuzden EN DOLU aracin (en cok satilan)
+          // koltuk degerini tutariz. NOT: yalnizca occupancy alanlari guncellenir; fiyat ayni oldugu
+          // icin (iki arac da ayni ucret) FIYAT/degisiklik mantigi HIC etkilenmez.
+          if (Number.isFinite(totalSeats) && Number.isFinite(availableSeats)) {
+            const existing = capturedJourneys.find((cj) => cj.matchKey === key);
+            if (existing) {
+              const newSold = totalSeats - availableSeats;
+              const exSold = (Number.isFinite(existing.totalSeats) && Number.isFinite(existing.availableSeats))
+                ? existing.totalSeats - existing.availableSeats : -1;
+              if (newSold > exSold) {
+                existing.totalSeats = totalSeats;
+                existing.availableSeats = availableSeats;
+                existing.seatInfoReliable = seatInfoReliable;
+              }
+            }
+          }
+          continue;
+        }
         seenKeys.add(key);
         capturedJourneys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop, totalSeats, availableSeats, seatInfoReliable, hasSeatInfoRaw: hasSeatInfo, shouldZeroRaw: shouldZeroSeats, matchKey: key });
         parsed++;
