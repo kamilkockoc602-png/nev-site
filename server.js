@@ -7678,6 +7678,51 @@ app.get("/api/obilet/occupancy", requireAuth, (req, res) => {
   }
 });
 
+// ===================== PKM GUZERGAH FORMU EXPORT (Pkm Form Sure Hesaplama menusunden) =====================
+// Kullanicinin gonderdigi PKM Talep Formu sablonunu (assets/pkm_form_template.xlsx) yukleyip duraklari (C),
+// sureleri (E: seyahat+peron) ve kalkis saatini (G11) doldurur. Varis/kalkis saatleri, sira ve durak kodu
+// SABLONUN KENDI FORMULLERI ile Excel acilinca otomatik hesaplanir. Fiyat/doluluk mantigindan bagimsiz.
+app.post("/api/pkm-export", requireAuth, async (req, res) => {
+  try {
+    const ExcelJS = require("exceljs");
+    const departureMin = Math.max(0, Math.min(1439, parseInt(req.body && req.body.departureMin, 10) || 0));
+    const stops = Array.isArray(req.body && req.body.stops) ? req.body.stops : [];
+    if (stops.length < 2) { res.status(400).json({ message: "En az 2 durak gerekli." }); return; }
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.readFile(path.join(__dirname, "assets", "pkm_form_template.xlsx"));
+    try { wb.calcProperties = wb.calcProperties || {}; wb.calcProperties.fullCalcOnLoad = true; } catch (e) {}
+    const ws = wb.getWorksheet("GÜZERGAH TALEP");
+    const LAST = 69;
+    // Ornek veriyi temizle (GIDIS C/E, DONUS K/M) + formullerin BAYAT sonucunu dusur (Excel yeniden hesaplasin).
+    for (let r = 11; r <= LAST; r++) {
+      for (const col of ["C", "E", "K", "M"]) ws.getCell(`${col}${r}`).value = null;
+      for (const col of ["A", "B", "G", "I", "J", "O"]) {
+        const v = ws.getCell(`${col}${r}`).value;
+        if (v && typeof v === "object" && v.formula) ws.getCell(`${col}${r}`).value = { formula: v.formula };
+      }
+    }
+    ws.getCell("O11").value = null; ws.getCell("O12").value = null;
+    ws.getCell("G11").value = departureMin / 1440; // kalkis saati (Excel serial = dk/1440)
+    ws.getCell("G12").value = departureMin / 1440;
+    stops.forEach((s, idx) => {
+      const k = idx + 1;
+      const name = String((s && s.name) || "").trim();
+      if (k === 1) { ws.getCell("C11").value = name; ws.getCell("C12").value = name; return; }
+      const rs = 9 + 2 * k, rp = 10 + 2 * k; // seyahat satiri / peron satiri
+      if (rp > LAST) return; // sablon 69 satir -> ~29 duraga kadar
+      ws.getCell(`C${rs}`).value = name; ws.getCell(`C${rp}`).value = name;
+      ws.getCell(`E${rs}`).value = Math.max(0, Number(s && s.sey) || 0) / 1440; // seyahat suresi (dk->serial)
+      ws.getCell(`E${rp}`).value = Math.max(0, Number(s && s.per) || 0) / 1440; // peron suresi
+    });
+    const buf = await wb.xlsx.writeBuffer();
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", 'attachment; filename="pkm-guzergah-plani.xlsx"');
+    res.send(Buffer.from(buf));
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Excel oluşturulamadı." });
+  }
+});
+
 // ===================== TALEP RADARI API'LERI (otonom yogunluk analizi) =====================
 const WEEKDAY_TR = ["Pazar", "Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi"];
 function isoWeekdayTr(dateIso) {

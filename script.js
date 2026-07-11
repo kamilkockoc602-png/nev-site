@@ -3092,28 +3092,32 @@ async function shPlan() {
     planBtn.disabled = false;
   }
 }
-function shExportExcel() {
-  const XLSX = window.XLSX;
-  if (!XLSX) { alert("Excel kütüphanesi yüklenemedi."); return; }
+async function shExportExcel() {
   if (!shState.stops.length) { alert("Önce Hesapla'ya basın."); return; }
-  const { arr, dep } = shComputeTimes();
-  const n = shState.stops.length;
-  const aoa = [
-    ["PKM GÜZERGAH SÜRE PLANI"],
-    ["Kalkış Saati", shMinToHM(shState.depMin)],
-    [],
-    ["Sıra", "Durak", "Seyahat Süresi", "Varış Saati", "Peron (dk)", "Kalkış Saati"],
-  ];
-  shState.stops.forEach((s, i) => {
-    aoa.push([i + 1, s, i === 0 ? "ANA DURAK" : shMinToDur(shState.legMin[i] || 0), i === 0 ? "" : shMinToHM(arr[i]), i === 0 ? "" : (shState.peronMin[i] || 0), shMinToHM(dep[i])]);
-  });
-  aoa.push([]);
-  aoa.push(["Toplam Seyahat", shMinToDur((arr[n - 1] != null ? arr[n - 1] : dep[n - 1]) - shState.depMin)]);
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!cols"] = [{ wch: 6 }, { wch: 24 }, { wch: 14 }, { wch: 12 }, { wch: 11 }, { wch: 12 }];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Güzergah Planı");
-  XLSX.writeFile(wb, `pkm-guzergah-plani-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  const btn = document.getElementById("shExcel");
+  const orig = btn ? btn.textContent : "";
+  // Backend, senin gonderdigin PKM Talep Formu SABLONUNU doldurur (duraklar + sureler + kalkis saati);
+  // saatleri sablonun kendi formulleri Excel'de hesaplar.
+  const stops = shState.stops.map((name, i) => ({ name, sey: i === 0 ? 0 : (shState.legMin[i] || 0), per: i === 0 ? 0 : (shState.peronMin[i] || 0) }));
+  if (btn) { btn.disabled = true; btn.textContent = "İndiriliyor..."; }
+  try {
+    const r = await fetch("/api/pkm-export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}) },
+      body: JSON.stringify({ departureMin: shState.depMin, stops }),
+    });
+    if (!r.ok) { let m = "İndirilemedi"; try { m = (await r.json()).message || m; } catch (e) {} throw new Error(m); }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "pkm-guzergah-plani.xlsx";
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert("Excel indirilemedi: " + (e.message || e));
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
+  }
 }
 function setupSureHesap() {
   const planBtn = document.getElementById("shPlan");
