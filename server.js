@@ -390,6 +390,7 @@ const MENUS = [
   "obilet_tracker",
   "occupancy",
   "sefer_takip",
+  "sure_hesap",
   "permissions",
   "logs",
 ];
