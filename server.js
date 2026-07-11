@@ -7691,7 +7691,15 @@ app.post("/api/pkm-export", requireAuth, async (req, res) => {
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.readFile(path.join(__dirname, "assets", "pkm_form_template.xlsx"));
     try { wb.calcProperties = wb.calcProperties || {}; wb.calcProperties.fullCalcOnLoad = true; } catch (e) {}
+    // Excel "onarim" uyarisini onle: exceljs, Tablo + otomatik-filtre tanimlarini round-trip'te
+    // bozuyor -> kaldir. (Durak lookup'i VLOOKUP $C:$D araligini kullanir, tabloya bagimli degil;
+    // hucre verisi aynen korunur, sadece tablo/filtre stilleri gider.)
+    wb.eachSheet((sheet) => {
+      try { if (sheet.tables) Object.keys(sheet.tables).forEach((tn) => { try { sheet.removeTable(tn); } catch (e) {} }); } catch (e) {}
+      try { sheet.autoFilter = null; } catch (e) {}
+    });
     const ws = wb.getWorksheet("GÜZERGAH TALEP");
+    ws.getCell("C3").value = "Hasan HAZER"; // TALEP EDEN (AD & SOYAD) her zaman Hasan HAZER
     const LAST = 69;
     // Ornek veriyi temizle (GIDIS C/E, DONUS K/M) + formullerin BAYAT sonucunu dusur (Excel yeniden hesaplasin).
     for (let r = 11; r <= LAST; r++) {
