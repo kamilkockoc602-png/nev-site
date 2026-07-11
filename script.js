@@ -16,7 +16,7 @@ const MENUS = [
   { key: "obilet_tracker", label: "oBilet Takip" },
   { key: "occupancy", label: "Doluluk Takip" },
   { key: "sefer_takip", label: "Sefer Takip" },
-  { key: "sure_hesap", label: "Süre Hesaplama" },
+  { key: "sure_hesap", label: "Pkm Form Süre Hesaplama" },
   // { key: "demand", label: "Talep Radarı" },  // GECICI KAPALI (kullanici istegi) — geri acmak icin bu satiri ac + server.js ANALYSIS_WORKER_ENABLED=true
   { key: "ocr", label: "Foto Tarama" },
   { key: "permissions", label: "Yetki Menusu" },
