@@ -16,6 +16,7 @@ const MENUS = [
   { key: "obilet_tracker", label: "oBilet Takip" },
   { key: "occupancy", label: "Doluluk Takip" },
   { key: "sefer_takip", label: "Sefer Takip" },
+  { key: "sure_hesap", label: "Süre Hesaplama" },
   // { key: "demand", label: "Talep Radarı" },  // GECICI KAPALI (kullanici istegi) — geri acmak icin bu satiri ac + server.js ANALYSIS_WORKER_ENABLED=true
   { key: "ocr", label: "Foto Tarama" },
   { key: "permissions", label: "Yetki Menusu" },
@@ -2863,6 +2864,7 @@ async function activatePanel(menuKey) {
     demand: "Sistem popüler hatları otomatik tarar; yoğun ve boş günleri gösterir",
     permissions: "Kullanıcı yetki yönetimi",
     logs: "Sistem giriş ve oturum kayıtları",
+    sure_hesap: "İki yer arası karayolu süresi + mesafe (yeni güzergah planlarken durak/il arası süreyi bulmak için)",
   };
   setContentHeader({ title, subtitle: SUBTITLES[menuKey] || "" });
 
@@ -2940,6 +2942,122 @@ async function activatePanel(menuKey) {
   if (menuKey === "demand") {
     setupDemandPanel();
   }
+
+  if (menuKey === "sure_hesap") {
+    setupSureHesap();
+  }
+}
+
+// ============ SURE HESAPLAMA (iki yer arasi karayolu suresi) ============
+// Ucretsiz: Nominatim (yer->koordinat) + OSRM (koordinat->sure). API anahtari GEREKMEZ. Tamamen
+// client-side (tarayicidan); backend/egress bagimliligi yok. Yeni guzergah planlarken il/durak arasi
+// sureyi Google'a bakmadan bulmak icin.
+function shFmtDur(sec) {
+  const m = Math.round(sec / 60);
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  return h ? `${h} sa ${mm} dk` : `${mm} dk`;
+}
+// Adi merkez sehirden FARKLI olan iller (il poligon merkezi uzak kaliyor -> merkez sehre cevir).
+// Cogu ilde ad = merkez sehir (Ankara, Adana, Bursa...) zaten dogru cikar; bunlar istisna.
+const SH_IL_MERKEZ = {
+  "hatay": "Antakya", "kocaeli": "İzmit", "sakarya": "Adapazarı",
+  "afyon": "Afyonkarahisar", "içel": "Mersin", "icel": "Mersin",
+};
+function shNormPlace(q) {
+  const k = String(q || "").toLocaleLowerCase("tr").trim();
+  return SH_IL_MERKEZ[k] || q;
+}
+async function shGeoNominatim(q) {
+  const r = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=tr&q=${encodeURIComponent(q + ", Türkiye")}`, { headers: { "Accept-Language": "tr" } });
+  if (!r.ok) throw new Error("nominatim");
+  const a = await r.json();
+  if (!a || !a.length) throw new Error(`"${q}" bulunamadı`);
+  return { lat: +a[0].lat, lon: +a[0].lon, name: String(a[0].display_name || q).split(",")[0] };
+}
+async function shGeoPhoton(q) {
+  const r = await fetch(`https://photon.komoot.io/api/?q=${encodeURIComponent(q + ", Türkiye")}&limit=1`);
+  if (!r.ok) throw new Error("photon");
+  const d = await r.json();
+  const f = d && d.features && d.features[0];
+  if (!f) throw new Error(`"${q}" bulunamadı`);
+  return { lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], name: f.properties.name || q };
+}
+async function shGeocode(q) {
+  const query = shNormPlace(q);
+  // Once Nominatim (iyi Turkce eslesme, tarayici gercek UA gonderir). Engellenir/bos donerse Photon yedek.
+  try { return await shGeoNominatim(query); }
+  catch (e) { return await shGeoPhoton(query); }
+}
+async function shRoute(a, b) {
+  const url = `https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("Rota servisi yanıt vermedi");
+  const d = await r.json();
+  if (!d.routes || !d.routes.length) throw new Error("İki nokta arası rota bulunamadı");
+  return { seconds: d.routes[0].duration, meters: d.routes[0].distance };
+}
+function shGetHistory() {
+  try { return JSON.parse(localStorage.getItem("sh_history") || "[]"); } catch { return []; }
+}
+function shRenderHistory() {
+  const el = document.getElementById("shHistory");
+  if (!el) return;
+  const arr = shGetHistory();
+  if (!arr.length) { el.innerHTML = "Henüz arama yok."; return; }
+  el.innerHTML = arr.map((h) =>
+    `<div style="padding:0.4rem 0; border-bottom:1px solid var(--stroke);"><b>${occEsc(h.from)} → ${occEsc(h.to)}</b> — yol ${occEsc(h.dur)} · otobüs ~${occEsc(h.busDur)} · ${occEsc(h.km)} km</div>`
+  ).join("");
+}
+function shSaveHistory(rec) {
+  try {
+    let arr = shGetHistory();
+    arr.unshift(rec);
+    localStorage.setItem("sh_history", JSON.stringify(arr.slice(0, 30)));
+  } catch {}
+  shRenderHistory();
+}
+function setupSureHesap() {
+  const fromEl = document.getElementById("shFrom");
+  const toEl = document.getElementById("shTo");
+  const calcBtn = document.getElementById("shCalc");
+  const resultEl = document.getElementById("shResult");
+  shRenderHistory();
+  if (!calcBtn || calcBtn.dataset.wired) return;
+  calcBtn.dataset.wired = "1";
+
+  async function doCalc() {
+    const from = (fromEl.value || "").trim();
+    const to = (toEl.value || "").trim();
+    if (!from || !to) { resultEl.innerHTML = `<span style="color:#d64545;">Kalkış ve varış yazın.</span>`; return; }
+    calcBtn.disabled = true;
+    const orig = calcBtn.textContent;
+    calcBtn.textContent = "...";
+    resultEl.innerHTML = `<div class="loader-ring" style="margin:1.2rem 0;"></div>`;
+    try {
+      const a = await shGeocode(from);
+      await pause(1100); // Nominatim 1 istek/sn politikasina saygi
+      const b = await shGeocode(to);
+      const rt = await shRoute(a, b);
+      const dur = shFmtDur(rt.seconds);
+      const busDur = shFmtDur(rt.seconds * 1.15);
+      const kmStr = (rt.meters / 1000).toFixed(0);
+      resultEl.innerHTML =
+        `<div style="display:flex; gap:2.4rem; flex-wrap:wrap; padding:0.4rem 0;">` +
+        `<div><div class="subtle" style="font-size:0.8rem;">Karayolu süresi</div><div style="font-size:1.6rem; font-weight:700;">${occEsc(dur)}</div></div>` +
+        `<div><div class="subtle" style="font-size:0.8rem;">Otobüs tahmini (~%15)</div><div style="font-size:1.6rem; font-weight:700; color:var(--accent);">${occEsc(busDur)}</div></div>` +
+        `<div><div class="subtle" style="font-size:0.8rem;">Mesafe</div><div style="font-size:1.6rem; font-weight:700;">${occEsc(kmStr)} km</div></div>` +
+        `</div><div class="subtle" style="font-size:0.78rem; margin-top:0.3rem;">${occEsc(a.name)} → ${occEsc(b.name)}</div>`;
+      shSaveHistory({ from, to, dur, busDur, km: kmStr });
+    } catch (e) {
+      resultEl.innerHTML = `<span style="color:#d64545;">Hata: ${occEsc(e.message || "hesaplanamadı")}</span>`;
+    } finally {
+      calcBtn.disabled = false;
+      calcBtn.textContent = orig;
+    }
+  }
+  calcBtn.addEventListener("click", doCalc);
+  [fromEl, toEl].forEach((el) => el && el.addEventListener("keydown", (e) => { if (e.key === "Enter") doCalc(); }));
 }
 
 async function handleLogin(username, password) {

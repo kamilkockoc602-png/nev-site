@@ -675,6 +675,26 @@
           </div>
         </div>
 
+        <div id="panelSureHesap" class="panel-block hidden" data-menu="sure_hesap">
+          <p class="subtle" style="margin-bottom:1rem;">İki yer arası karayolu süresini ve mesafesini hesaplar. Yeni güzergah planlarken durak/il arası süreyi Google'a bakmadan burada bul. Otobüs için tahmini süre de gösterilir. Ücretsiz servis — API anahtarı gerekmez.</p>
+          <div style="display:flex; gap:0.9rem; flex-wrap:wrap; align-items:flex-end; margin-bottom:1.2rem;">
+            <label style="flex:1; min-width:170px; display:flex; flex-direction:column; gap:0.35rem;">
+              <span style="font-size:0.85rem; opacity:0.85;">Kalkış</span>
+              <input id="shFrom" type="text" placeholder="örn. Hatay" autocomplete="off" style="width:100%;" />
+            </label>
+            <label style="flex:1; min-width:170px; display:flex; flex-direction:column; gap:0.35rem;">
+              <span style="font-size:0.85rem; opacity:0.85;">Varış</span>
+              <input id="shTo" type="text" placeholder="örn. Kırıkhan" autocomplete="off" style="width:100%;" />
+            </label>
+            <button id="shCalc" class="btn btn-primary" type="button">Hesapla</button>
+          </div>
+          <div id="shResult"></div>
+          <div style="margin-top:1.6rem;">
+            <h4 style="margin-bottom:0.5rem;">Son Aramalar</h4>
+            <div id="shHistory" class="subtle" style="font-size:0.85rem;">Henüz arama yok.</div>
+          </div>
+        </div>
+
         <div id="panelDemand" class="panel-block hidden" data-menu="demand">
           <h4>Talep Radarı</h4>
           <p class="subtle">Sistem, hazır popüler hatları arka planda otomatik tarar; ileri tarihlerde hangi sefer/gün yoğun, hangileri boş/zayıf onu gösterir. (oBilet Takip menüsünden bağımsız çalışır.)</p>
