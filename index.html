@@ -676,21 +676,30 @@
         </div>
 
         <div id="panelSureHesap" class="panel-block hidden" data-menu="sure_hesap">
-          <div style="display:flex; gap:0.9rem; flex-wrap:wrap; align-items:flex-end; margin-bottom:1.2rem;">
-            <label style="flex:1; min-width:170px; display:flex; flex-direction:column; gap:0.35rem;">
-              <span style="font-size:0.85rem; opacity:0.85;">Kalkış</span>
-              <input id="shFrom" type="text" placeholder="örn. Hatay" autocomplete="off" style="width:100%;" />
-            </label>
-            <label style="flex:1; min-width:170px; display:flex; flex-direction:column; gap:0.35rem;">
-              <span style="font-size:0.85rem; opacity:0.85;">Varış</span>
-              <input id="shTo" type="text" placeholder="örn. Kırıkhan" autocomplete="off" style="width:100%;" />
-            </label>
-            <button id="shCalc" class="btn btn-primary" type="button">Hesapla</button>
-          </div>
-          <div id="shResult"></div>
-          <div style="margin-top:1.6rem;">
-            <h4 style="margin-bottom:0.5rem;">Son Aramalar</h4>
-            <div id="shHistory" class="subtle" style="font-size:0.85rem;">Henüz arama yok.</div>
+          <div style="display:flex; gap:1.4rem; flex-wrap:wrap; align-items:flex-start;">
+            <div style="flex:1; min-width:280px;">
+              <div style="display:flex; gap:1rem; flex-wrap:wrap; align-items:flex-end; margin-bottom:0.9rem;">
+                <label style="display:flex; flex-direction:column; gap:0.35rem;">
+                  <span style="font-size:0.85rem; opacity:0.85;">Kalkış Saati</span>
+                  <input id="shDep" type="time" value="14:00" style="width:130px;" />
+                </label>
+                <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.82rem; opacity:0.85;">
+                  Varsayılan peron: <input id="shPeronDef" type="number" value="5" min="0" style="width:58px;" /> dk
+                </label>
+              </div>
+              <label style="display:flex; flex-direction:column; gap:0.35rem;">
+                <span style="font-size:0.85rem; opacity:0.85;">Duraklar — her satıra bir yer, sırayla</span>
+                <textarea id="shStops" rows="9" placeholder="Adana&#10;Niğde&#10;Ankara&#10;Bolu&#10;Gebze&#10;İstanbul Dudullu&#10;Alibeyköy&#10;Esenler" style="width:100%; resize:vertical; font-family:inherit; line-height:1.6;"></textarea>
+              </label>
+              <div style="display:flex; gap:0.6rem; margin-top:0.9rem;">
+                <button id="shPlan" class="btn btn-primary" type="button">Hesapla</button>
+                <button id="shExcel" class="btn btn-success" type="button" style="display:none;">Excel İndir</button>
+              </div>
+              <div id="shPlanMsg" class="subtle" style="margin-top:0.7rem; font-size:0.82rem;"></div>
+            </div>
+            <div style="flex:1.4; min-width:340px; overflow-x:auto;">
+              <div id="shPlanResult"></div>
+            </div>
           </div>
         </div>
 

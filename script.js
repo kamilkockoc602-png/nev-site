@@ -2997,67 +2997,133 @@ async function shRoute(a, b) {
   if (!d.routes || !d.routes.length) throw new Error("İki nokta arası rota bulunamadı");
   return { seconds: d.routes[0].duration, meters: d.routes[0].distance };
 }
-function shGetHistory() {
-  try { return JSON.parse(localStorage.getItem("sh_history") || "[]"); } catch { return []; }
+// ---- COK-DURAKLI GUZERGAH PLANLAYICI (PKM Talep Formu otomasyonu) ----
+// Kullanici siralı duraklar + kalkis saati girer; her leg suresi (OSRM+Nominatim, otobus tahmini)
+// otomatik cekilir, peron sureleriyle kumulatif varis/kalkis saatleri hesaplanir, Excel indirilir.
+const shState = { stops: [], geo: [], legMin: [], peronMin: [], depMin: 840 };
+function shHMtoMin(hm) { const m = String(hm || "").match(/^(\d{1,2}):(\d{2})/); return m ? (+m[1]) * 60 + (+m[2]) : 0; }
+function shMinToHM(total) {
+  const day = Math.floor(total / 1440);
+  const t = ((total % 1440) + 1440) % 1440;
+  const hm = `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`;
+  return day > 0 ? `${hm} (+${day}g)` : hm;
 }
-function shRenderHistory() {
-  const el = document.getElementById("shHistory");
+function shMinToDur(min) { const h = Math.floor(min / 60), m = Math.round(min % 60); return h ? `${h} sa ${m} dk` : `${m} dk`; }
+function shComputeTimes() {
+  const n = shState.stops.length;
+  const arr = new Array(n), dep = new Array(n);
+  dep[0] = shState.depMin; arr[0] = null;
+  for (let i = 1; i < n; i++) {
+    arr[i] = dep[i - 1] + (shState.legMin[i] || 0);
+    dep[i] = arr[i] + (shState.peronMin[i] || 0);
+  }
+  return { arr, dep };
+}
+function shUpdateTimes() {
+  const { arr, dep } = shComputeTimes();
+  const n = shState.stops.length;
+  for (let i = 0; i < n; i++) {
+    const v = document.querySelector(`[data-shvaris="${i}"]`);
+    const k = document.querySelector(`[data-shkalkis="${i}"]`);
+    if (v) v.innerHTML = i === 0 ? `<span class="subtle">—</span>` : `<b>${shMinToHM(arr[i])}</b>`;
+    if (k) k.innerHTML = `<b style="color:var(--accent);">${shMinToHM(dep[i])}</b>`;
+  }
+  const tot = document.getElementById("shTotal");
+  if (tot) { const last = arr[n - 1] != null ? arr[n - 1] : dep[n - 1]; tot.innerHTML = `Toplam seyahat: <b>${shMinToDur(last - shState.depMin)}</b> · Son varış: <b>${shMinToHM(arr[n - 1])}</b>`; }
+}
+function shRenderPlan() {
+  const el = document.getElementById("shPlanResult");
   if (!el) return;
-  const arr = shGetHistory();
-  if (!arr.length) { el.innerHTML = "Henüz arama yok."; return; }
-  el.innerHTML = arr.map((h) =>
-    `<div style="padding:0.4rem 0; border-bottom:1px solid var(--stroke);"><b>${occEsc(h.from)} → ${occEsc(h.to)}</b> — yol ${occEsc(h.dur)} · otobüs ~${occEsc(h.busDur)} · ${occEsc(h.km)} km</div>`
-  ).join("");
+  const { arr, dep } = shComputeTimes();
+  const rows = shState.stops.map((s, i) => {
+    const seyahat = i === 0 ? `<span class="subtle">ana durak</span>`
+      : `<input type="number" min="0" value="${shState.legMin[i] || 0}" data-shleg="${i}" style="width:64px;" /> dk <span class="subtle" style="font-size:0.72rem;">(${shMinToDur(shState.legMin[i] || 0)})</span>`;
+    const peron = i === 0 ? `<span class="subtle">—</span>`
+      : `<input type="number" min="0" value="${shState.peronMin[i] || 0}" data-shperon="${i}" style="width:54px;" /> dk`;
+    return `<tr><td>${i + 1}</td><td><b>${occEsc(s)}</b></td><td>${seyahat}</td>` +
+      `<td data-shvaris="${i}">${i === 0 ? `<span class="subtle">—</span>` : `<b>${shMinToHM(arr[i])}</b>`}</td>` +
+      `<td>${peron}</td><td data-shkalkis="${i}"><b style="color:var(--accent);">${shMinToHM(dep[i])}</b></td></tr>`;
+  }).join("");
+  const n = shState.stops.length;
+  const last = arr[n - 1] != null ? arr[n - 1] : dep[n - 1];
+  el.innerHTML =
+    `<table class="obilet-prices-table" style="width:100%; min-width:520px; border-collapse:collapse;">` +
+    `<thead><tr><th>Sıra</th><th>Durak</th><th>Seyahat</th><th>Varış</th><th>Peron</th><th>Kalkış</th></tr></thead>` +
+    `<tbody>${rows}</tbody></table>` +
+    `<div id="shTotal" class="subtle" style="margin-top:0.7rem;">Toplam seyahat: <b>${shMinToDur(last - shState.depMin)}</b> · Son varış: <b>${shMinToHM(arr[n - 1])}</b></div>`;
+  el.querySelectorAll("input[data-shleg]").forEach((inp) => inp.addEventListener("input", () => { shState.legMin[+inp.dataset.shleg] = Math.max(0, parseInt(inp.value || "0", 10) || 0); shUpdateTimes(); }));
+  el.querySelectorAll("input[data-shperon]").forEach((inp) => inp.addEventListener("input", () => { shState.peronMin[+inp.dataset.shperon] = Math.max(0, parseInt(inp.value || "0", 10) || 0); shUpdateTimes(); }));
 }
-function shSaveHistory(rec) {
+async function shPlan() {
+  const stops = (document.getElementById("shStops").value || "").split("\n").map((s) => s.trim()).filter(Boolean);
+  const msg = document.getElementById("shPlanMsg");
+  const resEl = document.getElementById("shPlanResult");
+  const excelBtn = document.getElementById("shExcel");
+  const planBtn = document.getElementById("shPlan");
+  if (stops.length < 2) { msg.innerHTML = `<span style="color:#d64545;">En az 2 durak yazın (her satıra bir yer).</span>`; return; }
+  shState.depMin = shHMtoMin(document.getElementById("shDep").value);
+  const peronDef = Math.max(0, parseInt(document.getElementById("shPeronDef").value || "5", 10) || 0);
+  planBtn.disabled = true;
+  if (excelBtn) excelBtn.style.display = "none";
+  resEl.innerHTML = `<div class="loader-ring" style="margin:1rem 0;"></div>`;
   try {
-    let arr = shGetHistory();
-    arr.unshift(rec);
-    localStorage.setItem("sh_history", JSON.stringify(arr.slice(0, 30)));
-  } catch {}
-  shRenderHistory();
+    const geo = [];
+    for (let i = 0; i < stops.length; i++) {
+      msg.innerHTML = `<span class="subtle">Konumlar bulunuyor... ${i + 1}/${stops.length} (${occEsc(stops[i])})</span>`;
+      geo.push(await shGeocode(stops[i]));
+      if (i < stops.length - 1) await pause(1100); // Nominatim 1 istek/sn
+    }
+    const legMin = [0];
+    for (let i = 1; i < stops.length; i++) {
+      msg.innerHTML = `<span class="subtle">Süreler hesaplanıyor... ${i}/${stops.length - 1}</span>`;
+      const rt = await shRoute(geo[i - 1], geo[i]);
+      legMin.push(Math.round((rt.seconds * 1.15) / 60)); // otobus tahmini (~%15), dakika
+      await pause(150);
+    }
+    shState.stops = stops; shState.geo = geo; shState.legMin = legMin;
+    shState.peronMin = stops.map((_, i) => (i === 0 ? 0 : peronDef));
+    msg.innerHTML = `<span class="subtle">Hesaplandı. Seyahat/peron sürelerini tabloda düzenleyebilirsin — saatler anında güncellenir.</span>`;
+    shRenderPlan();
+    if (excelBtn) excelBtn.style.display = "";
+  } catch (e) {
+    resEl.innerHTML = "";
+    msg.innerHTML = `<span style="color:#d64545;">Hata: ${occEsc(e.message || "hesaplanamadı")}</span>`;
+  } finally {
+    planBtn.disabled = false;
+  }
+}
+function shExportExcel() {
+  const XLSX = window.XLSX;
+  if (!XLSX) { alert("Excel kütüphanesi yüklenemedi."); return; }
+  if (!shState.stops.length) { alert("Önce Hesapla'ya basın."); return; }
+  const { arr, dep } = shComputeTimes();
+  const n = shState.stops.length;
+  const aoa = [
+    ["PKM GÜZERGAH SÜRE PLANI"],
+    ["Kalkış Saati", shMinToHM(shState.depMin)],
+    [],
+    ["Sıra", "Durak", "Seyahat Süresi", "Varış Saati", "Peron (dk)", "Kalkış Saati"],
+  ];
+  shState.stops.forEach((s, i) => {
+    aoa.push([i + 1, s, i === 0 ? "ANA DURAK" : shMinToDur(shState.legMin[i] || 0), i === 0 ? "" : shMinToHM(arr[i]), i === 0 ? "" : (shState.peronMin[i] || 0), shMinToHM(dep[i])]);
+  });
+  aoa.push([]);
+  aoa.push(["Toplam Seyahat", shMinToDur((arr[n - 1] != null ? arr[n - 1] : dep[n - 1]) - shState.depMin)]);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!cols"] = [{ wch: 6 }, { wch: 24 }, { wch: 14 }, { wch: 12 }, { wch: 11 }, { wch: 12 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Güzergah Planı");
+  XLSX.writeFile(wb, `pkm-guzergah-plani-${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 function setupSureHesap() {
-  const fromEl = document.getElementById("shFrom");
-  const toEl = document.getElementById("shTo");
-  const calcBtn = document.getElementById("shCalc");
-  const resultEl = document.getElementById("shResult");
-  shRenderHistory();
-  if (!calcBtn || calcBtn.dataset.wired) return;
-  calcBtn.dataset.wired = "1";
-
-  async function doCalc() {
-    const from = (fromEl.value || "").trim();
-    const to = (toEl.value || "").trim();
-    if (!from || !to) { resultEl.innerHTML = `<span style="color:#d64545;">Kalkış ve varış yazın.</span>`; return; }
-    calcBtn.disabled = true;
-    const orig = calcBtn.textContent;
-    calcBtn.textContent = "...";
-    resultEl.innerHTML = `<div class="loader-ring" style="margin:1.2rem 0;"></div>`;
-    try {
-      const a = await shGeocode(from);
-      await pause(1100); // Nominatim 1 istek/sn politikasina saygi
-      const b = await shGeocode(to);
-      const rt = await shRoute(a, b);
-      const dur = shFmtDur(rt.seconds);
-      const busDur = shFmtDur(rt.seconds * 1.15);
-      const kmStr = (rt.meters / 1000).toFixed(0);
-      resultEl.innerHTML =
-        `<div style="display:flex; gap:2.4rem; flex-wrap:wrap; padding:0.4rem 0;">` +
-        `<div><div class="subtle" style="font-size:0.8rem;">Karayolu süresi</div><div style="font-size:1.6rem; font-weight:700;">${occEsc(dur)}</div></div>` +
-        `<div><div class="subtle" style="font-size:0.8rem;">Otobüs tahmini (~%15)</div><div style="font-size:1.6rem; font-weight:700; color:var(--accent);">${occEsc(busDur)}</div></div>` +
-        `<div><div class="subtle" style="font-size:0.8rem;">Mesafe</div><div style="font-size:1.6rem; font-weight:700;">${occEsc(kmStr)} km</div></div>` +
-        `</div><div class="subtle" style="font-size:0.78rem; margin-top:0.3rem;">${occEsc(a.name)} → ${occEsc(b.name)}</div>`;
-      shSaveHistory({ from, to, dur, busDur, km: kmStr });
-    } catch (e) {
-      resultEl.innerHTML = `<span style="color:#d64545;">Hata: ${occEsc(e.message || "hesaplanamadı")}</span>`;
-    } finally {
-      calcBtn.disabled = false;
-      calcBtn.textContent = orig;
-    }
-  }
-  calcBtn.addEventListener("click", doCalc);
-  [fromEl, toEl].forEach((el) => el && el.addEventListener("keydown", (e) => { if (e.key === "Enter") doCalc(); }));
+  const planBtn = document.getElementById("shPlan");
+  if (!planBtn || planBtn.dataset.wired) return;
+  planBtn.dataset.wired = "1";
+  planBtn.addEventListener("click", shPlan);
+  const excelBtn = document.getElementById("shExcel");
+  if (excelBtn) excelBtn.addEventListener("click", shExportExcel);
+  const depEl = document.getElementById("shDep");
+  if (depEl) depEl.addEventListener("change", () => { shState.depMin = shHMtoMin(depEl.value); if (shState.stops.length) shUpdateTimes(); });
 }
 
 async function handleLogin(username, password) {
