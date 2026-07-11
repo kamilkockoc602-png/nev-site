@@ -3085,6 +3085,7 @@ async function shPlan() {
     msg.innerHTML = `<span class="subtle">Hesaplandı. Seyahat/peron sürelerini tabloda düzenleyebilirsin — saatler anında güncellenir.</span>`;
     shRenderPlan();
     if (excelBtn) excelBtn.style.display = "";
+    const saveBtn = document.getElementById("shSave"); if (saveBtn) saveBtn.style.display = "";
   } catch (e) {
     resEl.innerHTML = "";
     msg.innerHTML = `<span style="color:#d64545;">Hata: ${occEsc(e.message || "hesaplanamadı")}</span>`;
@@ -3120,14 +3121,68 @@ async function shExportExcel() {
   }
 }
 function setupSureHesap() {
+  shLoadRoutesList(); // her acilista tazele (baskalari yeni guzergah eklemis olabilir)
   const planBtn = document.getElementById("shPlan");
   if (!planBtn || planBtn.dataset.wired) return;
   planBtn.dataset.wired = "1";
   planBtn.addEventListener("click", shPlan);
   const excelBtn = document.getElementById("shExcel");
   if (excelBtn) excelBtn.addEventListener("click", shExportExcel);
+  const saveBtn = document.getElementById("shSave");
+  if (saveBtn) saveBtn.addEventListener("click", shSaveRoute);
   const depEl = document.getElementById("shDep");
   if (depEl) depEl.addEventListener("change", () => { shState.depMin = shHMtoMin(depEl.value); if (shState.stops.length) shUpdateTimes(); });
+}
+// ---- Kayitli guzergahlar (paylasimli) ----
+async function shLoadRoutesList() {
+  const el = document.getElementById("shSavedList");
+  if (!el) return;
+  try { const d = await apiFetch("/api/pkm-routes"); shRenderSavedList(d.routes || []); }
+  catch (e) { el.innerHTML = `<span style="color:#d64545;">${occEsc(e.message || "yüklenemedi")}</span>`; }
+}
+function shRenderSavedList(routes) {
+  const el = document.getElementById("shSavedList");
+  if (!el) return;
+  if (!routes.length) { el.innerHTML = `Henüz kayıtlı güzergah yok. Bir plan hesaplayıp <b>Güzergahı Kaydet</b> ile ekleyebilirsin.`; return; }
+  el.innerHTML = routes.map((r) =>
+    `<div class="sh-saved-row" data-id="${r.id}" style="display:flex; justify-content:space-between; align-items:center; gap:0.8rem; padding:0.55rem 0.7rem; border:1px solid var(--stroke); border-radius:8px; margin-bottom:0.5rem; cursor:pointer;">` +
+    `<div><b>${occEsc(r.name)}</b> <span class="subtle" style="font-size:0.78rem;">· ${occEsc(r.first)} → ${occEsc(r.last)} · ${r.stopCount} durak</span>` +
+    `<div class="subtle" style="font-size:0.72rem;">${occEsc(r.created_by || "")}${r.created_at ? " · " + occEsc(r.created_at) : ""}</div></div>` +
+    `<button class="sh-del btn btn-sm btn-danger" data-id="${r.id}" type="button" title="Sil">Sil</button></div>`
+  ).join("");
+  el.querySelectorAll(".sh-saved-row").forEach((row) => row.addEventListener("click", (e) => { if (e.target.closest(".sh-del")) return; shLoadRoute(row.dataset.id); }));
+  el.querySelectorAll(".sh-del").forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); shDeleteRoute(b.dataset.id); }));
+}
+async function shSaveRoute() {
+  if (!shState.stops.length) { alert("Önce Hesapla'ya basın."); return; }
+  const def = `${shState.stops[0]} → ${shState.stops[shState.stops.length - 1]}`;
+  const name = prompt("Güzergah adı:", def);
+  if (name == null) return;
+  const nm = String(name).trim(); if (!nm) return;
+  try {
+    await apiFetch("/api/pkm-routes", { method: "POST", body: JSON.stringify({ name: nm, plan: { stops: shState.stops, legMin: shState.legMin, peronMin: shState.peronMin, depMin: shState.depMin } }) });
+    const msg = document.getElementById("shPlanMsg"); if (msg) msg.innerHTML = `<span style="color:#1f7a1f;">Kaydedildi: ${occEsc(nm)}</span>`;
+    shLoadRoutesList();
+  } catch (e) { alert("Kaydedilemedi: " + (e.message || e)); }
+}
+async function shLoadRoute(id) {
+  try {
+    const d = await apiFetch(`/api/pkm-routes/${id}`);
+    const p = d.plan || {};
+    if (!Array.isArray(p.stops) || p.stops.length < 2) throw new Error("Geçersiz plan");
+    shState.stops = p.stops; shState.legMin = Array.isArray(p.legMin) ? p.legMin : []; shState.peronMin = Array.isArray(p.peronMin) ? p.peronMin : []; shState.depMin = Number(p.depMin) || 840;
+    const st = document.getElementById("shStops"); if (st) st.value = p.stops.join("\n");
+    const dep = document.getElementById("shDep"); if (dep) dep.value = shMinToHM(shState.depMin);
+    const ex = document.getElementById("shExcel"); if (ex) ex.style.display = "";
+    const sv = document.getElementById("shSave"); if (sv) sv.style.display = "";
+    shRenderPlan();
+    const msg = document.getElementById("shPlanMsg"); if (msg) msg.innerHTML = `<span class="subtle">Açıldı: <b>${occEsc(d.name || "")}</b> — düzenleyip yeniden kaydedebilir ya da Excel indirebilirsin.</span>`;
+  } catch (e) { alert("Açılamadı: " + (e.message || e)); }
+}
+async function shDeleteRoute(id) {
+  if (!confirm("Bu güzergah silinsin mi?")) return;
+  try { await apiFetch(`/api/pkm-routes/${id}`, { method: "DELETE" }); shLoadRoutesList(); }
+  catch (e) { alert("Silinemedi: " + (e.message || e)); }
 }
 
 async function handleLogin(username, password) {

@@ -669,6 +669,15 @@ try { db.exec("ALTER TABLE obilet_occupancy ADD COLUMN source TEXT NOT NULL DEFA
 // Yalnizca GERCEK koltuk haritasi cekildiginde (source='gercek') dolar; liste yedeginde bos kalir.
 try { db.exec("ALTER TABLE obilet_occupancy ADD COLUMN plate TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 
+// Kayitli PKM guzergahlari (Pkm Form menusu) — PAYLASIMLI: herkes gorur/acar. plan_json = {stops,legMin,peronMin,depMin}.
+try { db.exec(`CREATE TABLE IF NOT EXISTS pkm_routes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  plan_json TEXT NOT NULL,
+  created_by TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+)`); } catch(e) {}
+
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN journey_date TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN departure_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_prices ADD COLUMN arrival_stop TEXT NOT NULL DEFAULT ''"); } catch(e) {}
@@ -7729,6 +7738,54 @@ app.post("/api/pkm-export", requireAuth, async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: error.message || "Excel oluşturulamadı." });
   }
+});
+
+// ---- PKM kayitli guzergahlar (PAYLASIMLI: herkes gorur/acar) ----
+app.get("/api/pkm-routes", requireAuth, (req, res) => {
+  try {
+    const rows = db.prepare("SELECT id, name, plan_json, created_by, created_at FROM pkm_routes ORDER BY id DESC").all();
+    const routes = rows.map((r) => {
+      let plan = {}; try { plan = JSON.parse(r.plan_json || "{}"); } catch (e) {}
+      const stops = Array.isArray(plan.stops) ? plan.stops : [];
+      return { id: r.id, name: r.name, created_by: r.created_by, created_at: r.created_at, stopCount: stops.length, first: stops[0] || "", last: stops[stops.length - 1] || "" };
+    });
+    res.json({ routes });
+  } catch (error) { res.status(500).json({ message: error.message }); }
+});
+app.get("/api/pkm-routes/:id", requireAuth, (req, res) => {
+  try {
+    const row = db.prepare("SELECT id, name, plan_json, created_by, created_at FROM pkm_routes WHERE id = ?").get(req.params.id);
+    if (!row) { res.status(404).json({ message: "Güzergah bulunamadı." }); return; }
+    let plan = {}; try { plan = JSON.parse(row.plan_json || "{}"); } catch (e) {}
+    res.json({ id: row.id, name: row.name, created_by: row.created_by, created_at: row.created_at, plan });
+  } catch (error) { res.status(500).json({ message: error.message }); }
+});
+app.post("/api/pkm-routes", requireAuth, (req, res) => {
+  try {
+    const name = String((req.body && req.body.name) || "").trim().slice(0, 120);
+    const plan = req.body && req.body.plan;
+    if (!name) { res.status(400).json({ message: "Güzergah adı gerekli." }); return; }
+    if (!plan || !Array.isArray(plan.stops) || plan.stops.length < 2) { res.status(400).json({ message: "Geçerli bir plan gerekli (en az 2 durak)." }); return; }
+    const clean = {
+      stops: plan.stops.map((s) => String(s).slice(0, 80)),
+      legMin: (Array.isArray(plan.legMin) ? plan.legMin : []).map((n) => Math.max(0, Number(n) || 0)),
+      peronMin: (Array.isArray(plan.peronMin) ? plan.peronMin : []).map((n) => Math.max(0, Number(n) || 0)),
+      depMin: Math.max(0, Math.min(1439, Number(plan.depMin) || 0)),
+    };
+    const info = db.prepare("INSERT INTO pkm_routes (name, plan_json, created_by, created_at) VALUES (?, ?, ?, ?)")
+      .run(name, JSON.stringify(clean), (req.auth.user && req.auth.user.username) || "", nowStamp());
+    res.json({ ok: true, id: info.lastInsertRowid });
+  } catch (error) { res.status(500).json({ message: error.message }); }
+});
+app.delete("/api/pkm-routes/:id", requireAuth, (req, res) => {
+  try {
+    const row = db.prepare("SELECT created_by FROM pkm_routes WHERE id = ?").get(req.params.id);
+    if (!row) { res.status(404).json({ message: "Bulunamadı." }); return; }
+    const isOwner = req.auth.user && req.auth.user.username === row.created_by;
+    if (!isOwner && !(req.auth.user && req.auth.user.isAdmin)) { res.status(403).json({ message: "Sadece oluşturan veya admin silebilir." }); return; }
+    db.prepare("DELETE FROM pkm_routes WHERE id = ?").run(req.params.id);
+    res.json({ ok: true });
+  } catch (error) { res.status(500).json({ message: error.message }); }
 });
 
 // ===================== TALEP RADARI API'LERI (otonom yogunluk analizi) =====================

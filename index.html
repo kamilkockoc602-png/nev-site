@@ -691,15 +691,20 @@
                 <span style="font-size:0.85rem; opacity:0.85;">Duraklar — her satıra bir yer, sırayla</span>
                 <textarea id="shStops" rows="9" placeholder="Adana&#10;Niğde&#10;Ankara&#10;Bolu&#10;Gebze&#10;İstanbul Dudullu&#10;Alibeyköy&#10;Esenler" style="width:100%; resize:vertical; font-family:inherit; line-height:1.6;"></textarea>
               </label>
-              <div style="display:flex; gap:0.6rem; margin-top:0.9rem;">
+              <div style="display:flex; gap:0.6rem; margin-top:0.9rem; flex-wrap:wrap;">
                 <button id="shPlan" class="btn btn-primary" type="button">Hesapla</button>
                 <button id="shExcel" class="btn btn-success" type="button" style="display:none;">Excel İndir</button>
+                <button id="shSave" class="btn btn-ghost" type="button" style="display:none;">Güzergahı Kaydet</button>
               </div>
               <div id="shPlanMsg" class="subtle" style="margin-top:0.7rem; font-size:0.82rem;"></div>
             </div>
             <div style="flex:1.4; min-width:340px; overflow-x:auto;">
               <div id="shPlanResult"></div>
             </div>
+          </div>
+          <div style="margin-top:1.6rem;">
+            <h4 style="margin-bottom:0.6rem;">Kayıtlı Güzergahlar <span class="subtle" style="font-size:0.78rem; font-weight:normal;">(herkes görür — tıklayınca açılır)</span></h4>
+            <div id="shSavedList" class="subtle" style="font-size:0.85rem;">Yükleniyor...</div>
           </div>
         </div>
 
