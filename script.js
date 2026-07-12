@@ -5464,6 +5464,29 @@ function renderOccupancy(data) {
 }
 
 // Tek bir doluluk satirinin HTML'i.
+// "DD.MM.YYYY HH:mm:ss" (bazen "...,..." virgullu) -> dakika cinsinden ne kadar eski (Istanbul saatiyle
+// karsilastirma icin basit bir yaklasik hesap; sunucudaki isOccStale ile ayni mantik, client tarafi).
+function occMinutesAgo(ts) {
+  const m = String(ts || "").match(/(\d{2})\.(\d{2})\.(\d{4})[\s,]+(\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return null;
+  const then = new Date(Date.UTC(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]));
+  const now = new Date(new Date().toLocaleString("en-US", { timeZone: "Europe/Istanbul" }));
+  return Math.round((now - then) / 60000);
+}
+// Doluluk kaynagi rozeti: source==='liste' ise "~ tahmini" (koltuk haritasindan degil, bos-koltuk
+// listesinden tahmin edilmis); "gercek" ama last_updated 90 dk'dan eskiyse "bayat olabilir" uyarisi;
+// aksi halde rozet yok (taze + dogrulanmis).
+function occSourceBadge(source, lastUpdated) {
+  if (source === "liste") {
+    return ` <span title="Koltuk haritasi cekilemedi, doluluk bos-koltuk listesinden tahmin edildi" style="opacity:.55;font-size:.82em;cursor:help;">~tahmini</span>`;
+  }
+  const mins = occMinutesAgo(lastUpdated);
+  if (source === "gercek" && mins != null && mins > 90) {
+    return ` <span title="Bu deger yaklaşık ${mins} dk önce güncellendi, bayat olabilir" style="opacity:.55;font-size:.82em;cursor:help;">🕓</span>`;
+  }
+  return "";
+}
+
 function occRowHtml(r) {
   const sold = (r.total_seats || 0) - (r.available_seats || 0);
   const p = r.occupancy_percent || 0;
@@ -5472,7 +5495,7 @@ function occRowHtml(r) {
     <td>${occToDot(r.journey_date)}</td>
     <td>${occEsc(r.departure_time || "")}</td>
     <td>${occEsc(r.operator || "")}${r.plate ? `<div style="font-size:0.72rem;opacity:0.65;">Plaka: ${occEsc(r.plate)}</div>` : ""}</td>
-    <td><b style="color:${occColor(p)}">%${p}</b></td>
+    <td><b style="color:${occColor(p)}">%${p}</b>${occSourceBadge(r.source, r.last_updated)}</td>
     <td>${sold} / ${r.total_seats || 0}</td>
     <td>${r.available_seats || 0}</td>
   </tr>`;
@@ -5974,7 +5997,7 @@ function stRowHtml(j) {
   let dolCell = "<span style='opacity:.5'>-</span>";
   if (j.totalSeats != null && j.yolcu != null) {
     const pct = j.totalSeats ? Math.round((j.yolcu / j.totalSeats) * 100) : 0;
-    dolCell = `<b style="color:${occColor(pct)}">${j.yolcu}/${j.totalSeats}</b> <span style="opacity:.7">(%${pct})</span>`;
+    dolCell = `<b style="color:${occColor(pct)}">${j.yolcu}/${j.totalSeats}</b> <span style="opacity:.7">(%${pct})</span>${occSourceBadge(j.occSource, j.occLastUpdated)}`;
   }
   // Güzergah: ANA SEFER (feeder keşfiyle bulunan gerçek kalkış) öncelikli — örn. "Şanlıurfa 18:30 → Ankara".
   // Yoksa oBilet'in kendi verdiği güzergaha (stops[0]→son) düş. İkisi de yoksa "-".

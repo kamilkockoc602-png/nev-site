@@ -639,6 +639,10 @@ CREATE INDEX IF NOT EXISTS idx_obilet_occupancy_target ON obilet_occupancy(targe
 // 1) Once mevcut mukerrerleri temizle (her sefer icin EN GUNCEL, esitlikte en buyuk id kalsin),
 // 2) sonra 4-kolonlu UNIQUE index olustur (upsert artik hep tek satiri gunceller).
 try {
+  // NOT: last_updated bazen "DD.MM.YYYY, HH:mm:ss" (virgullu, bazi Node/ICU surumleri) bazen
+  // "DD.MM.YYYY HH:mm:ss" (virgulsuz) gelebilir. REPLACE(...,',','') ile normalize edip substr
+  // pozisyonlarinin her iki formatta da dogru hizalanmasini sagliyoruz (bagimsiz ajanla dogrulanmis
+  // bulgu — duzeltilmeden virgullu formatta substr kayar, yanlis satir "daha guncel" sayilabilirdi).
   db.exec(`
     DELETE FROM obilet_occupancy WHERE id IN (
       SELECT o1.id FROM obilet_occupancy o1 WHERE EXISTS (
@@ -647,11 +651,11 @@ try {
            AND o2.operator = o1.operator AND o2.departure_time = o1.departure_time
            AND o2.id <> o1.id
            AND (
-             (substr(o2.last_updated,7,4)||substr(o2.last_updated,4,2)||substr(o2.last_updated,1,2)||substr(o2.last_updated,12,8))
-               > (substr(o1.last_updated,7,4)||substr(o1.last_updated,4,2)||substr(o1.last_updated,1,2)||substr(o1.last_updated,12,8))
+             (substr(REPLACE(o2.last_updated,',',''),7,4)||substr(REPLACE(o2.last_updated,',',''),4,2)||substr(REPLACE(o2.last_updated,',',''),1,2)||substr(REPLACE(o2.last_updated,',',''),12,8))
+               > (substr(REPLACE(o1.last_updated,',',''),7,4)||substr(REPLACE(o1.last_updated,',',''),4,2)||substr(REPLACE(o1.last_updated,',',''),1,2)||substr(REPLACE(o1.last_updated,',',''),12,8))
              OR (
-               (substr(o2.last_updated,7,4)||substr(o2.last_updated,4,2)||substr(o2.last_updated,1,2)||substr(o2.last_updated,12,8))
-                 = (substr(o1.last_updated,7,4)||substr(o1.last_updated,4,2)||substr(o1.last_updated,1,2)||substr(o1.last_updated,12,8))
+               (substr(REPLACE(o2.last_updated,',',''),7,4)||substr(REPLACE(o2.last_updated,',',''),4,2)||substr(REPLACE(o2.last_updated,',',''),1,2)||substr(REPLACE(o2.last_updated,',',''),12,8))
+                 = (substr(REPLACE(o1.last_updated,',',''),7,4)||substr(REPLACE(o1.last_updated,',',''),4,2)||substr(REPLACE(o1.last_updated,',',''),1,2)||substr(REPLACE(o1.last_updated,',',''),12,8))
                AND o2.id > o1.id
              )
            )
@@ -676,6 +680,13 @@ try { db.exec("ALTER TABLE obilet_occupancy ADD COLUMN route_to TEXT NOT NULL DE
 // aracin farkli segmentleri (Adana->Ankara, Sanliurfa->Ankara) bu id'yi PAYLASIR. Ana sefer (gercek kalkis)
 // bununla eslestirilir. Sadece okuma/eslestirme icin; fiyat mantigini etkilemez.
 try { db.exec("ALTER TABLE obilet_occupancy ADD COLUMN service_id TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+// Kac tur UST USTE listede gorulmedi (obilet_prices'daki ayni mekanizmanin es degeri). Tek turluk kismi/
+// eksik tarama (Cloudflare/timeout) taze bir 'gercek' satiri "iptal oldu" sanip YANLISLIKLA silmesin diye.
+try { db.exec("ALTER TABLE obilet_occupancy ADD COLUMN absent_count INTEGER NOT NULL DEFAULT 0"); } catch(e) {}
+// Doluluk İşçisi'nin hat sirasi icin: fiyat taramasindaki last_sync_at ile CAKISMAYAN ayri sutun. Round-robin
+// (en uzun suredir islenmemis once) — cok hatli kurulumda bazi hatlarin surekli en sonda kalip isOccStale
+// esigini (60dk) asmasini onler.
+try { db.exec("ALTER TABLE obilet_targets ADD COLUMN last_occ_sync_at TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 
 // ANA SEFER KESIF tablosu: feeder sehirlerden (Sanliurfa, Gaziantep...) yapilan taramada bulunan her servisin
 // GERCEK kalkis sehri/saati ve bitisini serviceId ile saklar. Sefer Takip, segmentin serviceId'siyle buraya
@@ -6543,10 +6554,11 @@ async function processObiletTarget(target) {
               avail = rT - sold; occ = Math.round((sold / rT) * 100); source = "gercek";
             } else if (j.seatInfoReliable === true && Number.isFinite(Number(j.totalSeats)) && Number(j.totalSeats) > 0 && Number.isFinite(Number(j.availableSeats))) {
               // 2) ANA KAYNAK (koltuk cekimi fiyat taramasinda kapaliyken): oBilet liste available-seats.
-              //    KORUMA: inline koltuk cekimi ACIK veya DOLULUK ISCISI ACIK ise -> isçinin/gercegin TAZE degerini
-              //    liste ile EZME (cakisma onleme). Ama gercek BAYAT ise (isci geri kaldi/oldu) liste DEVRALIR ki
-              //    doluluk eski degerde takili kalmasin (self-heal).
-              if (REAL_SEATMAP_ENABLED || OCCUPANCY_WORKER_ENABLED) {
+              //    KORUMA HER ZAMAN AKTIF (bayrak kosuluna BAGLI DEGIL — REAL_SEATMAP_ENABLED/
+              //    OCCUPANCY_WORKER_ENABLED ileride kapatilirsa bile taze 'gercek' korunmaya devam etsin).
+              //    Sorgu zaten UNIQUE index (idx_obilet_occupancy_identity) uzerinden, ucuz. Ama gercek
+              //    BAYAT ise (isci geri kaldi/oldu) liste DEVRALIR ki doluluk eski degerde takili kalmasin.
+              {
                 const ex = db.prepare("SELECT source, last_updated FROM obilet_occupancy WHERE target_id=? AND journey_date=? AND operator=? AND departure_time=?")
                   .get(target.id, j.journey_date, occOp, j.time);
                 if (ex && ex.source === "gercek" && !isOccStale(ex.last_updated, 60)) { continue; } // taze gercegi liste ile bozma
@@ -6593,16 +6605,28 @@ async function processObiletTarget(target) {
               dayTracked.map((j) => `${normalizeObiletOperatorName(j.operator) || j.operator}|${j.time}`)
             );
             const occRowsForDate = db.prepare(
-              "SELECT id, operator, departure_time FROM obilet_occupancy WHERE target_id = ? AND journey_date = ?"
+              "SELECT id, operator, departure_time, source, last_updated, absent_count FROM obilet_occupancy WHERE target_id = ? AND journey_date = ?"
             ).all(target.id, journeyDate);
             for (const o of occRowsForDate) {
               // KALKAN (gecmis) sefer: kalkmadan onceki SON doluluk degeri DONSUN, SILME.
               // Boylece kullanici "bu arac 30/41 ile cikmis" diye kalkis dolulugunu gorebilir.
               if (!isJourneyInFuture(journeyDate, o.departure_time)) continue;
-              // GELECEK sefer bu turda listede yok (iptal/tasinmis) -> sil. Listede olan ama bu tur
-              // degeri tazelenemeyen (gecici hata) satir KORUNUR — onceki deger gosterilmeye devam eder.
-              if (!currentOccKeys.has(`${o.operator}|${o.departure_time}`)) {
+              if (currentOccKeys.has(`${o.operator}|${o.departure_time}`)) {
+                if ((o.absent_count || 0) !== 0) {
+                  db.prepare("UPDATE obilet_occupancy SET absent_count = 0 WHERE id = ?").run(o.id);
+                }
+                continue;
+              }
+              // GELECEK sefer bu turda listede yok. TEK turluk kismi/eksik tarama (Cloudflare/timeout),
+              // Doluluk İşçisi'nin az once yazdigi TAZE 'gercek' satiri "iptal oldu" saniip silmesin diye:
+              // (a) taze 'gercek' ise (60 dk icinde) DOKUNMA, (b) degilse obilet_prices'daki AYNI
+              // ust-uste-N-tur toleransini (OBILET_ABSENT_DELETE_RUNS) uygula.
+              if (o.source === "gercek" && !isOccStale(o.last_updated, 60)) continue;
+              const nextAbsent = (o.absent_count || 0) + 1;
+              if (nextAbsent >= OBILET_ABSENT_DELETE_RUNS) {
                 db.prepare("DELETE FROM obilet_occupancy WHERE id = ?").run(o.id);
+              } else {
+                db.prepare("UPDATE obilet_occupancy SET absent_count = ? WHERE id = ?").run(nextAbsent, o.id);
               }
             }
           } catch (occCleanErr) {
@@ -7290,7 +7314,17 @@ app.post("/api/obilet/refresh", requireAuth, async (req, res) => {
           for (let i = 0; i < targets.length; i++) {
             await processObiletTarget(targets[i]);
             if (i < targets.length - 1) {
-              await new Promise(r => setTimeout(r, 20000)); // Cloudflare cooldown
+              // Cloudflare cooldown. KILIDI GECICI BIRAK (refreshObiletPricesTask'taki ayni desen,
+              // satir ~6997-7018) — bu pencerede Doluluk İşçisi/Ana Sefer Kesfi kilidi alabilsin.
+              // Aksi halde bu manuel "Tum hatlari yenile" de fiyat taramasi gibi TUM hatlar
+              // taranana kadar kilidi tek seferde tutup digerlerini ac birakirdi (429 riski).
+              releaseObiletLock();
+              await new Promise(r => setTimeout(r, 20000));
+              let reacquired = await acquireObiletLock(300000);
+              while (!reacquired) {
+                console.warn("[Manuel Yenileme] UYARI: kilit 5 dk'da alinamadi, beklemeye devam ediliyor.");
+                reacquired = await acquireObiletLock(60000);
+              }
             }
           }
         } finally {
@@ -7482,6 +7516,7 @@ let __seatDiagCount = 0; // TANI: /json/sefer neden bos donuyor — ilk birkac h
 // yapma), bu zaman damgasina kadar YENI istek ATMA (soguma). occupancyForHatDate bu sureyi kontrol edip
 // kalan seferleri atlar -> Cloudflare'i daha da kizdirmayiz, bir sonraki turda sakin sakin devam ederiz.
 let __obiletSeatRateLimitedUntil = 0;
+let __obiletSeatBlockStreak = 0; // ardisik engelleme sayaci (429/403/503) — escalasyonlu soguma icin
 async function fetchSeferRealSeats(page, seferId) {
   if (Date.now() < __obiletSeatRateLimitedUntil) return null; // soguma bitmedi -> hic deneme
   const doFetch = () => page.evaluate(async (sid) => {
@@ -7502,18 +7537,22 @@ async function fetchSeferRealSeats(page, seferId) {
   for (let attempt = 1; attempt <= 2; attempt++) {
     const json = await doFetch();
     if (json && !json.__error && !json.__html && !json.__parsefail) {
+      __obiletSeatBlockStreak = 0; // basarili yanit -> escalasyonu sifirla
       const c = countSeatsFromSeferJson(json);
       if (c) return c;
       if (__seatDiagCount < 8) { __seatDiagCount++;
         const busStr = typeof (json?.bus) === "string" ? json.bus : (typeof json?.data?.bus === "string" ? json.data.bus : null);
         console.log(`[Doluluk TANI] sefer/${seferId}: JSON geldi ama koltuk YOK (partial=${json?.["is-partial-layout"] ?? json?.data?.["is-partial-layout"]}, busLen=${busStr ? busStr.length : "yok"}, keys=${Object.keys(json || {}).slice(0, 8).join(",")})`);
       }
-    } else if (json && json.__html && json.__status === 429) {
-      // CLOUDFLARE RATE-LIMIT: ISRAR ETME. 2. denemeyi de yapma, 30sn soguma baslat, bu tarihin kalan
-      // seferlerini de atlat (occupancyForHatDate kontrol eder). Boylece daha da kizdirmayiz.
-      __obiletSeatRateLimitedUntil = Date.now() + 30000;
+    } else if (json && json.__html && [403, 429, 503].includes(json.__status)) {
+      // CLOUDFLARE ENGELI (429 rate-limit, 403/503 de ayni sinifta): ISRAR ETME. 2. denemeyi de yapma,
+      // ESCALASYONLU soguma baslat (30sn, 60sn, 120sn... tavan 5dk) — ardisik engellemede giderek daha
+      // uzun bekleriz (Cloudflare'i daha da kizdirmamak icin); basarili yanitta sayac sifirlanir (yukarida).
+      __obiletSeatBlockStreak++;
+      const cooldownMs = Math.min(30000 * (2 ** (__obiletSeatBlockStreak - 1)), 5 * 60 * 1000);
+      __obiletSeatRateLimitedUntil = Date.now() + cooldownMs;
       if (__seatDiagCount < 8) { __seatDiagCount++;
-        console.log(`[Doluluk TANI] sefer/${seferId}: 429 RATE LIMIT -> 30sn soguma, kalan seferler bu turda atlanacak.`);
+        console.log(`[Doluluk TANI] sefer/${seferId}: ${json.__status} ENGEL -> ${Math.round(cooldownMs / 1000)}sn soguma (ardisik #${__obiletSeatBlockStreak}), kalan seferler bu turda atlanacak.`);
       }
       return null;
     } else if (json && __seatDiagCount < 8) { __seatDiagCount++;
@@ -7530,6 +7569,9 @@ async function fetchSeferRealSeats(page, seferId) {
 // Yakalanan GOVDE ile /json/sefer POST (tiklamasiz). Govde ilk seferin id'sini iceriyorsa
 // hedef id ile degistirilir. Basarisizsa null.
 async function fetchSeferSeatsWithBody(page, seferId, bodyTemplate, templateId) {
+  // fetchSeferRealSeats ile AYNI breaker'i paylas — bir kaynak 429/403/503 yiyip sogumaya girdiyse bu
+  // fonksiyon da Cloudflare'i tekrar kizdirmasin (bagimsiz ajanla dogrulanmis bulgu).
+  if (Date.now() < __obiletSeatRateLimitedUntil) return null;
   const body = (templateId && bodyTemplate && String(bodyTemplate).includes(String(templateId)))
     ? String(bodyTemplate).split(String(templateId)).join(String(seferId))
     : (bodyTemplate || "{}");
@@ -7542,7 +7584,7 @@ async function fetchSeferSeatsWithBody(page, seferId, bodyTemplate, templateId) 
         body: b,
       });
       const ct = r.headers.get("content-type") || "";
-      if (!ct.toLowerCase().includes("json")) return { __html: true };
+      if (!ct.toLowerCase().includes("json")) return { __html: true, __status: r.status };
       return await r.json();
     } catch (e) { return { __error: String(e && e.message || e) }; }
   }, seferId, body).catch(() => null);
@@ -7550,8 +7592,15 @@ async function fetchSeferSeatsWithBody(page, seferId, bodyTemplate, templateId) 
   for (let attempt = 1; attempt <= 2; attempt++) {
     const json = await doFetch();
     if (json && !json.__error && !json.__html) {
+      __obiletSeatBlockStreak = 0;
       const c = countSeatsFromSeferJson(json);
       if (c) return c;
+    } else if (json && json.__html && [403, 429, 503].includes(json.__status)) {
+      // AYNI escalasyonlu breaker'i tetikle (fetchSeferRealSeats ile paylasilan).
+      __obiletSeatBlockStreak++;
+      const cooldownMs = Math.min(30000 * (2 ** (__obiletSeatBlockStreak - 1)), 5 * 60 * 1000);
+      __obiletSeatRateLimitedUntil = Date.now() + cooldownMs;
+      return null;
     }
     if (attempt === 1) await new Promise((r) => setTimeout(r, 1800));
   }
@@ -7852,7 +7901,20 @@ app.post("/api/obilet/seat-refresh", requireAuth, async (req, res) => {
     if (!dateIso || !time) return res.status(400).json({ message: "Tarih ve saat gerekli." });
     const ops = parseCsvList(target.operators).map(normalizeObiletOperatorName).filter(Boolean);
     const opKey = operator.toLocaleLowerCase("tr-TR").trim();
-    const written = await occupancyForHatDate(target, routeId, ops, dateIso, opKey || null, time);
+
+    // CAKISMA ONLEME: fiyat taramasi / Doluluk Iscisi / Ana Sefer Kesfi ile AYNI ANDA oBilet'e
+    // vurmayi onlemek icin kilidi al (bkz. runOccupancyWorker). Kullanici butonu beklerken UI
+    // donmasin diye kisa timeout (20sn); alinamazsa 409 donup "birazdan tekrar dene" deriz.
+    const locked = await acquireObiletLock(20000);
+    if (!locked) {
+      return res.status(409).json({ ok: false, message: "Sistem su an mesgul (baska bir tarama calisiyor), birazdan tekrar deneyin." });
+    }
+    let written;
+    try {
+      written = await occupancyForHatDate(target, routeId, ops, dateIso, opKey || null, time);
+    } finally {
+      releaseObiletLock();
+    }
     const m = (written || []).find((w) => w.time === time) || (written || [])[0];
     if (m) {
       res.json({ ok: true, sold: m.sold, total: m.total, occ: m.occ, operator: m.operator, time: m.time });
@@ -7926,21 +7988,11 @@ app.get("/api/obilet/occupancy", requireAuth, (req, res) => {
     const today = todayIsoInIstanbul();
     // 3 gunden eski doluluk kayitlarini temizle (yakin gecmis kalsin — Sefer Takip'te kalkis dolulugu).
     try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(shiftIsoDate(today, -10)); } catch (e) {}
-    // Ayni sefer icin ESKI kopya doluluk satirlarini sil (durak yazimi degisince olusan mukerrer kayitlar);
-    // her sefer icin sadece EN GUNCEL satir kalsin.
-    try {
-      db.exec(`
-        DELETE FROM obilet_occupancy WHERE id IN (
-          SELECT o1.id FROM obilet_occupancy o1 WHERE EXISTS (
-            SELECT 1 FROM obilet_occupancy o2
-             WHERE o2.target_id = o1.target_id AND o2.journey_date = o1.journey_date
-               AND o2.operator = o1.operator AND o2.departure_time = o1.departure_time AND o2.id <> o1.id
-               AND (substr(o2.last_updated,7,4)||substr(o2.last_updated,4,2)||substr(o2.last_updated,1,2)||substr(o2.last_updated,12,8))
-                 > (substr(o1.last_updated,7,4)||substr(o1.last_updated,4,2)||substr(o1.last_updated,1,2)||substr(o1.last_updated,12,8))
-          )
-        )
-      `);
-    } catch (e) { /* yok say */ }
+    // NOT: Eskiden burada her istekte "ayni sefer icin eski kopya satirlari sil" sorgusu calisiyordu.
+    // idx_obilet_occupancy_identity UNIQUE index'i (target_id, journey_date, operator, departure_time)
+    // + tum yazma yollarindaki ON CONFLICT upsert, bu anahtarda birden fazla satir olusmasini yapisal
+    // olarak zaten engelliyor — sorgu hicbir zaman satir bulamiyordu (dead code, bagimsiz ajanla
+    // dogrulandi). Gereksiz per-request DB taramasi kaldirildi.
 
     // Firma dropdown'i icin: doluluk verisi olan tum firmalar (filtreden bagimsiz).
     const operators = db.prepare(
@@ -7953,7 +8005,7 @@ app.get("/api/obilet/occupancy", requireAuth, (req, res) => {
     if (operator) { conditions.push("o.operator = ?"); params.push(operator); }
     const rows = db.prepare(`
       SELECT o.target_id, t.origin, t.destination, o.journey_date, o.operator, o.departure_time,
-             o.departure_stop, o.total_seats, o.available_seats, o.occupancy_percent, o.plate, o.last_updated
+             o.departure_stop, o.total_seats, o.available_seats, o.occupancy_percent, o.plate, o.source, o.last_updated
         FROM obilet_occupancy o
         LEFT JOIN obilet_targets t ON t.id = o.target_id
        WHERE ${conditions.join(" AND ")}
@@ -8330,7 +8382,7 @@ function computeJourneyTracking({ date, origin, destination, operator } = {}) {
   const occMap = new Map();
   try {
     const occRows = db.prepare(
-      "SELECT target_id, journey_date, operator, departure_time, total_seats, available_seats, plate, route_from, route_to, service_id, last_updated FROM obilet_occupancy"
+      "SELECT target_id, journey_date, operator, departure_time, total_seats, available_seats, plate, route_from, route_to, service_id, source, last_updated FROM obilet_occupancy"
     ).all();
     const tsKey = (s) => {
       const m = String(s || "").match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
@@ -8363,6 +8415,10 @@ function computeJourneyTracking({ date, origin, destination, operator } = {}) {
     const plate = occ && occ.plate ? String(occ.plate) : "";
     const routeFrom = occ && occ.route_from ? String(occ.route_from) : "";
     const routeTo = occ && occ.route_to ? String(occ.route_to) : "";
+    // Doluluk kaynagi ("gercek" koltuk haritasi vs "liste" tahmini) + ne zaman guncellendigi —
+    // kullaniciya dogrulanmis/tahmini ayrimini gostermek icin (fiyat mantigina dokunmaz, salt okuma).
+    const occSource = occ && occ.source ? String(occ.source) : "";
+    const occLastUpdated = occ && occ.last_updated ? String(occ.last_updated) : "";
     // ANA SEFER: bu segmentin serviceId'si feeder taramasinda bulunduysa gercek kalkis sehri/saati gelir.
     const svc = occ && occ.service_id ? serviceRouteMap.get(String(occ.service_id)) : null;
     const parentOrigin = svc && svc.origin_city ? String(svc.origin_city) : "";
@@ -8375,6 +8431,7 @@ function computeJourneyTracking({ date, origin, destination, operator } = {}) {
       changeCount, prices, currentPrice: s.price,
       totalSeats, availableSeats, yolcu, plate, routeFrom, routeTo, lastChangedAt,
       parentOrigin, parentOriginTime, parentDest,
+      occSource, occLastUpdated,
     };
   }).sort((a, b) =>
     String(a.journey_date).localeCompare(String(b.journey_date)) ||
@@ -9080,7 +9137,12 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
       const occOp = normalizeObiletOperatorName(info.firma) || info.firma;
       const key = `${occOp}|${info.time}`;
       const prev = bestByKey.get(key);
-      if (!prev || c.sold > prev.sold) bestByKey.set(key, { occOp, time: info.time, sold: c.sold, total: c.total });
+      // EN DOLU = EN AZ BOS (min available) — ham 'sold' sayisi farkli kapasiteli mukerrer araclarda
+      // yaniltir (orn. 30/30 tam dolu vs 32/46 -> ham sold 32>30 yanlislikla ikinciyi "daha dolu" secerdi).
+      // attachRealOccupancy'deki (satir ~7600) dogru kriterle tutarli hale getirildi.
+      const cAvail = c.total - c.sold;
+      const prevAvail = prev ? (prev.total - prev.sold) : Infinity;
+      if (!prev || cAvail < prevAvail) bestByKey.set(key, { occOp, time: info.time, sold: c.sold, total: c.total });
     }
 
     const now = nowStamp();
@@ -9127,7 +9189,19 @@ async function runOccupancyWorker() {
   let doneHats = 0;
   try {
     const today = todayIsoInIstanbul();
-    const targets = db.prepare("SELECT * FROM obilet_targets WHERE is_active = 1").all();
+    // EN UZUN SUREDIR ISLENMEMIS HAT ONCE (fiyat taramasindaki kanitlanmis desenle ayni, satir ~6975).
+    // Boylece cok hatli kurulumda belirli hatlar surekli sirada en sonda kalip isOccStale esigini (60dk)
+    // asmaz — hepsi donuşumlu olarak taze tutulur.
+    // last_occ_sync_at "DD.MM.YYYY HH:mm:ss" (gun-once) — HAM string siralamasi kronolojik DEGIL
+    // (orn. "01.07..." "15.06..."dan once gelir, oysa 15.06 daha eski). Fiyat taramasindaki AYNI
+    // YYYYMMDDHHmmss donusumunu (satir ~6989) burada da uygula (bagimsiz ajanla bulunan hata).
+    const targets = db.prepare(`
+      SELECT * FROM obilet_targets WHERE is_active = 1
+      ORDER BY (
+        substr(last_occ_sync_at, 7, 4) || substr(last_occ_sync_at, 4, 2) ||
+        substr(last_occ_sync_at, 1, 2) || substr(last_occ_sync_at, 12, 8)
+      ) ASC, id ASC
+    `).all();
     for (const target of targets) {
       const routeId = String(target.route_id || "").trim();
       if (!/^\d+-\d+$/.test(routeId)) continue;
@@ -9138,12 +9212,13 @@ async function runOccupancyWorker() {
       const hat = `${target.origin}->${target.destination}`;
       console.log(`[Doluluk İşçisi] ===== HAT BASLADI: ${hat} (${ops.join(",")}) — ${dates.length} gun =====`);
       let hatOk = 0;
+      let allDatesLocked = true; // her tarih icin kilit alinabildi mi (kismi tamamlanma takibi)
       for (const dateIso of dates) {
         // CAKISMA ONLEME: kilidi AL (fiyat taramasi VE Ana Sefer Kesfi ile AYNI ANDA oBilet'e vurmayi
         // onler). 429 (Cloudflare rate-limit) canli tespit edildi: ayni IP'den birden fazla kaynak
         // paralel istek atinca tetikleniyordu. Kilit sayesinde toplam istek TEK kaynaktan gider.
         const locked = await acquireObiletLock(120000);
-        if (!locked) { console.warn(`[Doluluk İşçisi]   ${dateIso}: kilit alinamadi (2 dk), atlandi.`); continue; }
+        if (!locked) { console.warn(`[Doluluk İşçisi]   ${dateIso}: kilit alinamadi (2 dk), atlandi.`); allDatesLocked = false; continue; }
         try {
           const w = await occupancyForHatDate(target, routeId, ops, dateIso);
           hatOk += (w || []).length;
@@ -9152,6 +9227,14 @@ async function runOccupancyWorker() {
         await new Promise((r) => setTimeout(r, 4000)); // tarihler arasi nazik bekleme
       }
       console.log(`[Doluluk İşçisi] ===== HAT BITTI: ${hat} — toplam ${hatOk} sefer GERCEK yazildi =====`);
+      // SADECE tum tarihler islenebildiyse (kilit hicbir tarihte atlanmadiysa) "senkronize" damgala.
+      // Kismi tamamlanan hat sirada geriye dusmesin — eksik kalan tarihleri bir sonraki turda ONCELIKLE
+      // tekrar dener (bagimsiz ajanla bulunan adalet acigi).
+      if (allDatesLocked) {
+        try { db.prepare("UPDATE obilet_targets SET last_occ_sync_at = ? WHERE id = ?").run(nowStamp(), target.id); } catch (e) {}
+      } else {
+        console.log(`[Doluluk İşçisi]   ${hat}: kismi tamamlandi, siradaki turda ONCELIKLI tekrar denenecek.`);
+      }
       doneHats++;
     }
   } catch (e) {
@@ -9331,7 +9414,10 @@ async function scanAnalysisRouteDate(route, dateIso) {
       const op = normalizeObiletOperatorName(info.firma) || info.firma;
       const key = `${op}|${info.time}`;
       const prev = bestByKey.get(key);
-      if (!prev || c.sold > prev.sold) bestByKey.set(key, { op, time: info.time, sold: c.sold, total: c.total });
+      // EN DOLU = EN AZ BOS (min available) — occupancyForHatDate'teki ayni duzeltmeyle tutarli.
+      const cAvail = c.total - c.sold;
+      const prevAvail = prev ? (prev.total - prev.sold) : Infinity;
+      if (!prev || cAvail < prevAvail) bestByKey.set(key, { op, time: info.time, sold: c.sold, total: c.total });
     }
 
     const now = nowStamp();
@@ -9374,10 +9460,16 @@ async function runAnalysisWorker() {
     for (const route of routes) {
       let routeWritten = 0;
       for (const dateIso of dates) {
+        // CAKISMA ONLEME: fiyat taramasi / Doluluk İşçisi / Ana Sefer Kesfi ile AYNI ANDA oBilet'e
+        // vurmayi onlemek icin kilidi al (runOccupancyWorker'daki ayni desen). Bu isci su an KAPALI
+        // (ANALYSIS_WORKER_ENABLED=false) ama ileride acilirsa kilitsiz baslamasin diye bastan dogru.
+        const locked = await acquireObiletLock(120000);
+        if (!locked) { console.warn(`[Talep Radari]   ${dateIso}: kilit alinamadi (2 dk), atlandi.`); continue; }
         try {
           const w = await scanAnalysisRouteDate(route, dateIso);
           routeWritten += (w || []).length;
         } catch (e) { console.warn(`[Talep Radari]   ${route.origin}->${route.destination} ${dateIso} hata: ${e.message}`); }
+        finally { releaseObiletLock(); }
         await new Promise((r) => setTimeout(r, 4000)); // tarihler arasi nazik bekleme
       }
       totalWritten += routeWritten;
