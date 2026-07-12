@@ -6409,15 +6409,16 @@ async function processObiletTarget(target) {
     // Liste available-seats BAZI otobuslerde BAYAT; gercek koltuk haritasi (SVG) her zaman dogru.
     // attachRealOccupancy tiklamasiz POST ile ceker, takip edilen firmalarla + tarih basi ust
     // sinirla (asagida) yuku bounded tutar. "*" (tum firma) hatlarinda cok agir olacagi icin atlanir.
-    // GERCEK koltuk cekimi KAPALI (kok cozum, 2026-07). Neden: canli probe ile dogrulandi ki oBilet
-    // LISTE degeri (available-seats) artik GERCEK koltuk haritasiyla ~1 koltuk farkla ESLESIYOR
-    // (orn. 16:28 liste 29, gercek 30). Ama gercek cekim (a) taramayi yavaslatip occupancy'yi BAYATLATIYOR,
-    // (b) basarisiz olunca eski 'gercek' degeri liste ile guncellenemiyordu -> kullanici DOLU otobusu
-    // "5/41" (cok eski deger) goruyordu. Kapatinca: occupancy dogrudan TAZE liste degerinden gelir, her
-    // taramada guncellenir, tarama hizlanir. Bayatlik hatasi (5 vs 30) liste sapmasindan (±1-3 koltuk)
-    // cok daha buyuktu -> hizli+taze liste, yavas+bayat gercekten dogrudur. Plaka da istenmiyor.
-    // Tekrar acmak icin: false -> true. Manuel "anlik cek" (/api/obilet/seat-refresh) yine calisir.
-    const REAL_SEATMAP_ENABLED = false;
+    // GERCEK koltuk cekimi ACIK (2026-07, tekrar). Neden: LISTE degeri (available-seats) GECIS SEFERLERINDE
+    // (rakip baska sehirden gelip Adana'dan gecen seferler) CIDDI EKSIK gosteriyor. Canli kanit: 13.07 19:30
+    // Adana->Ankara Enver, LISTE 34 bos diyor (biz "7 dolu %17"), ama GERCEK koltuk haritasi 13 erkek + 5 kadin
+    // = 18 DOLU (%44). Fark: arac Sanliurfa 13:30 kalkisli, Adana'dan gecerken uzerinde 18 yolcu var; oBilet'in
+    // segment "available-seats"i bunlari yansitmiyor. GERCEK koltuk haritasi (SVG) fiziki dolulugu dogru verir.
+    // Bayatlik korumasi (satir ~6548): real cekim basarisiz olursa eski 'gercek' korunur (liste ile ezilmez) —
+    // birkac dk eski dogru deger, taze YANLIS liste degerinden iyidir. attachRealOccupancy tiklamasiz POST ile,
+    // takip edilen firmalarla + tarih basi 25 sefer ust siniriyla ceker (yuku/Cloudflare'i bounded tutar).
+    // Kapatmak icin: true -> false.
+    const REAL_SEATMAP_ENABLED = true;
     const seatOps = !REAL_SEATMAP_ENABLED ? null : (acceptAllOperators ? ["*"] : targetOperators);
 
     const trackedJourneys = [];
