@@ -8966,7 +8966,11 @@ let occupancyWorkerRunning = false;
 const OCCUPANCY_WORKER_ENABLED = true;
 const OCCUPANCY_NEAR_DAYS = 7;          // 1 hafta (bugun + 6 gun)
 const OCCUPANCY_WORKER_INTERVAL_MS = 15 * 60 * 1000; // 15 dk
-const OCCUPANCY_MAX_SEFER_PER_DATE = 20;
+// Tarih basi en fazla kac sefer koltuk cekilir. 20 iken cok-firmali hatlarda (5 firma) slotlar paylasilip
+// bir firmanin gec seferleri (Enver 15:00-19:30) disarda kaliyordu -> onlar liste'de takili kaliyordu. 45'e
+// cikarildi ki TUM izlenen firmalarin TUM seferleri gercek koltuk alsin. (Cloudflare yuku artar; fetch=0'a
+// donerse dusururuz.)
+const OCCUPANCY_MAX_SEFER_PER_DATE = 45;
 
 // filterOpKey/filterTime verilirse SADECE o seferi isler (admin "hemen kontrol" butonu icin).
 // Doner: [{operator,time,sold,total,occ}] yazilan seferler.
