@@ -2809,43 +2809,28 @@ async function refreshNotificationsData() {
 // ===== Fiyat degisim toast bildirimleri (sag ust kose) =====
 // oBilet fiyat degisiklikleri obilet_price_history tablosuna yaziliyor (taramada).
 // Burada SADECE okuyoruz — tarama/tespit/Telegram mantigina dokunmuyoruz.
-// ===== Bildirim sesi (kısa, hoş bir "ding" — Web Audio, dosya/istek yok) =====
-let notifAudioCtx = null;
-function initNotifAudio() {
-  if (notifAudioCtx) return;
-  try {
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (AC) notifAudioCtx = new AC();
-  } catch {}
+// ===== Bildirim sesi (MP3 — /assets/notif.mp3) =====
+let notifAudioEl = null;
+function getNotifAudio() {
+  if (!notifAudioEl) {
+    notifAudioEl = new Audio("/assets/notif.mp3");
+    notifAudioEl.preload = "auto";
+    notifAudioEl.volume = 0.6;
+  }
+  return notifAudioEl;
 }
-// Tarayıcı, kullanıcı etkileşimi olmadan ses çalmaya izin vermez -> ilk tık/tuşta context'i uyandır.
+// Tarayıcı, kullanıcı etkileşimi olmadan ses çalmaya izin vermez -> ilk tık/tuşta sesi önceden yükle.
 ["pointerdown", "keydown"].forEach((ev) =>
-  window.addEventListener(ev, () => {
-    initNotifAudio();
-    if (notifAudioCtx && notifAudioCtx.state === "suspended") notifAudioCtx.resume().catch(() => {});
-  }, { once: true })
+  window.addEventListener(ev, () => { try { getNotifAudio().load(); } catch {} }, { once: true })
 );
 function isNotifMuted() { return localStorage.getItem("notifSoundMuted") === "1"; }
 function playNotifSound() {
-  if (isNotifMuted() || !notifAudioCtx) return; // sessizse ya da henüz etkileşim yoksa sessizce geç
+  if (isNotifMuted()) return;
   try {
-    const ctx = notifAudioCtx;
-    if (ctx.state === "suspended") ctx.resume().catch(() => {});
-    const t0 = ctx.currentTime;
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.0001, t0);
-    gain.gain.exponentialRampToValueAtTime(0.14, t0 + 0.012);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.34);
-    gain.connect(ctx.destination);
-    // İki notalı yükselen çıngırak (D6 -> A6 hissi), yumuşak sinüs.
-    [[880, t0, 0.12], [1174.66, t0 + 0.10, 0.22]].forEach(([freq, t, dur]) => {
-      const osc = ctx.createOscillator();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(freq, t);
-      osc.connect(gain);
-      osc.start(t);
-      osc.stop(t + dur);
-    });
+    const a = getNotifAudio();
+    a.currentTime = 0;
+    const p = a.play();
+    if (p && p.catch) p.catch(() => {}); // autoplay engellenirse (etkileşim yoksa) sessizce geç
   } catch {}
 }
 
@@ -3959,8 +3944,8 @@ if (dom.notifSoundBtn) {
     const muted = isNotifMuted();
     localStorage.setItem("notifSoundMuted", muted ? "0" : "1");
     updateNotifSoundBtn();
-    // Açıldıysa kısa bir örnek ses çal (tıklama zaten context'i uyandırır).
-    if (muted) { initNotifAudio(); if (notifAudioCtx && notifAudioCtx.state === "suspended") notifAudioCtx.resume().catch(() => {}); playNotifSound(); }
+    // Az önce sessizden açıldıysa kısa bir örnek ses çal (butona tıklamak zaten etkileşim sayılır).
+    if (muted) playNotifSound();
   });
 }
 
