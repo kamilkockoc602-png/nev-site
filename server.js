@@ -6328,11 +6328,15 @@ async function processObiletTarget(target) {
     // Liste available-seats BAZI otobuslerde BAYAT; gercek koltuk haritasi (SVG) her zaman dogru.
     // attachRealOccupancy tiklamasiz POST ile ceker, takip edilen firmalarla + tarih basi ust
     // sinirla (asagida) yuku bounded tutar. "*" (tum firma) hatlarinda cok agir olacagi icin atlanir.
-    const REAL_SEATMAP_ENABLED = true;
-    // GERCEK koltuk haritasi TUM hedefler icin acik (firma-ozel VE tum-firma). Tum-firma hatlarinda
-    // "*" sentineli ile calisir; attachRealOccupancy tarih basi 25 sefer ust siniri + YALNIZCA GELECEK
-    // seferlerle yuku bounded tutar. Boylece occupancy her zaman GERCEK haritadan gelir; guvenilmez
-    // liste available-seats degeri occupancy'ye ARTIK HIC yazilmaz (bayat oldugunda yanlis dusuk cikiyordu).
+    // GERCEK koltuk cekimi KAPALI (kok cozum, 2026-07). Neden: canli probe ile dogrulandi ki oBilet
+    // LISTE degeri (available-seats) artik GERCEK koltuk haritasiyla ~1 koltuk farkla ESLESIYOR
+    // (orn. 16:28 liste 29, gercek 30). Ama gercek cekim (a) taramayi yavaslatip occupancy'yi BAYATLATIYOR,
+    // (b) basarisiz olunca eski 'gercek' degeri liste ile guncellenemiyordu -> kullanici DOLU otobusu
+    // "5/41" (cok eski deger) goruyordu. Kapatinca: occupancy dogrudan TAZE liste degerinden gelir, her
+    // taramada guncellenir, tarama hizlanir. Bayatlik hatasi (5 vs 30) liste sapmasindan (±1-3 koltuk)
+    // cok daha buyuktu -> hizli+taze liste, yavas+bayat gercekten dogrudur. Plaka da istenmiyor.
+    // Tekrar acmak icin: false -> true. Manuel "anlik cek" (/api/obilet/seat-refresh) yine calisir.
+    const REAL_SEATMAP_ENABLED = false;
     const seatOps = !REAL_SEATMAP_ENABLED ? null : (acceptAllOperators ? ["*"] : targetOperators);
 
     const trackedJourneys = [];
