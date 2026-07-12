@@ -7468,6 +7468,7 @@ function countSeatsFromSeferJson(json) {
 // Bir seferin GERCEK koltuk sayimini /json/sefer/{id}'den al. oBilet bunu POST + json ister
 // (GET HTML doner). Sayfa oturumunda (cf_bm cookie ile) fetch. Basarisizsa null.
 // Cloudflare/gecici hataya karsi 2 deneme (arada bekleme).
+let __seatDiagCount = 0; // TANI: /json/sefer neden bos donuyor — ilk birkac hatayi logla, sonra sus (spam onleme).
 async function fetchSeferRealSeats(page, seferId) {
   const doFetch = () => page.evaluate(async (sid) => {
     try {
@@ -7478,20 +7479,26 @@ async function fetchSeferRealSeats(page, seferId) {
         body: "{}",
       });
       const ct = r.headers.get("content-type") || "";
-      if (!ct.toLowerCase().includes("json")) return { __html: true };
-      return await r.json();
+      const txt = await r.text();
+      if (!ct.toLowerCase().includes("json")) return { __html: true, __status: r.status, __ct: ct, __snip: txt.slice(0, 120) };
+      try { return JSON.parse(txt); } catch { return { __parsefail: true, __status: r.status, __snip: txt.slice(0, 120) }; }
     } catch (e) { return { __error: String(e && e.message || e) }; }
   }, seferId).catch((e) => ({ __error: String(e && e.message || e) }));
 
-  // HIZ: 2 deneme + kisa backoff (700ms). Onceden 3 deneme + 1.5s/3s backoff idi -> tarama yavasliyordu.
-  // Basarili cekim ZATEN ilk denemede doner (plaka + gercek doluluk gelir); yalnizca basarisizlikta 1 kez
-  // daha (kisa) dener. Railway'de Cloudflare bir seferi KALICI engelliyorsa uc uc retry fayda vermiyordu,
-  // sadece suru yiyordu -> kisaltildi. Boylece plakalar korunur ama tarama belirgin hizlanir.
   for (let attempt = 1; attempt <= 2; attempt++) {
     const json = await doFetch();
-    if (json && !json.__error && !json.__html) {
+    if (json && !json.__error && !json.__html && !json.__parsefail) {
       const c = countSeatsFromSeferJson(json);
       if (c) return c;
+      if (__seatDiagCount < 8) { __seatDiagCount++;
+        const busStr = typeof (json?.bus) === "string" ? json.bus : (typeof json?.data?.bus === "string" ? json.data.bus : null);
+        console.log(`[Doluluk TANI] sefer/${seferId}: JSON geldi ama koltuk YOK (partial=${json?.["is-partial-layout"] ?? json?.data?.["is-partial-layout"]}, busLen=${busStr ? busStr.length : "yok"}, keys=${Object.keys(json || {}).slice(0, 8).join(",")})`);
+      }
+    } else if (json && __seatDiagCount < 8) { __seatDiagCount++;
+      const why = json.__error ? `ERROR ${json.__error}`
+        : json.__html ? `HTML/Cloudflare? status=${json.__status} ct=${json.__ct} snip=${JSON.stringify(json.__snip)}`
+        : json.__parsefail ? `PARSEFAIL status=${json.__status} snip=${JSON.stringify(json.__snip)}` : "?";
+      console.log(`[Doluluk TANI] sefer/${seferId}: ${why}`);
     }
     if (attempt < 2) await new Promise((r) => setTimeout(r, 700));
   }
