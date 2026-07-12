@@ -2818,7 +2818,7 @@ function showToast({ head, route, oldPrice, newPrice, kind, ttl = 9000 }) {
     ? `<div class="toast-price"><span class="old">${escapeHtml(oldPrice)}₺</span><span class="arw">${arrow}</span><span class="new">${escapeHtml(newPrice)}₺</span></div>`
     : "";
   el.innerHTML = `
-    <div class="toast-head">💰 <span>${escapeHtml(head || "Fiyat değişti")}</span><span class="toast-x">×</span></div>
+    <div class="toast-head"><span>${escapeHtml(head || "Fiyat değişti")}</span><span class="toast-x">×</span></div>
     ${route ? `<div class="toast-route">${route}</div>` : ""}
     ${priceHtml}
     <div class="toast-bar" style="animation-duration:${ttl}ms"></div>
