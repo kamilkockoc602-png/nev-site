@@ -6409,20 +6409,14 @@ async function processObiletTarget(target) {
     // Liste available-seats BAZI otobuslerde BAYAT; gercek koltuk haritasi (SVG) her zaman dogru.
     // attachRealOccupancy tiklamasiz POST ile ceker, takip edilen firmalarla + tarih basi ust
     // sinirla (asagida) yuku bounded tutar. "*" (tum firma) hatlarinda cok agir olacagi icin atlanir.
-    // GERCEK koltuk cekimi ACIK (2026-07, tekrar). Neden: LISTE degeri (available-seats) GECIS SEFERLERINDE
-    // (rakip baska sehirden gelip Adana'dan gecen seferler) CIDDI EKSIK gosteriyor. Canli kanit: 13.07 19:30
-    // Adana->Ankara Enver, LISTE 34 bos diyor (biz "7 dolu %17"), ama GERCEK koltuk haritasi 13 erkek + 5 kadin
-    // = 18 DOLU (%44). Fark: arac Sanliurfa 13:30 kalkisli, Adana'dan gecerken uzerinde 18 yolcu var; oBilet'in
-    // segment "available-seats"i bunlari yansitmiyor. GERCEK koltuk haritasi (SVG) fiziki dolulugu dogru verir.
-    // Bayatlik korumasi (satir ~6548): real cekim basarisiz olursa eski 'gercek' korunur (liste ile ezilmez) —
-    // birkac dk eski dogru deger, taze YANLIS liste degerinden iyidir. attachRealOccupancy tiklamasiz POST ile,
-    // takip edilen firmalarla + tarih basi 25 sefer ust siniriyla ceker (yuku/Cloudflare'i bounded tutar).
-    // Kapatmak icin: true -> false.
-    const REAL_SEATMAP_ENABLED = true;
-    // HIZ: gercek koltuk haritasini SADECE ilk N gunde cek (kalkisa yakin -> otobus dolu -> dogruluk kritik).
-    // Uzak tarihler cogunlukla bos, liste degeri yeterli. Boylece tarama hizlanir + Cloudflare yuku duser
-    // (daha az istek -> daha az takilma). 2 = bugun + yarin. Artir/azalt: dogruluk<->hiz dengesi.
-    const REAL_SEATMAP_NEAR_DAYS = 2;
+    // GERCEK koltuk cekimi FIYAT TARAMASINDA KAPALI (2026-07). Occupancy dogrulugu artik AYRI "Doluluk İşçisi"
+    // (runOccupancyWorker, 7 gun) tarafindan arka planda saglanir -> fiyat taramasi TAM HIZLI kalir (koltuk
+    // cekmez). Neden ayirdik: inline koltuk cekimi taramayi cok yavaslatiyordu ve Cloudflare'e takiliyordu.
+    // Isci, gecis seferlerinde LISTE degerinin eksikligini (orn. 13.07 19:30 Adana-Ankara: liste 7, gercek 18/41)
+    // duzeltir. CAKISMA: fiyat taramasi 'liste' yazsa da isçinin taze 'gercek' degerini EZMEZ (koruma + bayatlik,
+    // satir ~6555). Tekrar inline acmak icin: false -> true.
+    const REAL_SEATMAP_ENABLED = false;
+    const REAL_SEATMAP_NEAR_DAYS = 2; // (inline acilirsa) yalnizca ilk N gun; su an inline kapali.
     const seatOps = !REAL_SEATMAP_ENABLED ? null : (acceptAllOperators ? ["*"] : targetOperators);
 
     const trackedJourneys = [];
@@ -6548,14 +6542,14 @@ async function processObiletTarget(target) {
               total = rT; const sold = Math.max(0, Math.min(rT, rS));
               avail = rT - sold; occ = Math.round((sold / rT) * 100); source = "gercek";
             } else if (j.seatInfoReliable === true && Number.isFinite(Number(j.totalSeats)) && Number(j.totalSeats) > 0 && Number.isFinite(Number(j.availableSeats))) {
-              // 2) ANA KAYNAK (gercek cekim kapaliyken): oBilet liste available-seats. Her taramada TAZE gelir.
-              //    KORUMA yalnizca GERCEK CEKIM ACIKKEN gecerli: taze gercek liste ile bozulmasin. Gercek
-              //    KAPALIYKEN eski 'gercek' satirlar bayatladigi icin liste ONLARI da serbestce guncellemeli
-              //    (bayat 5 -> taze 29). Aksi halde dolu otobus eski dusuk degerde takili kalir.
-              if (REAL_SEATMAP_ENABLED) {
-                const ex = db.prepare("SELECT source FROM obilet_occupancy WHERE target_id=? AND journey_date=? AND operator=? AND departure_time=?")
+              // 2) ANA KAYNAK (koltuk cekimi fiyat taramasinda kapaliyken): oBilet liste available-seats.
+              //    KORUMA: inline koltuk cekimi ACIK veya DOLULUK ISCISI ACIK ise -> isçinin/gercegin TAZE degerini
+              //    liste ile EZME (cakisma onleme). Ama gercek BAYAT ise (isci geri kaldi/oldu) liste DEVRALIR ki
+              //    doluluk eski degerde takili kalmasin (self-heal).
+              if (REAL_SEATMAP_ENABLED || OCCUPANCY_WORKER_ENABLED) {
+                const ex = db.prepare("SELECT source, last_updated FROM obilet_occupancy WHERE target_id=? AND journey_date=? AND operator=? AND departure_time=?")
                   .get(target.id, j.journey_date, occOp, j.time);
-                if (ex && ex.source === "gercek") { continue; } // taze gercegi liste ile bozma
+                if (ex && ex.source === "gercek" && !isOccStale(ex.last_updated, 60)) { continue; } // taze gercegi liste ile bozma
               }
               total = Number(j.totalSeats); avail = Number(j.availableSeats);
               occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100))); source = "liste";
@@ -6803,6 +6797,28 @@ async function acquireObiletLock(timeoutMs = 120000) {
 }
 function releaseObiletLock() {
   obiletTaskRunning = false;
+}
+
+// "DD.MM.YYYY HH:mm:ss" -> ms (TZ-notr; yalnizca FARK icin, iki damga ayni frame'de). Parse edilemezse NaN.
+function occStampToMs(ts) {
+  // Ayrac boşluk VEYA virgül olabilir (ICU tr-TR bazı sürümlerde "12.07.2026, 22:44:16" verebilir) — [\s,]+ ile tolere et.
+  const m = String(ts || "").match(/(\d{2})\.(\d{2})\.(\d{4})[\s,]+(\d{2}):(\d{2}):(\d{2})/);
+  return m ? Date.UTC(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]) : NaN;
+}
+// Occupancy 'gercek' degeri bayat mi (maxMinutes'tan eski)? Bayatsa fiyat taramasinin liste degeri devralir.
+function isOccStale(ts, maxMinutes = 60) {
+  const a = occStampToMs(ts), b = occStampToMs(nowStamp());
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return true; // damga bozuksa bayat say (liste devralsin)
+  return (b - a) > maxMinutes * 60 * 1000;
+}
+// Fiyat taramasi bosalana kadar bekle (kilidi ALMADAN — sadece izler). CAKISMA onleme: Doluluk İşçisi
+// oBilet'e vurmadan once fiyat taramasi mesgulse bekler. Ac kalmasin diye maxMs sonra yine de devam eder.
+async function waitForObiletIdle(maxMs = 120000) {
+  const start = Date.now();
+  while (obiletTaskRunning && (Date.now() - start) < maxMs) {
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  return !obiletTaskRunning;
 }
 
 // ===================== AG & KAPASITE DIFF (yapisal degisiklik tespiti) =====================
@@ -8935,11 +8951,12 @@ setInterval(() => {
 // haritasini (/json/sefer, tiklama ile) okur, obilet_occupancy'yi 'gercek' kaynakli gunceller.
 // ASLA silmez (okuyamadigi seferin mevcut degeri kalir). Fiyat taramasi calisiyorsa BEKLER.
 let occupancyWorkerRunning = false;
-// KAPALI: Bu ayri "Doluluk İşçisi" koltuk haritasini TIKLAMA ile aciyordu ve bazen YANLIS otobusu
-// acip eksik/yanlis sayiyordu (or. 6/42). Artik doluluk TEK dogru kaynaktan gelir: fiyat taramasinin
-// listedeki available-seats degeri (gercek koltuk haritasiyla birebir ayni oldugu dogrulandi).
-// Iki tarama cakismasin + oBilet yuku azalsin diye bu isci kapatildi.
-const OCCUPANCY_WORKER_ENABLED = false;
+// ACIK (2026-07): Doluluk artik AYRI isci tarafindan GERCEK koltuk haritasindan saglanir (7 gun). Fiyat
+// taramasi koltuk cekmez -> TAM HIZLI. Isci gecis seferlerinin (rakip baska sehirden gelip gecen) LISTE'de
+// eksik gozuken dolulugunu duzeltir. Onceki "yanlis otobus" sorunu TIKLAMA yuzundendi; artik tiklamasiz
+// dogrudan POST (fetchSeferSeatsWithBody) ile ceker. CAKISMA: her hattan once fiyat taramasi bosalana kadar
+// bekler (waitForObiletIdle); yazdigi 'gercek' degeri fiyat taramasinin 'liste'siyle EZILMEZ (koruma+bayatlik).
+const OCCUPANCY_WORKER_ENABLED = true;
 const OCCUPANCY_NEAR_DAYS = 7;          // 1 hafta (bugun + 6 gun)
 const OCCUPANCY_WORKER_INTERVAL_MS = 15 * 60 * 1000; // 15 dk
 const OCCUPANCY_MAX_SEFER_PER_DATE = 20;
@@ -9008,54 +9025,15 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
 
     if (!infos.length) { console.log(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso}: takip edilen sefer yok.`); return []; }
 
-    // Seferleri oku: once yakalanmis GOVDE ile FETCH dene (tiklamasiz, guvenilir).
-    // GOVDE yoksa TIKLA (ilk seferde tarayicinin POST'u calisir, govdeyi yakalar; sonrakiler fetch).
-    let viaFetch = 0, viaClick = 0;
+    // Seferleri oku: TIKLAMASIZ dogrudan POST (/json/sefer/{id}, body "{}") — fetchSeferRealSeats. Sefer id
+    // ile DOGRUDAN cekildigi icin eski "yanlis otobus" riski YOK. Cloudflare burst'unu onlemek icin arada bekleme.
+    let viaFetch = 0;
     for (const info of infos) {
       if (seatById.has(info.id)) continue;
-      // 1) FETCH (govde varsa) — art arda burst yapmamak icin arada bekle (Cloudflare throttle).
-      if (capturedBody) {
-        const c = await fetchSeferSeatsWithBody(page, info.id, capturedBody, capturedBodyId);
-        await new Promise((r) => setTimeout(r, 600));
-        if (c) { seatById.set(info.id, c); viaFetch++; continue; }
-      }
-      // 2) TIKLA (bootstrap / yedek) — tutmazsa 2 kez daha dene (tek-sefer butonu icin kritik).
-      const doClick = () => page.evaluate((t, firm) => {
-        const hasSeatBtn = (el) => Array.from(el.querySelectorAll("button,a,span,div"))
-          .some((b) => /koltuk|seç|^sec$|satın al|satin al/i.test((b.innerText || "").trim()));
-        let cards = Array.from(document.querySelectorAll("div,li,article"))
-          .filter((el) => (el.innerText || "").length < 700 && /\d{2}:\d{2}/.test(el.innerText || "") && hasSeatBtn(el));
-        const matchFirm = (el) => {
-          const txt = (el.innerText || "").toLowerCase();
-          if (txt.includes(firm)) return true;
-          return Array.from(el.querySelectorAll("img")).some((im) =>
-            ((im.getAttribute("alt") || "") + (im.getAttribute("title") || "")).toLowerCase().includes(firm));
-        };
-        const timed = cards.filter((el) => (el.innerText || "").includes(t));
-        const target = timed.find(matchFirm) || timed[0];
-        if (!target) return false;
-        let best = target;
-        for (const c of cards) if (target.contains(c) && c !== target && (c.innerText || "").includes(t)) { best = c; break; }
-        const btn = Array.from(best.querySelectorAll("button,a,span,div"))
-          .find((b) => /koltuk|seç|^sec$|satın al|satin al/i.test((b.innerText || "").trim()));
-        (btn || best).click();
-        return true;
-      }, info.time, info.firma.toLocaleLowerCase("tr-TR")).catch(() => false);
-
-      for (let attempt = 1; attempt <= 3 && !seatById.has(info.id); attempt++) {
-        await doClick();
-        await new Promise((r) => setTimeout(r, 2600)); // koltuk haritasi + POST gelsin
-      }
-      if (seatById.has(info.id)) viaClick++;
-      // Acik koltuk haritasini KAPAT (sonraki tiklama/DOM temiz kalsin)
-      await page.evaluate(() => {
-        const k = Array.from(document.querySelectorAll("button,a,span,div"))
-          .find((b) => { const t = (b.innerText || "").trim(); return t.length < 12 && /^kapat$/i.test(t); });
-        if (k) k.click();
-      }).catch(() => {});
+      const c = await fetchSeferRealSeats(page, info.id);
+      if (c) { seatById.set(info.id, c); viaFetch++; }
+      await new Promise((r) => setTimeout(r, 500)); // Cloudflare throttle
     }
-    await new Promise((r) => setTimeout(r, 1200));
-    if (DEBUG_OBILET_PRICE && capturedBody) console.log(`[Doluluk İşçisi] GOVDE ornek: ${String(capturedBody).substring(0, 160)}`);
 
     // Ayni operator+saat icin birden cok listeleme olabilir -> en dolu (gercek otobus) alinir.
     const bestByKey = new Map(); // normOp|time -> {sold,total}
@@ -9093,7 +9071,7 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
       if (c) okList.push(`${info.time}=${c.sold}/${c.total}`);
       else eksikList.push(info.time);
     }
-    console.log(`[Doluluk İşçisi]   ${dateIso}: ${ok}/${seenT.size} sefer (fetch=${viaFetch},tik=${viaClick})`);
+    console.log(`[Doluluk İşçisi]   ${dateIso}: ${ok}/${seenT.size} sefer (dogrudan fetch=${viaFetch})`);
     console.log(`[Doluluk İşçisi]     ${okList.join("  ") || "(yok)"}`);
     if (eksikList.length) console.log(`[Doluluk İşçisi]     EKSIK: ${eksikList.join(", ")}`);
     return written;
@@ -9124,6 +9102,8 @@ async function runOccupancyWorker() {
       console.log(`[Doluluk İşçisi] ===== HAT BASLADI: ${hat} (${ops.join(",")}) — ${dates.length} gun =====`);
       let hatOk = 0;
       for (const dateIso of dates) {
+        // CAKISMA ONLEME: fiyat taramasi mesgulse bosalana kadar bekle (ac kalmamak icin en fazla 2 dk).
+        await waitForObiletIdle(120000);
         try {
           const w = await occupancyForHatDate(target, routeId, ops, dateIso);
           hatOk += (w || []).length;
