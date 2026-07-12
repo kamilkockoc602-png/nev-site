@@ -2841,14 +2841,20 @@ function showToast({ head, route, body, oldPrice, newPrice, kind, sticky = true,
   if (!sticky) setTimeout(dismiss, ttl);
 }
 
-// Ilk girişte mevcut en yeni degisim id'sini baz al — eski degisimler icin toast atma.
+// Baz: localStorage'daki SON GORULEN id -> aradan gecen (kacirilan) degisimler de toast olur (oturumlar arasi kalici).
+// Ilk kez (kayit yok): en yeni 3 degisimi goster (calistigini kanitla, bogmadan); sonrasini localStorage yonetir.
 async function initPriceChangeBaseline() {
-  try {
-    const data = await apiFetch("/api/obilet/price-history?limit=1");
-    const rows = data && Array.isArray(data.history) ? data.history : [];
-    state.lastPriceChangeId = rows.length ? Number(rows[0].id) || 0 : 0;
-  } catch {
-    state.lastPriceChangeId = 0;
+  const saved = Number(localStorage.getItem("lastPriceChangeId") || "0") || 0;
+  if (saved > 0) {
+    state.lastPriceChangeId = saved;
+  } else {
+    try {
+      const data = await apiFetch("/api/obilet/price-history?limit=4");
+      const rows = data && Array.isArray(data.history) ? data.history : [];
+      state.lastPriceChangeId = rows.length >= 4 ? (Number(rows[3].id) || 0) : 0; // en yeni 3'u toast et
+    } catch {
+      state.lastPriceChangeId = 0;
+    }
   }
   state.priceToastReady = true;
 }
@@ -2867,8 +2873,9 @@ async function checkPriceChangeToasts() {
   const fresh = rows
     .filter((r) => (Number(r.id) || 0) > state.lastPriceChangeId)
     .sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
-  // Son görülen id'yi her durumda güncelle (yenisi yoksa da).
+  // Son görülen id'yi her durumda güncelle (yenisi yoksa da) + oturumlar arası kalıcı sakla.
   state.lastPriceChangeId = Math.max(state.lastPriceChangeId, ...rows.map((r) => Number(r.id) || 0));
+  try { localStorage.setItem("lastPriceChangeId", String(state.lastPriceChangeId)); } catch {}
   if (!fresh.length) return;
   // Çok değişimde ekranı boğmayalım — en yeni 5'ini göster, kalanı özetle.
   const show = fresh.slice(-5);
@@ -2910,14 +2917,19 @@ function stStructHead(type) {
   }
 }
 
-// İlk girişte mevcut en yeni yapı-değişim id'sini baz al — eskiler için toast atma.
+// Baz: localStorage'daki son görülen id (oturumlar arası kalıcı); ilk kez en yeni 3'ü göster.
 async function initStructureChangeBaseline() {
-  try {
-    const data = await apiFetch("/api/obilet/structure-changes/recent?limit=1");
-    const rows = data && Array.isArray(data.changes) ? data.changes : [];
-    state.lastStructureChangeId = rows.length ? Number(rows[0].id) || 0 : 0;
-  } catch {
-    state.lastStructureChangeId = 0;
+  const saved = Number(localStorage.getItem("lastStructureChangeId") || "0") || 0;
+  if (saved > 0) {
+    state.lastStructureChangeId = saved;
+  } else {
+    try {
+      const data = await apiFetch("/api/obilet/structure-changes/recent?limit=4");
+      const rows = data && Array.isArray(data.changes) ? data.changes : [];
+      state.lastStructureChangeId = rows.length >= 4 ? (Number(rows[3].id) || 0) : 0;
+    } catch {
+      state.lastStructureChangeId = 0;
+    }
   }
   state.structureToastReady = true;
 }
@@ -2937,6 +2949,7 @@ async function checkStructureChangeToasts() {
     .filter((r) => (Number(r.id) || 0) > state.lastStructureChangeId)
     .sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
   state.lastStructureChangeId = Math.max(state.lastStructureChangeId, ...rows.map((r) => Number(r.id) || 0));
+  try { localStorage.setItem("lastStructureChangeId", String(state.lastStructureChangeId)); } catch {}
   if (!fresh.length) return;
   const show = fresh.slice(-5);
   const hidden = fresh.length - show.length;
@@ -3361,6 +3374,9 @@ async function handleLogin(username, password) {
     await initPriceChangeBaseline();
     await initStructureChangeBaseline();
     startNotificationPolling();
+    // Kaçırılan değişimleri 60 sn beklemeden HEMEN göster.
+    checkPriceChangeToasts().catch(() => null);
+    checkStructureChangeToasts().catch(() => null);
   } catch (error) {
     showMessage(error.message || "Sign-in failed.");
   }
@@ -3382,6 +3398,9 @@ async function verifySession() {
     await initPriceChangeBaseline();
     await initStructureChangeBaseline();
     startNotificationPolling();
+    // Kaçırılan değişimleri 60 sn beklemeden HEMEN göster.
+    checkPriceChangeToasts().catch(() => null);
+    checkStructureChangeToasts().catch(() => null);
   } catch {
     setToken("");
     state.currentUser = null;
