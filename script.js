@@ -116,6 +116,7 @@ const dom = {
   notifList: document.getElementById("notifList"),
   notifEmpty: document.getElementById("notifEmpty"),
   notifReadAllBtn: document.getElementById("notifReadAllBtn"),
+  notifSoundBtn: document.getElementById("notifSoundBtn"),
   themeToggleBtn: document.getElementById("themeToggleBtn"),
   themeLabel: document.getElementById("themeLabel"),
   ocrOriginInput: document.getElementById("ocrOriginInput"),
@@ -2808,6 +2809,46 @@ async function refreshNotificationsData() {
 // ===== Fiyat degisim toast bildirimleri (sag ust kose) =====
 // oBilet fiyat degisiklikleri obilet_price_history tablosuna yaziliyor (taramada).
 // Burada SADECE okuyoruz — tarama/tespit/Telegram mantigina dokunmuyoruz.
+// ===== Bildirim sesi (kısa, hoş bir "ding" — Web Audio, dosya/istek yok) =====
+let notifAudioCtx = null;
+function initNotifAudio() {
+  if (notifAudioCtx) return;
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (AC) notifAudioCtx = new AC();
+  } catch {}
+}
+// Tarayıcı, kullanıcı etkileşimi olmadan ses çalmaya izin vermez -> ilk tık/tuşta context'i uyandır.
+["pointerdown", "keydown"].forEach((ev) =>
+  window.addEventListener(ev, () => {
+    initNotifAudio();
+    if (notifAudioCtx && notifAudioCtx.state === "suspended") notifAudioCtx.resume().catch(() => {});
+  }, { once: true })
+);
+function isNotifMuted() { return localStorage.getItem("notifSoundMuted") === "1"; }
+function playNotifSound() {
+  if (isNotifMuted() || !notifAudioCtx) return; // sessizse ya da henüz etkileşim yoksa sessizce geç
+  try {
+    const ctx = notifAudioCtx;
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    const t0 = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.14, t0 + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.34);
+    gain.connect(ctx.destination);
+    // İki notalı yükselen çıngırak (D6 -> A6 hissi), yumuşak sinüs.
+    [[880, t0, 0.12], [1174.66, t0 + 0.10, 0.22]].forEach(([freq, t, dur]) => {
+      const osc = ctx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, t);
+      osc.connect(gain);
+      osc.start(t);
+      osc.stop(t + dur);
+    });
+  } catch {}
+}
+
 // sticky=true (varsayilan): OTOMATIK KAYBOLMAZ — kullanici × ile / uzerine tiklayarak kapatir.
 // Kullanici tercihi: bildirim sagda kalsin, kacirilmasin, "geliyor mu" test edilebilsin.
 function showToast({ head, route, body, oldPrice, newPrice, kind, sticky = true, ttl = 9000, onDismiss }) {
@@ -2872,12 +2913,14 @@ async function checkToastFeed() {
   let data;
   try { data = await apiFetch("/api/obilet/toast-feed"); } catch { return; }
   if (!data || !data.ok) return;
+  let newCount = 0; // bu turda yeni gösterilen bildirim sayısı (>0 ise TEK ses çal)
 
   // Fiyat değişimleri (eski -> yeni sırayla)
   for (const r of (Array.isArray(data.price) ? data.price : [])) {
     const id = Number(r.id) || 0;
     if (!id || state.shownToastIds.price.has(id)) continue;
     state.shownToastIds.price.add(id);
+    newCount++;
     const oldP = Math.round(Number(r.old_price) || 0);
     const newP = Math.round(Number(r.new_price) || 0);
     const kind = newP > oldP ? "up" : newP < oldP ? "down" : "info";
@@ -2899,6 +2942,7 @@ async function checkToastFeed() {
     const id = Number(r.id) || 0;
     if (!id || state.shownToastIds.structure.has(id)) continue;
     state.shownToastIds.structure.add(id);
+    newCount++;
     const type = String(r.change_type || "");
     // Tehdit (yeni rakip / ek araç / saat kaydırma / kapasite-sefer artışı) kırmızı; fırsat (çekildi/kaldırıldı) yeşil.
     const kind = /new_operator|extra_bus|time_shift|capacity_up|new_departure/.test(type) ? "up"
@@ -2910,6 +2954,8 @@ async function checkToastFeed() {
       onDismiss: () => markToastSeen("structure", id),
     });
   }
+
+  if (newCount > 0) playNotifSound(); // patlama olsa da tek "ding"
 }
 
 function startNotificationPolling() {
@@ -3901,6 +3947,22 @@ dom.notifReadAllBtn.addEventListener("click", async () => {
     // Sessiz gec.
   }
 });
+
+// Bildirim sesi aç/kapat (tercih localStorage'da kalıcı).
+function updateNotifSoundBtn() {
+  if (!dom.notifSoundBtn) return;
+  dom.notifSoundBtn.textContent = isNotifMuted() ? "Ses: Kapalı" : "Ses: Açık";
+}
+if (dom.notifSoundBtn) {
+  updateNotifSoundBtn();
+  dom.notifSoundBtn.addEventListener("click", () => {
+    const muted = isNotifMuted();
+    localStorage.setItem("notifSoundMuted", muted ? "0" : "1");
+    updateNotifSoundBtn();
+    // Açıldıysa kısa bir örnek ses çal (tıklama zaten context'i uyandırır).
+    if (muted) { initNotifAudio(); if (notifAudioCtx && notifAudioCtx.state === "suspended") notifAudioCtx.resume().catch(() => {}); playNotifSound(); }
+  });
+}
 
 dom.themeToggleBtn.addEventListener("click", () => {
   toggleTheme();
