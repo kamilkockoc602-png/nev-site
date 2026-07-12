@@ -690,6 +690,30 @@ try { db.exec(`CREATE TABLE IF NOT EXISTS obilet_service_routes (
   updated_at TEXT NOT NULL DEFAULT ''
 )`); } catch(e) {}
 
+// AG & KAPASITE DIFF: her taramada bir rotanin YAPI fotografini (hangi firma, hangi saatte, kac koltuk,
+// kac arac) saklar; sonraki tarama oncekiyle kiyaslanip yapisal degisiklik (yeni rakip / yeni-kalkan sefer /
+// kapasite / ek arac / saat kaydirma) tespit edilir. FIYAT mantigina dokunmaz — ayni tarama verisini OKUR,
+// ayri tablolara yazar. obilet_route_structure = son fotograf; obilet_structure_changes = tespit edilen farklar.
+try { db.exec(`CREATE TABLE IF NOT EXISTS obilet_route_structure (
+  target_id INTEGER NOT NULL,
+  journey_date TEXT NOT NULL,
+  snapshot_json TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (target_id, journey_date)
+)`); } catch(e) {}
+try { db.exec(`CREATE TABLE IF NOT EXISTS obilet_structure_changes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  target_id INTEGER NOT NULL,
+  journey_date TEXT NOT NULL DEFAULT '',
+  route_label TEXT NOT NULL DEFAULT '',
+  change_type TEXT NOT NULL DEFAULT '',
+  operator TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL DEFAULT '',
+  detected_at TEXT NOT NULL DEFAULT '',
+  is_read INTEGER NOT NULL DEFAULT 0
+)`); } catch(e) {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_obilet_structure_changes_id ON obilet_structure_changes(id DESC)"); } catch(e) {}
+
 // Kayitli PKM guzergahlari (Pkm Form menusu) — PAYLASIMLI: herkes gorur/acar. plan_json = {stops,legMin,peronMin,depMin}.
 try { db.exec(`CREATE TABLE IF NOT EXISTS pkm_routes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4807,6 +4831,12 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso, seatOperators
 
     if (capturedJourneys.length > 0) {
       console.log(`[oBilet Puppeteer] ${capturedJourneys.length} sefer (XHR)`);
+      // EK ARAC tespiti icin: her operator+saat kacinci arac (idsByKey ayni anahtarda tum listeleme id'lerini
+      // topluyor). busCount = o saatte kac ayri otobus. Yalnizca yapi-diff icin ek alan; fiyat mantigini etkilemez.
+      capturedJourneys.forEach((cj) => {
+        const ids = idsByKey.get(cj.matchKey);
+        cj.busCount = (ids && ids.length) ? ids.length : 1;
+      });
       // GERCEK DOLULUK (opsiyonel): takip edilen operatorlerin seferleri icin koltuk haritasindan
       // gercek dolu say. Tamamen izole — hata olsa bile fiyat/sefer verisini etkilemez.
       if (seatOperators && seatOperators.length) {
@@ -6382,6 +6412,10 @@ async function processObiletTarget(target) {
     const scrapedOperators = new Set();
 
     const targetRouteId = String(target.route_id || "").trim();
+    // Yapi-diff icin: her hedefte SADECE ILK GECERLI GELECEK tarihi bir kez fotografla (bugun degil —
+    // bugunku seferler gun ici kalktikca "kaldirildi" yanlis alarmini onlemek icin strict future).
+    const structureTodayIso = todayIsoInIstanbul();
+    let structureCaptured = false;
     for (let dayIdx = 0; dayIdx < dateList.length; dayIdx++) {
         const journeyDate = dateList[dayIdx];
         // Ayni hatta ardisik tarihler arasinda kucuk bir bekleme — Cloudflare burst tespitini onler.
@@ -6641,6 +6675,15 @@ async function processObiletTarget(target) {
             ).run(normalizedOperator, journey.departureStop || "", journey.arrivalStop || "", now, newPrice, pendingCount, previous.id);
           }
         }
+
+        // AG & KAPASITE DIFF: gunun ham sefer listesinden (TUM firmalar) yapi fotografi + onceki tur ile kiyas.
+        // Fiyat/degisiklik/Telegram mantigina DOKUNMAZ — ayni 'journeys' verisini OKUR, ayri tabloya yazar.
+        // SADECE ilk GELECEK (bugunden sonraki) tarihi bir kez: bugun ise gun ici kalkan seferler "kaldirildi"
+        // yanlis alarmi uretir; gelecek tarihte tum seferler sabit. Cogullamayi da onler (tek tarih).
+        if (STRUCTURE_DIFF_ENABLED && !structureCaptured && journeyDate > structureTodayIso && Array.isArray(journeys) && journeys.length) {
+          try { captureStructureSnapshot(target, journeyDate, journeys); structureCaptured = true; }
+          catch (e) { if (DEBUG_OBILET_PRICE) console.warn(`[Yapi Diff] kanca hatasi: ${e.message}`); }
+        }
     }
 
     if (trackedJourneys.length === 0) {
@@ -6739,6 +6782,142 @@ async function acquireObiletLock(timeoutMs = 120000) {
 }
 function releaseObiletLock() {
   obiletTaskRunning = false;
+}
+
+// ===================== AG & KAPASITE DIFF (yapisal degisiklik tespiti) =====================
+// FIYAT/DEGISIKLIK/TELEGRAM mantigina DOKUNMAZ. Her taramada bir rotanin yapi fotografini alir,
+// onceki tur ile kiyaslar; yeni rakip / yeni-kalkan sefer / kapasite / ek arac / saat kaydirmasini
+// obilet_structure_changes'a yazar (sag-ust sticky bildirim buradan beslenir).
+const STRUCTURE_DIFF_ENABLED = true;
+
+// HH:MM -> dakika.
+function hhmmToMin(t) {
+  const m = String(t || "").match(/^(\d{2}):(\d{2})$/);
+  return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : -1;
+}
+
+// Ham sefer listesinden yapi fotografi: { ops: { [firma]: { [saat]: {seats, buses} } }, hasBusInfo }.
+function buildStructureSnapshot(journeys) {
+  const ops = {};
+  let hasBusInfo = false;
+  for (const j of (journeys || [])) {
+    const op = String(normalizeObiletOperatorName(j.operator) || j.operator || "").trim();
+    const t = String(j.time || "").trim();
+    if (!op || !/^\d{2}:\d{2}$/.test(t)) continue;
+    if (!ops[op]) ops[op] = {};
+    const seats = Number(j.totalSeats);
+    const buses = Number(j.busCount);
+    if (Number.isFinite(buses)) hasBusInfo = true; // busCount yalnizca XHR path'te var (DOM fallback'te yok)
+    const prev = ops[op][t];
+    ops[op][t] = {
+      seats: Math.max(Number.isFinite(seats) && seats > 0 ? seats : 0, prev ? prev.seats : 0),
+      buses: Math.max(Number.isFinite(buses) && buses > 0 ? buses : 1, prev ? prev.buses : 1),
+    };
+  }
+  return { ops, hasBusInfo };
+}
+
+// Fotograftaki toplam sefer (firma×saat) sayisi — kismi-tarama korumasi icin.
+function countSnapshotDepartures(snap) {
+  let n = 0;
+  const ops = (snap && snap.ops) || {};
+  for (const op of Object.keys(ops)) n += Object.keys(ops[op]).length;
+  return n;
+}
+
+// Iki fotograf arasi yapisal farklar. [{type, operator, message}]
+function computeStructureDiff(prev, cur, routeLabel) {
+  const changes = [];
+  const prevOps = (prev && prev.ops) || {};
+  const curOps = (cur && cur.ops) || {};
+  const prevNames = new Set(Object.keys(prevOps));
+  const curNames = new Set(Object.keys(curOps));
+
+  for (const op of curNames) if (!prevNames.has(op)) {
+    changes.push({ type: "new_operator", operator: op, message: `${routeLabel}: ${op} bu hatta GİRDİ (yeni rakip)` });
+  }
+  for (const op of prevNames) if (!curNames.has(op)) {
+    changes.push({ type: "removed_operator", operator: op, message: `${routeLabel}: ${op} bu hattan ÇEKİLDİ` });
+  }
+
+  for (const op of curNames) {
+    if (!prevNames.has(op)) continue; // yeni firmayi ustte bildirdik
+    const pT = prevOps[op] || {}, cT = curOps[op] || {};
+    const added = Object.keys(cT).filter((t) => !pT[t]);
+    const removed = Object.keys(pT).filter((t) => !cT[t]);
+
+    // Saat kaydirma: kaldirilan + eklenen ±25 dk icinde eslesiyorsa "kaydirma".
+    const usedAdd = new Set(), usedRem = new Set();
+    for (const rt of removed) {
+      let best = null, bestDiff = 26;
+      for (const at of added) {
+        if (usedAdd.has(at)) continue;
+        const d = Math.abs(hhmmToMin(at) - hhmmToMin(rt));
+        if (d > 0 && d <= 25 && d < bestDiff) { best = at; bestDiff = d; }
+      }
+      if (best) { usedRem.add(rt); usedAdd.add(best);
+        changes.push({ type: "time_shift", operator: op, message: `${routeLabel}: ${op} ${rt} seferini ${best}'e KAYDIRDI` });
+      }
+    }
+    for (const at of added) if (!usedAdd.has(at)) {
+      changes.push({ type: "new_departure", operator: op, message: `${routeLabel}: ${op} ${at} seferi EKLEDİ` });
+    }
+    for (const rt of removed) if (!usedRem.has(rt)) {
+      changes.push({ type: "removed_departure", operator: op, message: `${routeLabel}: ${op} ${rt} seferini KALDIRDI` });
+    }
+    // Ayni saatte kapasite / ek arac.
+    for (const t of Object.keys(cT)) {
+      if (!pT[t]) continue;
+      const ps = pT[t].seats, cs = cT[t].seats, pb = pT[t].buses, cb = cT[t].buses;
+      if (ps > 0 && cs > 0 && cs !== ps) {
+        changes.push({ type: cs > ps ? "capacity_up" : "capacity_down", operator: op,
+          message: `${routeLabel}: ${op} ${t} kapasite ${ps} → ${cs} koltuk` });
+      }
+      // Ek arac SADECE iki fotograf da busCount tasiyorsa (XHR path) — DOM fallback'te busCount=1 varsayilir,
+      // DOM->XHR gecisi yanlis "ek arac" uretmesin diye.
+      if (cb > pb && prev && prev.hasBusInfo && cur && cur.hasBusInfo) {
+        changes.push({ type: "extra_bus", operator: op, message: `${routeLabel}: ${op} ${t} seferine EK ARAÇ koydu (${cb} otobüs)` });
+      }
+    }
+  }
+  return changes;
+}
+
+// Bir gunun ham seferlerinden yapi fotografini al, onceki tur ile kiyasla, farklari kaydet.
+function captureStructureSnapshot(target, journeyDate, journeys) {
+  if (!STRUCTURE_DIFF_ENABLED) return;
+  if (!Array.isArray(journeys) || journeys.length === 0) return; // bos/basarisiz tarama -> dokunma
+  const cur = buildStructureSnapshot(journeys);
+  const curCount = Object.keys(cur.ops).length;
+  if (curCount === 0) return;
+  const routeLabel = `${String(target.origin || "").trim()} → ${String(target.destination || "").trim()}`;
+  const now = nowStamp();
+
+  const row = db.prepare("SELECT snapshot_json FROM obilet_route_structure WHERE target_id=? AND journey_date=?").get(target.id, journeyDate);
+  let prev = null;
+  if (row && row.snapshot_json) { try { prev = JSON.parse(row.snapshot_json); } catch (e) { prev = null; } }
+
+  if (prev && prev.ops) {
+    // KISMI/BASARISIZ TARAMA KORUMASI: toplam SEFER sayisi oncekinin %60'indan azsa DIFF ETME + fotografi BOZMA.
+    // Ani buyuk kayip (Cloudflare'in eksik dondurdugu tur) = scrape hatasi, gercek tarife degisikligi degil.
+    // Sefer-sayisi bazli (operator-sayisi degil) — boylece "2 firmadan 1'i dustu" veya "duraklar inceldi" de yakalanir.
+    const prevDep = countSnapshotDepartures(prev), curDep = countSnapshotDepartures(cur);
+    if (prevDep > 0 && curDep < prevDep * 0.6) {
+      console.log(`[Yapi Diff] ${routeLabel} kismi tarama (${curDep}/${prevDep} sefer) — atlandi.`);
+      return;
+    }
+    const diffs = computeStructureDiff(prev, cur, routeLabel);
+    if (diffs.length) {
+      const ins = db.prepare("INSERT INTO obilet_structure_changes (target_id, journey_date, route_label, change_type, operator, message, detected_at, is_read) VALUES (?,?,?,?,?,?,?,0)");
+      const insMany = db.transaction((list) => { for (const c of list) ins.run(target.id, journeyDate, routeLabel, c.type, c.operator || "", c.message, now); });
+      insMany(diffs);
+      console.log(`[Yapi Diff] ${routeLabel}: ${diffs.length} yapisal degisiklik kaydedildi.`);
+    }
+  }
+  // Fotografi guncelle (ilk kez -> sadece kaydet, diff yok; normal tur -> tazele).
+  db.prepare(`INSERT INTO obilet_route_structure (target_id, journey_date, snapshot_json, updated_at) VALUES (?,?,?,?)
+    ON CONFLICT(target_id, journey_date) DO UPDATE SET snapshot_json=excluded.snapshot_json, updated_at=excluded.updated_at`)
+    .run(target.id, journeyDate, JSON.stringify(cur), now);
 }
 
 // oBilet Fiyat Senkronizasyonu Arka Plan Görevi (Tüm Hatlar)
@@ -8659,6 +8838,19 @@ app.post("/api/obilet/discover-routes", requireAuth, requireAdmin, (req, res) =>
     res.json({ ok: true, started: true, totalServices: before, note: "Kesif arka planda basladi; birkac dakika sonra Sefer Takip'te gorunur." });
   } catch (error) {
     res.status(500).json({ message: error.message || "Kesif basarisiz." });
+  }
+});
+
+// AG & KAPASITE DIFF: son yapisal degisiklikler (sag-ust sticky bildirim bunu 60 sn'de bir yoklar).
+app.get("/api/obilet/structure-changes/recent", requireAuth, (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit || "50", 10) || 50, 200);
+    const rows = db.prepare(
+      "SELECT id, target_id, journey_date, route_label, change_type, operator, message, detected_at FROM obilet_structure_changes ORDER BY id DESC LIMIT ?"
+    ).all(limit);
+    res.json({ ok: true, changes: rows });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Değişiklikler alınamadı." });
   }
 });
 

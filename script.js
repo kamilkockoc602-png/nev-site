@@ -179,6 +179,8 @@ const state = {
   notifPollTimer: null,
   lastPriceChangeId: 0,
   priceToastReady: false,
+  lastStructureChangeId: 0,
+  structureToastReady: false,
   theme: localStorage.getItem(THEME_KEY) || "light",
   lastOcrPairs: [],
   lastOcrOrigin: "",
@@ -2808,7 +2810,9 @@ async function refreshNotificationsData() {
 // ===== Fiyat degisim toast bildirimleri (sag ust kose) =====
 // oBilet fiyat degisiklikleri obilet_price_history tablosuna yaziliyor (taramada).
 // Burada SADECE okuyoruz — tarama/tespit/Telegram mantigina dokunmuyoruz.
-function showToast({ head, route, oldPrice, newPrice, kind, ttl = 9000 }) {
+// sticky=true (varsayilan): OTOMATIK KAYBOLMAZ — kullanici × ile / uzerine tiklayarak kapatir.
+// Kullanici tercihi: bildirim sagda kalsin, kacirilmasin, "geliyor mu" test edilebilsin.
+function showToast({ head, route, body, oldPrice, newPrice, kind, sticky = true, ttl = 9000 }) {
   const host = document.getElementById("toastHost");
   if (!host) return;
   const el = document.createElement("div");
@@ -2818,10 +2822,11 @@ function showToast({ head, route, oldPrice, newPrice, kind, ttl = 9000 }) {
     ? `<div class="toast-price"><span class="old">${escapeHtml(oldPrice)}₺</span><span class="arw">${arrow}</span><span class="new">${escapeHtml(newPrice)}₺</span></div>`
     : "";
   el.innerHTML = `
-    <div class="toast-head"><span>${escapeHtml(head || "Fiyat değişti")}</span><span class="toast-x">×</span></div>
+    <div class="toast-head"><span>${escapeHtml(head || "Bildirim")}</span><span class="toast-x">×</span></div>
     ${route ? `<div class="toast-route">${route}</div>` : ""}
+    ${body ? `<div class="toast-body">${body}</div>` : ""}
     ${priceHtml}
-    <div class="toast-bar" style="animation-duration:${ttl}ms"></div>
+    ${sticky ? "" : `<div class="toast-bar" style="animation-duration:${ttl}ms"></div>`}
   `;
   const dismiss = () => {
     if (el.dataset.leaving) return;
@@ -2831,9 +2836,9 @@ function showToast({ head, route, oldPrice, newPrice, kind, ttl = 9000 }) {
   };
   el.addEventListener("click", dismiss);
   host.appendChild(el);
-  // En fazla 5 toast dursun (eskiyi at).
-  while (host.children.length > 5) host.firstElementChild.remove();
-  setTimeout(dismiss, ttl);
+  // En fazla 6 bildirim ekranda dursun (en eskiyi at).
+  while (host.children.length > 6) host.firstElementChild.remove();
+  if (!sticky) setTimeout(dismiss, ttl);
 }
 
 // Ilk girişte mevcut en yeni degisim id'sini baz al — eski degisimler icin toast atma.
@@ -2886,7 +2891,64 @@ async function checkPriceChangeToasts() {
     });
   });
   if (hidden > 0) {
-    showToast({ head: `+${hidden} fiyat değişimi daha`, kind: "info", ttl: 7000 });
+    showToast({ head: `+${hidden} fiyat değişimi daha`, kind: "info" });
+  }
+}
+
+// ===== AĞ & KAPASİTE DİFF bildirimleri (yapısal değişiklik) =====
+function stStructHead(type) {
+  switch (type) {
+    case "new_operator": return "Yeni rakip";
+    case "removed_operator": return "Rakip çekildi";
+    case "new_departure": return "Yeni sefer";
+    case "removed_departure": return "Sefer kaldırıldı";
+    case "capacity_up": return "Kapasite arttı";
+    case "capacity_down": return "Kapasite azaldı";
+    case "extra_bus": return "Ek araç";
+    case "time_shift": return "Saat kaydırma";
+    default: return "Ağ değişikliği";
+  }
+}
+
+// İlk girişte mevcut en yeni yapı-değişim id'sini baz al — eskiler için toast atma.
+async function initStructureChangeBaseline() {
+  try {
+    const data = await apiFetch("/api/obilet/structure-changes/recent?limit=1");
+    const rows = data && Array.isArray(data.changes) ? data.changes : [];
+    state.lastStructureChangeId = rows.length ? Number(rows[0].id) || 0 : 0;
+  } catch {
+    state.lastStructureChangeId = 0;
+  }
+  state.structureToastReady = true;
+}
+
+// Poller her dolduğunda: yeni yapısal değişiklik varsa STICKY toast göster.
+async function checkStructureChangeToasts() {
+  if (!state.structureToastReady) return;
+  let data;
+  try {
+    data = await apiFetch("/api/obilet/structure-changes/recent?limit=50");
+  } catch {
+    return;
+  }
+  const rows = data && Array.isArray(data.changes) ? data.changes : [];
+  if (!rows.length) return;
+  const fresh = rows
+    .filter((r) => (Number(r.id) || 0) > state.lastStructureChangeId)
+    .sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+  state.lastStructureChangeId = Math.max(state.lastStructureChangeId, ...rows.map((r) => Number(r.id) || 0));
+  if (!fresh.length) return;
+  const show = fresh.slice(-5);
+  const hidden = fresh.length - show.length;
+  show.forEach((r) => {
+    const type = String(r.change_type || "");
+    // Tehdit (yeni rakip / ek araç / saat kaydırma / kapasite-sefer artışı) kırmızı; fırsat (çekildi/kaldırıldı) yeşil.
+    const kind = /new_operator|extra_bus|time_shift|capacity_up|new_departure/.test(type) ? "up"
+      : /removed_operator|removed_departure|capacity_down/.test(type) ? "down" : "info";
+    showToast({ head: stStructHead(type), body: escapeHtml(String(r.message || "")), kind, sticky: true });
+  });
+  if (hidden > 0) {
+    showToast({ head: `+${hidden} yapısal değişiklik daha`, kind: "info", sticky: true });
   }
 }
 
@@ -2898,6 +2960,7 @@ function startNotificationPolling() {
       refreshPricingUploadsData().catch(() => null);
       refreshPricesData().catch(() => null);
       checkPriceChangeToasts().catch(() => null);
+      checkStructureChangeToasts().catch(() => null);
     }
   }, 60000);
 }
@@ -3296,6 +3359,7 @@ async function handleLogin(username, password) {
     await refreshNotificationsData();
     await renderControlIntegrationPanel().catch(() => null);
     await initPriceChangeBaseline();
+    await initStructureChangeBaseline();
     startNotificationPolling();
   } catch (error) {
     showMessage(error.message || "Sign-in failed.");
@@ -3316,6 +3380,7 @@ async function verifySession() {
     await refreshNotificationsData();
     await renderControlIntegrationPanel().catch(() => null);
     await initPriceChangeBaseline();
+    await initStructureChangeBaseline();
     startNotificationPolling();
   } catch {
     setToken("");
