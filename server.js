@@ -6811,15 +6811,6 @@ function isOccStale(ts, maxMinutes = 60) {
   if (!Number.isFinite(a) || !Number.isFinite(b)) return true; // damga bozuksa bayat say (liste devralsin)
   return (b - a) > maxMinutes * 60 * 1000;
 }
-// Fiyat taramasi bosalana kadar bekle (kilidi ALMADAN — sadece izler). CAKISMA onleme: Doluluk İşçisi
-// oBilet'e vurmadan once fiyat taramasi mesgulse bekler. Ac kalmasin diye maxMs sonra yine de devam eder.
-async function waitForObiletIdle(maxMs = 120000) {
-  const start = Date.now();
-  while (obiletTaskRunning && (Date.now() - start) < maxMs) {
-    await new Promise((r) => setTimeout(r, 2000));
-  }
-  return !obiletTaskRunning;
-}
 
 // ===================== AG & KAPASITE DIFF (yapisal degisiklik tespiti) =====================
 // FIYAT/DEGISIKLIK/TELEGRAM mantigina DOKUNMAZ. Her taramada bir rotanin yapi fotografini alir,
@@ -7005,7 +6996,25 @@ async function refreshObiletPricesTask() {
       // Cloudflare bot korumasını önlemek için hatlar arası 20 sn bekleme (ilk hat haric).
       if (!firstTarget) {
         console.log(`[Takip Görevi] Cloudflare koruması için 20 saniye bekleniyor...`);
+        // KILIDI GECICI BIRAK: bu 20sn'lik pencerede Doluluk İşçisi / Ana Sefer Kesfi kilidi alabilsin.
+        // ONCEDEN kilit TUM TUR (tum hatlar) boyunca tek seferde tutuluyordu -> digerleri PRATIKTE HIC
+        // calisamiyor, 429/Cloudflare rate-limit riskini artiriyordu (canli tespit edildi). FIYAT
+        // HESAPLAMA/DEGISIKLIK TESPITI/TELEGRAM MANTIGINA DOKUNULMADI — SADECE kilit yonetimi (ne zaman
+        // tutulup birakildigi) degisti, processObiletTarget'in icine hic dokunulmadi.
+        releaseObiletLock();
         await new Promise(resolve => setTimeout(resolve, 20000));
+        // Kilidi GERI AL — GERCEKTEN alinana kadar bekle (occupancy/route-discovery bundan COK kisa surer,
+        // genelde <2dk). "Zorla ele gecirme" KESINLIKLE YOK: acquireObiletLock'un kendi atomic check-then-set
+        // mekanizmasi kullanilir (baskasinin kilidini calip onun sonraki release'i bizim kilidimizi
+        // yanlislikla SIFIRLAMASI riski sifir). 5 dk'da alinamazsa (anomali) SADECE uyari log basip TEKRAR
+        // dener — occupancy isci VE route-kesfi her yolda (try/finally) kilidi kesin biraktigi icin
+        // (dogrulandi) sonsuz bekleme guvenli; fiyat taramasi asla "kilidi zorla ele gecirmez", sadece
+        // sabirla bekler.
+        let reacquired = await acquireObiletLock(300000);
+        while (!reacquired) {
+          console.warn(`[Takip Görevi] UYARI: kilit 5 dk'da alinamadi (Doluluk İşçisi/Ana Sefer Kesfi uzun surebilir) — beklemeye devam ediliyor.`);
+          reacquired = await acquireObiletLock(60000);
+        }
       }
       firstTarget = false;
       await processObiletTarget(target);
@@ -7469,7 +7478,12 @@ function countSeatsFromSeferJson(json) {
 // (GET HTML doner). Sayfa oturumunda (cf_bm cookie ile) fetch. Basarisizsa null.
 // Cloudflare/gecici hataya karsi 2 deneme (arada bekleme).
 let __seatDiagCount = 0; // TANI: /json/sefer neden bos donuyor — ilk birkac hatayi logla, sonra sus (spam onleme).
+// 429 (Cloudflare "cok fazla istek") CANLI TESPIT EDILDI. Circuit breaker: 429 gorulunce ISRAR ETME (retry
+// yapma), bu zaman damgasina kadar YENI istek ATMA (soguma). occupancyForHatDate bu sureyi kontrol edip
+// kalan seferleri atlar -> Cloudflare'i daha da kizdirmayiz, bir sonraki turda sakin sakin devam ederiz.
+let __obiletSeatRateLimitedUntil = 0;
 async function fetchSeferRealSeats(page, seferId) {
+  if (Date.now() < __obiletSeatRateLimitedUntil) return null; // soguma bitmedi -> hic deneme
   const doFetch = () => page.evaluate(async (sid) => {
     try {
       const r = await fetch(`/json/sefer/${sid}`, {
@@ -7494,6 +7508,14 @@ async function fetchSeferRealSeats(page, seferId) {
         const busStr = typeof (json?.bus) === "string" ? json.bus : (typeof json?.data?.bus === "string" ? json.data.bus : null);
         console.log(`[Doluluk TANI] sefer/${seferId}: JSON geldi ama koltuk YOK (partial=${json?.["is-partial-layout"] ?? json?.data?.["is-partial-layout"]}, busLen=${busStr ? busStr.length : "yok"}, keys=${Object.keys(json || {}).slice(0, 8).join(",")})`);
       }
+    } else if (json && json.__html && json.__status === 429) {
+      // CLOUDFLARE RATE-LIMIT: ISRAR ETME. 2. denemeyi de yapma, 30sn soguma baslat, bu tarihin kalan
+      // seferlerini de atlat (occupancyForHatDate kontrol eder). Boylece daha da kizdirmayiz.
+      __obiletSeatRateLimitedUntil = Date.now() + 30000;
+      if (__seatDiagCount < 8) { __seatDiagCount++;
+        console.log(`[Doluluk TANI] sefer/${seferId}: 429 RATE LIMIT -> 30sn soguma, kalan seferler bu turda atlanacak.`);
+      }
+      return null;
     } else if (json && __seatDiagCount < 8) { __seatDiagCount++;
       const why = json.__error ? `ERROR ${json.__error}`
         : json.__html ? `HTML/Cloudflare? status=${json.__status} ct=${json.__ct} snip=${JSON.stringify(json.__snip)}`
@@ -8961,8 +8983,9 @@ let occupancyWorkerRunning = false;
 // ACIK (2026-07): Doluluk artik AYRI isci tarafindan GERCEK koltuk haritasindan saglanir (7 gun). Fiyat
 // taramasi koltuk cekmez -> TAM HIZLI. Isci gecis seferlerinin (rakip baska sehirden gelip gecen) LISTE'de
 // eksik gozuken dolulugunu duzeltir. Onceki "yanlis otobus" sorunu TIKLAMA yuzundendi; artik tiklamasiz
-// dogrudan POST (fetchSeferSeatsWithBody) ile ceker. CAKISMA: her hattan once fiyat taramasi bosalana kadar
-// bekler (waitForObiletIdle); yazdigi 'gercek' degeri fiyat taramasinin 'liste'siyle EZILMEZ (koruma+bayatlik).
+// dogrudan POST (fetchSeferRealSeats) ile ceker. CAKISMA: her hattan once obiletTaskRunning KILIDINI ALIR
+// (fiyat taramasi VE Ana Sefer Kesfi ile ASLA ayni anda oBilet'e vurmaz -> 429/Cloudflare rate-limit riski
+// duser); yazdigi 'gercek' degeri fiyat taramasinin 'liste'siyle EZILMEZ (koruma+bayatlik).
 const OCCUPANCY_WORKER_ENABLED = true;
 const OCCUPANCY_NEAR_DAYS = 7;          // 1 hafta (bugun + 6 gun)
 const OCCUPANCY_WORKER_INTERVAL_MS = 15 * 60 * 1000; // 15 dk
@@ -9037,13 +9060,16 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
     if (!infos.length) { console.log(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso}: takip edilen sefer yok.`); return []; }
 
     // Seferleri oku: TIKLAMASIZ dogrudan POST (/json/sefer/{id}, body "{}") — fetchSeferRealSeats. Sefer id
-    // ile DOGRUDAN cekildigi icin eski "yanlis otobus" riski YOK. Cloudflare burst'unu onlemek icin arada bekleme.
-    let viaFetch = 0;
+    // ile DOGRUDAN cekildigi icin eski "yanlis otobus" riski YOK. Cloudflare burst'unu onlemek icin arada bekleme
+    // (900ms — 500ms canli 429/rate-limit tetikledi). Rate-limit aktifse (circuit breaker) kalan seferleri
+    // hic denemeden atla -> Cloudflare'i daha da kizdirmayiz, bir sonraki turda sakince devam ederiz.
+    let viaFetch = 0, viaRateLimited = 0;
     for (const info of infos) {
       if (seatById.has(info.id)) continue;
+      if (Date.now() < __obiletSeatRateLimitedUntil) { viaRateLimited++; continue; }
       const c = await fetchSeferRealSeats(page, info.id);
       if (c) { seatById.set(info.id, c); viaFetch++; }
-      await new Promise((r) => setTimeout(r, 500)); // Cloudflare throttle
+      await new Promise((r) => setTimeout(r, 900)); // Cloudflare throttle
     }
 
     // Ayni operator+saat icin birden cok listeleme olabilir -> en dolu (gercek otobus) alinir.
@@ -9082,7 +9108,7 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
       if (c) okList.push(`${info.time}=${c.sold}/${c.total}`);
       else eksikList.push(info.time);
     }
-    console.log(`[Doluluk İşçisi]   ${dateIso}: ${ok}/${seenT.size} sefer (dogrudan fetch=${viaFetch})`);
+    console.log(`[Doluluk İşçisi]   ${dateIso}: ${ok}/${seenT.size} sefer (dogrudan fetch=${viaFetch}${viaRateLimited ? `, rate-limit atlandi=${viaRateLimited}` : ""})`);
     console.log(`[Doluluk İşçisi]     ${okList.join("  ") || "(yok)"}`);
     if (eksikList.length) console.log(`[Doluluk İşçisi]     EKSIK: ${eksikList.join(", ")}`);
     return written;
@@ -9093,9 +9119,9 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
 
 async function runOccupancyWorker() {
   if (!OCCUPANCY_WORKER_ENABLED || occupancyWorkerRunning) return;
-  // NOT: Fiyat taramasi SUREKLI calisiyor; "bos iken calis" dersek isci hic calismaz.
-  // Bu yuzden AYNI ANDA calisir (kendi sayfasi, ayni tarayici/oturum). NAZIK tempo ile
-  // (hatlar arasi bekleme) fiyat taramasini bozmadan arka planda ilerler.
+  // GUNCEL (2026-07, 429 rate-limit fixi sonrasi): Fiyat taramasi artik hatlar arasindaki 20sn'lik
+  // Cloudflare beklemesinde kilidi GECICI BIRAKIYOR (bkz. refreshObiletPricesTask) — bu isci VE Ana
+  // Sefer Kesfi o pencerelerde kilidi alip calisir, boylece HICBIRI oBilet'e AYNI ANDA vurmaz.
   occupancyWorkerRunning = true;
   const t0 = Date.now();
   let doneHats = 0;
@@ -9113,12 +9139,16 @@ async function runOccupancyWorker() {
       console.log(`[Doluluk İşçisi] ===== HAT BASLADI: ${hat} (${ops.join(",")}) — ${dates.length} gun =====`);
       let hatOk = 0;
       for (const dateIso of dates) {
-        // CAKISMA ONLEME: fiyat taramasi mesgulse bosalana kadar bekle (ac kalmamak icin en fazla 2 dk).
-        await waitForObiletIdle(120000);
+        // CAKISMA ONLEME: kilidi AL (fiyat taramasi VE Ana Sefer Kesfi ile AYNI ANDA oBilet'e vurmayi
+        // onler). 429 (Cloudflare rate-limit) canli tespit edildi: ayni IP'den birden fazla kaynak
+        // paralel istek atinca tetikleniyordu. Kilit sayesinde toplam istek TEK kaynaktan gider.
+        const locked = await acquireObiletLock(120000);
+        if (!locked) { console.warn(`[Doluluk İşçisi]   ${dateIso}: kilit alinamadi (2 dk), atlandi.`); continue; }
         try {
           const w = await occupancyForHatDate(target, routeId, ops, dateIso);
           hatOk += (w || []).length;
         } catch (e) { console.warn(`[Doluluk İşçisi]   ${dateIso} hata: ${e.message}`); }
+        finally { releaseObiletLock(); }
         await new Promise((r) => setTimeout(r, 4000)); // tarihler arasi nazik bekleme
       }
       console.log(`[Doluluk İşçisi] ===== HAT BITTI: ${hat} — toplam ${hatOk} sefer GERCEK yazildi =====`);
