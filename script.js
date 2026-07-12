@@ -116,7 +116,6 @@ const dom = {
   notifList: document.getElementById("notifList"),
   notifEmpty: document.getElementById("notifEmpty"),
   notifReadAllBtn: document.getElementById("notifReadAllBtn"),
-  notifTestBtn: document.getElementById("notifTestBtn"),
   themeToggleBtn: document.getElementById("themeToggleBtn"),
   themeLabel: document.getElementById("themeLabel"),
   ocrOriginInput: document.getElementById("ocrOriginInput"),
@@ -178,10 +177,8 @@ const state = {
   pricingUploads: [],
   notifications: [],
   notifPollTimer: null,
-  lastPriceChangeId: 0,
-  priceToastReady: false,
-  lastStructureChangeId: 0,
-  structureToastReady: false,
+  // Bu oturumda ekranda GOSTERILMIS bildirim id'leri (dupe engeller); "gorüldü" kalici takip sunucuda.
+  shownToastIds: { price: new Set(), structure: new Set() },
   theme: localStorage.getItem(THEME_KEY) || "light",
   lastOcrPairs: [],
   lastOcrOrigin: "",
@@ -1353,9 +1350,6 @@ function render() {
 
   dom.loginView.classList.remove("active");
   dom.portalView.classList.add("active");
-
-  // "Test Bildirimi" butonu SADECE admin'e görünür (diğer kullanıcılar görmez).
-  if (dom.notifTestBtn) dom.notifTestBtn.classList.toggle("hidden", !state.currentUser.isAdmin);
 
   // Eski currentUserLabel (varsa hala bos durur)
   if (dom.currentUserLabel) {
@@ -2816,7 +2810,7 @@ async function refreshNotificationsData() {
 // Burada SADECE okuyoruz — tarama/tespit/Telegram mantigina dokunmuyoruz.
 // sticky=true (varsayilan): OTOMATIK KAYBOLMAZ — kullanici × ile / uzerine tiklayarak kapatir.
 // Kullanici tercihi: bildirim sagda kalsin, kacirilmasin, "geliyor mu" test edilebilsin.
-function showToast({ head, route, body, oldPrice, newPrice, kind, sticky = true, ttl = 9000 }) {
+function showToast({ head, route, body, oldPrice, newPrice, kind, sticky = true, ttl = 9000, onDismiss }) {
   const host = document.getElementById("toastHost");
   if (!host) return;
   const el = document.createElement("div");
@@ -2832,81 +2826,28 @@ function showToast({ head, route, body, oldPrice, newPrice, kind, sticky = true,
     ${priceHtml}
     ${sticky ? "" : `<div class="toast-bar" style="animation-duration:${ttl}ms"></div>`}
   `;
-  const dismiss = () => {
+  const dismiss = (userClosed) => {
     if (el.dataset.leaving) return;
     el.dataset.leaving = "1";
     el.classList.add("leaving");
     setTimeout(() => el.remove(), 260);
+    // Kullanici kapatinca "gorüldü" bildir (sunucuya). Otomatik kaybolmada (sticky degil) tetiklenmez.
+    if (userClosed && typeof onDismiss === "function") { try { onDismiss(); } catch {} }
   };
-  el.addEventListener("click", dismiss);
+  el.addEventListener("click", () => dismiss(true));
   host.appendChild(el);
-  // En fazla 6 bildirim ekranda dursun (en eskiyi at).
+  // En fazla 6 bildirim ekranda dursun (en eskiyi at — kapatilmamis olsa da; sunucu pointer'i ilerlemedigi
+  // icin bir sonraki acilista tekrar gelir).
   while (host.children.length > 6) host.firstElementChild.remove();
-  if (!sticky) setTimeout(dismiss, ttl);
+  if (!sticky) setTimeout(() => dismiss(false), ttl);
 }
 
-// Baz: localStorage'daki SON GORULEN id -> aradan gecen (kacirilan) degisimler de toast olur (oturumlar arasi kalici).
-// Ilk kez (kayit yok): en yeni 3 degisimi goster (calistigini kanitla, bogmadan); sonrasini localStorage yonetir.
-async function initPriceChangeBaseline() {
-  const saved = Number(localStorage.getItem("lastPriceChangeId") || "0") || 0;
-  if (saved > 0) {
-    state.lastPriceChangeId = saved;
-  } else {
-    try {
-      const data = await apiFetch("/api/obilet/price-history?limit=4");
-      const rows = data && Array.isArray(data.history) ? data.history : [];
-      state.lastPriceChangeId = rows.length >= 4 ? (Number(rows[3].id) || 0) : 0; // en yeni 3'u toast et
-    } catch {
-      state.lastPriceChangeId = 0;
-    }
-  }
-  state.priceToastReady = true;
-}
+// ===== KULLANICI-BAZLI BİLDİRİM FEED'i (sağ-üst sticky) =====
+// Sunucu, BU kullanıcının henüz görmediği (id > kendi pointer'ı) fiyat + yapısal değişimleri döndürür.
+// Kullanıcı bir toast'ı kapatınca markToastSeen o kind'in pointer'ını ilerletir (kalıcı, sunucuda, kullanıcı
+// bazlı). Kapatılmayanlar (reload/yeni oturum dahil) tekrar gelir. Giriş yapmamış kullanıcı, giriş yapınca
+// biriken değişimleri görür. shownToastIds = bu oturumda gösterilenler (aynı toast'ı tekrar basmamak için).
 
-// Poller her doldugunda: yeni fiyat degisimi (id > son gorulen) varsa toast göster.
-async function checkPriceChangeToasts() {
-  if (!state.priceToastReady) return;
-  let data;
-  try {
-    data = await apiFetch("/api/obilet/price-history?limit=50");
-  } catch {
-    return;
-  }
-  const rows = data && Array.isArray(data.history) ? data.history : [];
-  if (!rows.length) return;
-  const fresh = rows
-    .filter((r) => (Number(r.id) || 0) > state.lastPriceChangeId)
-    .sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
-  // Son görülen id'yi her durumda güncelle (yenisi yoksa da) + oturumlar arası kalıcı sakla.
-  state.lastPriceChangeId = Math.max(state.lastPriceChangeId, ...rows.map((r) => Number(r.id) || 0));
-  try { localStorage.setItem("lastPriceChangeId", String(state.lastPriceChangeId)); } catch {}
-  if (!fresh.length) return;
-  // Çok değişimde ekranı boğmayalım — en yeni 5'ini göster, kalanı özetle.
-  const show = fresh.slice(-5);
-  const hidden = fresh.length - show.length;
-  show.forEach((r) => {
-    const oldP = Math.round(Number(r.old_price) || 0);
-    const newP = Math.round(Number(r.new_price) || 0);
-    const kind = newP > oldP ? "up" : newP < oldP ? "down" : "info";
-    const op = escapeHtml(String(r.operator || "").trim() || "-");
-    const from = escapeHtml(String(r.origin || "").trim());
-    const to = escapeHtml(String(r.destination || "").trim());
-    const when = escapeHtml(String(r.departure_time || "").trim());
-    const day = escapeHtml(String(r.journey_date || "").trim());
-    showToast({
-      head: "Fiyat değişti",
-      route: `<b>${op}</b> · ${from} → ${to}<br>${day} ${when} kalkış`,
-      oldPrice: oldP,
-      newPrice: newP,
-      kind,
-    });
-  });
-  if (hidden > 0) {
-    showToast({ head: `+${hidden} fiyat değişimi daha`, kind: "info" });
-  }
-}
-
-// ===== AĞ & KAPASİTE DİFF bildirimleri (yapısal değişiklik) =====
 function stStructHead(type) {
   switch (type) {
     case "new_operator": return "Yeni rakip";
@@ -2921,51 +2862,53 @@ function stStructHead(type) {
   }
 }
 
-// Baz: localStorage'daki son görülen id (oturumlar arası kalıcı); ilk kez en yeni 3'ü göster.
-async function initStructureChangeBaseline() {
-  const saved = Number(localStorage.getItem("lastStructureChangeId") || "0") || 0;
-  if (saved > 0) {
-    state.lastStructureChangeId = saved;
-  } else {
-    try {
-      const data = await apiFetch("/api/obilet/structure-changes/recent?limit=4");
-      const rows = data && Array.isArray(data.changes) ? data.changes : [];
-      state.lastStructureChangeId = rows.length >= 4 ? (Number(rows[3].id) || 0) : 0;
-    } catch {
-      state.lastStructureChangeId = 0;
-    }
-  }
-  state.structureToastReady = true;
+async function markToastSeen(kind, id) {
+  try { await apiFetch("/api/obilet/toast-seen", { method: "POST", body: JSON.stringify({ kind, id }) }); }
+  catch { /* sessiz — pointer ilerlemezse bir sonraki turda tekrar gelir */ }
 }
 
-// Poller her dolduğunda: yeni yapısal değişiklik varsa STICKY toast göster.
-async function checkStructureChangeToasts() {
-  if (!state.structureToastReady) return;
+async function checkToastFeed() {
+  if (!state.currentUser) return;
   let data;
-  try {
-    data = await apiFetch("/api/obilet/structure-changes/recent?limit=50");
-  } catch {
-    return;
+  try { data = await apiFetch("/api/obilet/toast-feed"); } catch { return; }
+  if (!data || !data.ok) return;
+
+  // Fiyat değişimleri (eski -> yeni sırayla)
+  for (const r of (Array.isArray(data.price) ? data.price : [])) {
+    const id = Number(r.id) || 0;
+    if (!id || state.shownToastIds.price.has(id)) continue;
+    state.shownToastIds.price.add(id);
+    const oldP = Math.round(Number(r.old_price) || 0);
+    const newP = Math.round(Number(r.new_price) || 0);
+    const kind = newP > oldP ? "up" : newP < oldP ? "down" : "info";
+    const op = escapeHtml(String(r.operator || "").trim() || "-");
+    const from = escapeHtml(String(r.origin || "").trim());
+    const to = escapeHtml(String(r.destination || "").trim());
+    const when = escapeHtml(String(r.departure_time || "").trim());
+    const day = escapeHtml(String(r.journey_date || "").trim());
+    showToast({
+      head: "Fiyat değişti",
+      route: `<b>${op}</b> · ${from} → ${to}<br>${day} ${when} kalkış`,
+      oldPrice: oldP, newPrice: newP, kind, sticky: true,
+      onDismiss: () => markToastSeen("price", id),
+    });
   }
-  const rows = data && Array.isArray(data.changes) ? data.changes : [];
-  if (!rows.length) return;
-  const fresh = rows
-    .filter((r) => (Number(r.id) || 0) > state.lastStructureChangeId)
-    .sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
-  state.lastStructureChangeId = Math.max(state.lastStructureChangeId, ...rows.map((r) => Number(r.id) || 0));
-  try { localStorage.setItem("lastStructureChangeId", String(state.lastStructureChangeId)); } catch {}
-  if (!fresh.length) return;
-  const show = fresh.slice(-5);
-  const hidden = fresh.length - show.length;
-  show.forEach((r) => {
+
+  // Yapısal değişimler (eski -> yeni sırayla)
+  for (const r of (Array.isArray(data.structure) ? data.structure : [])) {
+    const id = Number(r.id) || 0;
+    if (!id || state.shownToastIds.structure.has(id)) continue;
+    state.shownToastIds.structure.add(id);
     const type = String(r.change_type || "");
     // Tehdit (yeni rakip / ek araç / saat kaydırma / kapasite-sefer artışı) kırmızı; fırsat (çekildi/kaldırıldı) yeşil.
     const kind = /new_operator|extra_bus|time_shift|capacity_up|new_departure/.test(type) ? "up"
       : /removed_operator|removed_departure|capacity_down/.test(type) ? "down" : "info";
-    showToast({ head: stStructHead(type), body: escapeHtml(String(r.message || "")), kind, sticky: true });
-  });
-  if (hidden > 0) {
-    showToast({ head: `+${hidden} yapısal değişiklik daha`, kind: "info", sticky: true });
+    showToast({
+      head: stStructHead(type),
+      body: escapeHtml(String(r.message || "")),
+      kind, sticky: true,
+      onDismiss: () => markToastSeen("structure", id),
+    });
   }
 }
 
@@ -2976,8 +2919,7 @@ function startNotificationPolling() {
       refreshNotificationsData().catch(() => null);
       refreshPricingUploadsData().catch(() => null);
       refreshPricesData().catch(() => null);
-      checkPriceChangeToasts().catch(() => null);
-      checkStructureChangeToasts().catch(() => null);
+      checkToastFeed().catch(() => null);
     }
   }, 60000);
 }
@@ -3375,12 +3317,9 @@ async function handleLogin(username, password) {
     await refreshPricingUploadsData();
     await refreshNotificationsData();
     await renderControlIntegrationPanel().catch(() => null);
-    await initPriceChangeBaseline();
-    await initStructureChangeBaseline();
     startNotificationPolling();
-    // Kaçırılan değişimleri 60 sn beklemeden HEMEN göster.
-    checkPriceChangeToasts().catch(() => null);
-    checkStructureChangeToasts().catch(() => null);
+    // Kaçırılan (giriş yapmadığın sırada biriken) değişimleri 60 sn beklemeden HEMEN göster.
+    checkToastFeed().catch(() => null);
   } catch (error) {
     showMessage(error.message || "Sign-in failed.");
   }
@@ -3399,12 +3338,9 @@ async function verifySession() {
     await refreshPricingUploadsData();
     await refreshNotificationsData();
     await renderControlIntegrationPanel().catch(() => null);
-    await initPriceChangeBaseline();
-    await initStructureChangeBaseline();
     startNotificationPolling();
-    // Kaçırılan değişimleri 60 sn beklemeden HEMEN göster.
-    checkPriceChangeToasts().catch(() => null);
-    checkStructureChangeToasts().catch(() => null);
+    // Kaçırılan (giriş yapmadığın sırada biriken) değişimleri 60 sn beklemeden HEMEN göster.
+    checkToastFeed().catch(() => null);
   } catch {
     setToken("");
     state.currentUser = null;
@@ -3965,15 +3901,6 @@ dom.notifReadAllBtn.addEventListener("click", async () => {
     // Sessiz gec.
   }
 });
-
-// TEST BİLDİRİMİ: sağ üstte örnek sticky bildirimler göster (sadece UI — hiçbir veriye dokunmaz).
-if (dom.notifTestBtn) {
-  dom.notifTestBtn.addEventListener("click", () => {
-    showToast({ head: "Fiyat değişti", route: "<b>Niğde Aydoğanlar</b> · Ankara → Adana<br>Test bildirimi", oldPrice: 900, newPrice: 798, kind: "down", sticky: true });
-    showToast({ head: "Fiyat değişti", route: "<b>Enver Geçgel</b> · Adana → Ankara<br>Test bildirimi", oldPrice: 800, newPrice: 900, kind: "up", sticky: true });
-    showToast({ head: "Yeni rakip", body: "Adana → Ankara: Metro Turizm bu hatta GİRDİ (test)", kind: "up", sticky: true });
-  });
-}
 
 dom.themeToggleBtn.addEventListener("click", () => {
   toggleTheme();

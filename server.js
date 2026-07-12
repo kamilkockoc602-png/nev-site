@@ -714,6 +714,18 @@ try { db.exec(`CREATE TABLE IF NOT EXISTS obilet_structure_changes (
 )`); } catch(e) {}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_obilet_structure_changes_id ON obilet_structure_changes(id DESC)"); } catch(e) {}
 
+// KULLANICI-BAZLI bildirim "gorüldü" takibi: her kullanici (user_id) icin, her tur (kind: 'price'|'structure')
+// EN SON GORDUGU degisim id'si. Boylece bir kullanici giris yapmadigi surece degisimleri kacirmaz; giris
+// yapinca gormedikleri sag-ust STICKY bildirim olarak cikar, kendi eliyle kapatir (kapatinca id ilerler).
+// Tarayici/cihaz bagimsiz (localStorage degil, sunucu) — paylasimli bilgisayarda da her kullanici kendi durumunu gorur.
+try { db.exec(`CREATE TABLE IF NOT EXISTS notification_reads (
+  user_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  last_seen_id INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (user_id, kind)
+)`); } catch(e) {}
+
 // Kayitli PKM guzergahlari (Pkm Form menusu) — PAYLASIMLI: herkes gorur/acar. plan_json = {stops,legMin,peronMin,depMin}.
 try { db.exec(`CREATE TABLE IF NOT EXISTS pkm_routes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -8841,7 +8853,7 @@ app.post("/api/obilet/discover-routes", requireAuth, requireAdmin, (req, res) =>
   }
 });
 
-// AG & KAPASITE DIFF: son yapisal degisiklikler (sag-ust sticky bildirim bunu 60 sn'de bir yoklar).
+// AG & KAPASITE DIFF: son yapisal degisiklikler (rapor/liste icin).
 app.get("/api/obilet/structure-changes/recent", requireAuth, (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit || "50", 10) || 50, 200);
@@ -8851,6 +8863,50 @@ app.get("/api/obilet/structure-changes/recent", requireAuth, (req, res) => {
     res.json({ ok: true, changes: rows });
   } catch (error) {
     res.status(500).json({ message: error.message || "Değişiklikler alınamadı." });
+  }
+});
+
+// KULLANICI-BAZLI BILDIRIM FEED'i: bu kullanicinin HENUZ GORMEDIGI (id > last_seen) fiyat + yapi degisimleri.
+// Sag-ust sticky bildirim bunu 60 sn'de bir + giriste yoklar. Kullanici bir toast'i kapatinca /toast-seen ile
+// o kind'in pointer'i ilerler; kapatana kadar (reload dahil) tekrar gorunur. Fiyat mantigina dokunmaz (salt okur).
+function getUserLastSeen(userId, kind) {
+  try {
+    const r = db.prepare("SELECT last_seen_id FROM notification_reads WHERE user_id=? AND kind=?").get(userId, kind);
+    return r ? Number(r.last_seen_id) || 0 : 0;
+  } catch (e) { return 0; }
+}
+app.get("/api/obilet/toast-feed", requireAuth, (req, res) => {
+  try {
+    const uid = req.auth.user.id;
+    const FEED_LIMIT = 6; // ekrandaki toast ust siniriyla ayni -> donen her toast gerceklen gosterilir (sessiz elenme yok)
+    const priceSeen = getUserLastSeen(uid, "price");
+    const structSeen = getUserLastSeen(uid, "structure");
+    // ASCENDING (eski->yeni) dondur ki toast'lar dogru sirayla dizilsin.
+    const price = db.prepare(
+      "SELECT id, origin, destination, operator, departure_time, journey_date, old_price, new_price FROM obilet_price_history WHERE id > ? ORDER BY id DESC LIMIT ?"
+    ).all(priceSeen, FEED_LIMIT).reverse();
+    const structure = db.prepare(
+      "SELECT id, route_label, change_type, message FROM obilet_structure_changes WHERE id > ? ORDER BY id DESC LIMIT ?"
+    ).all(structSeen, FEED_LIMIT).reverse();
+    res.json({ ok: true, price, structure });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Bildirim feed alınamadı." });
+  }
+});
+// Bir toast kapatilinca: o kind'in pointer'ini ileri al (id'ye kadar gorüldü say).
+app.post("/api/obilet/toast-seen", requireAuth, (req, res) => {
+  try {
+    const uid = req.auth.user.id;
+    const kind = String(req.body?.kind || "").trim();
+    const id = parseInt(req.body?.id, 10);
+    if (kind !== "price" && kind !== "structure") return res.status(400).json({ message: "Geçersiz tür." });
+    if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ message: "Geçersiz id." });
+    db.prepare(`INSERT INTO notification_reads (user_id, kind, last_seen_id, updated_at) VALUES (?,?,?,?)
+      ON CONFLICT(user_id, kind) DO UPDATE SET last_seen_id = MAX(last_seen_id, excluded.last_seen_id), updated_at = excluded.updated_at`)
+      .run(uid, kind, id, nowStamp());
+    res.json({ ok: true });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "İşaretlenemedi." });
   }
 });
 
