@@ -6419,6 +6419,10 @@ async function processObiletTarget(target) {
     // takip edilen firmalarla + tarih basi 25 sefer ust siniriyla ceker (yuku/Cloudflare'i bounded tutar).
     // Kapatmak icin: true -> false.
     const REAL_SEATMAP_ENABLED = true;
+    // HIZ: gercek koltuk haritasini SADECE ilk N gunde cek (kalkisa yakin -> otobus dolu -> dogruluk kritik).
+    // Uzak tarihler cogunlukla bos, liste degeri yeterli. Boylece tarama hizlanir + Cloudflare yuku duser
+    // (daha az istek -> daha az takilma). 2 = bugun + yarin. Artir/azalt: dogruluk<->hiz dengesi.
+    const REAL_SEATMAP_NEAR_DAYS = 2;
     const seatOps = !REAL_SEATMAP_ENABLED ? null : (acceptAllOperators ? ["*"] : targetOperators);
 
     const trackedJourneys = [];
@@ -6433,23 +6437,25 @@ async function processObiletTarget(target) {
     let structureCaptured = false;
     for (let dayIdx = 0; dayIdx < dateList.length; dayIdx++) {
         const journeyDate = dateList[dayIdx];
+        // Gercek koltuk haritasi YALNIZCA ilk N gunde (yakin tarih); uzak tarihlerde liste degeri (hizli).
+        const daySeatOps = (dayIdx < REAL_SEATMAP_NEAR_DAYS) ? seatOps : null;
         // Ayni hatta ardisik tarihler arasinda kucuk bir bekleme — Cloudflare burst tespitini onler.
         if (dayIdx > 0) {
           await new Promise(r => setTimeout(r, 3000));
         }
-        let journeys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate, targetRouteId, seatOps);
+        let journeys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate, targetRouteId, daySeatOps);
         if (departureStopFilter && !journeys.length) {
           // Durak bazli sorgu bos donerse sehir bazli rotaya geri dus.
-          journeys = await scrapeObilet(target.origin, target.destination, journeyDate, targetRouteId, seatOps);
+          journeys = await scrapeObilet(target.origin, target.destination, journeyDate, targetRouteId, daySeatOps);
         }
         // Bos dondu (Cloudflare challenge / timeout olabilir) — 8 sn bekleyip 1 kez daha dene.
         // Boylece o gunun fiyat+doluluk verisi eski kalmaz.
         if (!journeys.length) {
           console.log(`[Takip Görevi] ${journeyDate} bos dondu, 8 sn sonra 1 kez daha denenecek...`);
           await new Promise(r => setTimeout(r, 8000));
-          journeys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate, targetRouteId, seatOps);
+          journeys = await scrapeObilet(queryOriginPrimary, target.destination, journeyDate, targetRouteId, daySeatOps);
           if (departureStopFilter && !journeys.length) {
-            journeys = await scrapeObilet(target.origin, target.destination, journeyDate, targetRouteId, seatOps);
+            journeys = await scrapeObilet(target.origin, target.destination, journeyDate, targetRouteId, daySeatOps);
           }
         }
         journeys.forEach((journey) => {
