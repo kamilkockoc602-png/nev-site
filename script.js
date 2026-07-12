@@ -177,6 +177,8 @@ const state = {
   pricingUploads: [],
   notifications: [],
   notifPollTimer: null,
+  lastPriceChangeId: 0,
+  priceToastReady: false,
   theme: localStorage.getItem(THEME_KEY) || "light",
   lastOcrPairs: [],
   lastOcrOrigin: "",
@@ -2803,6 +2805,91 @@ async function refreshNotificationsData() {
   renderNotifications();
 }
 
+// ===== Fiyat degisim toast bildirimleri (sag ust kose) =====
+// oBilet fiyat degisiklikleri obilet_price_history tablosuna yaziliyor (taramada).
+// Burada SADECE okuyoruz — tarama/tespit/Telegram mantigina dokunmuyoruz.
+function showToast({ head, route, oldPrice, newPrice, kind, ttl = 9000 }) {
+  const host = document.getElementById("toastHost");
+  if (!host) return;
+  const el = document.createElement("div");
+  el.className = "toast" + (kind ? " " + kind : "");
+  const arrow = kind === "up" ? "▲" : kind === "down" ? "▼" : "→";
+  const priceHtml = (oldPrice != null && newPrice != null)
+    ? `<div class="toast-price"><span class="old">${escapeHtml(oldPrice)}₺</span><span class="arw">${arrow}</span><span class="new">${escapeHtml(newPrice)}₺</span></div>`
+    : "";
+  el.innerHTML = `
+    <div class="toast-head">💰 <span>${escapeHtml(head || "Fiyat değişti")}</span><span class="toast-x">×</span></div>
+    ${route ? `<div class="toast-route">${route}</div>` : ""}
+    ${priceHtml}
+    <div class="toast-bar" style="animation-duration:${ttl}ms"></div>
+  `;
+  const dismiss = () => {
+    if (el.dataset.leaving) return;
+    el.dataset.leaving = "1";
+    el.classList.add("leaving");
+    setTimeout(() => el.remove(), 260);
+  };
+  el.addEventListener("click", dismiss);
+  host.appendChild(el);
+  // En fazla 5 toast dursun (eskiyi at).
+  while (host.children.length > 5) host.firstElementChild.remove();
+  setTimeout(dismiss, ttl);
+}
+
+// Ilk girişte mevcut en yeni degisim id'sini baz al — eski degisimler icin toast atma.
+async function initPriceChangeBaseline() {
+  try {
+    const data = await apiFetch("/api/obilet/price-history?limit=1");
+    const rows = data && Array.isArray(data.history) ? data.history : [];
+    state.lastPriceChangeId = rows.length ? Number(rows[0].id) || 0 : 0;
+  } catch {
+    state.lastPriceChangeId = 0;
+  }
+  state.priceToastReady = true;
+}
+
+// Poller her doldugunda: yeni fiyat degisimi (id > son gorulen) varsa toast göster.
+async function checkPriceChangeToasts() {
+  if (!state.priceToastReady) return;
+  let data;
+  try {
+    data = await apiFetch("/api/obilet/price-history?limit=50");
+  } catch {
+    return;
+  }
+  const rows = data && Array.isArray(data.history) ? data.history : [];
+  if (!rows.length) return;
+  const fresh = rows
+    .filter((r) => (Number(r.id) || 0) > state.lastPriceChangeId)
+    .sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+  // Son görülen id'yi her durumda güncelle (yenisi yoksa da).
+  state.lastPriceChangeId = Math.max(state.lastPriceChangeId, ...rows.map((r) => Number(r.id) || 0));
+  if (!fresh.length) return;
+  // Çok değişimde ekranı boğmayalım — en yeni 5'ini göster, kalanı özetle.
+  const show = fresh.slice(-5);
+  const hidden = fresh.length - show.length;
+  show.forEach((r) => {
+    const oldP = Math.round(Number(r.old_price) || 0);
+    const newP = Math.round(Number(r.new_price) || 0);
+    const kind = newP > oldP ? "up" : newP < oldP ? "down" : "info";
+    const op = escapeHtml(String(r.operator || "").trim() || "-");
+    const from = escapeHtml(String(r.origin || "").trim());
+    const to = escapeHtml(String(r.destination || "").trim());
+    const when = escapeHtml(String(r.departure_time || "").trim());
+    const day = escapeHtml(String(r.journey_date || "").trim());
+    showToast({
+      head: "Fiyat değişti",
+      route: `<b>${op}</b> · ${from} → ${to}<br>${day} ${when} kalkış`,
+      oldPrice: oldP,
+      newPrice: newP,
+      kind,
+    });
+  });
+  if (hidden > 0) {
+    showToast({ head: `+${hidden} fiyat değişimi daha`, kind: "info", ttl: 7000 });
+  }
+}
+
 function startNotificationPolling() {
   stopNotificationPolling();
   state.notifPollTimer = setInterval(() => {
@@ -2810,6 +2897,7 @@ function startNotificationPolling() {
       refreshNotificationsData().catch(() => null);
       refreshPricingUploadsData().catch(() => null);
       refreshPricesData().catch(() => null);
+      checkPriceChangeToasts().catch(() => null);
     }
   }, 60000);
 }
@@ -3207,6 +3295,7 @@ async function handleLogin(username, password) {
     await refreshPricingUploadsData();
     await refreshNotificationsData();
     await renderControlIntegrationPanel().catch(() => null);
+    await initPriceChangeBaseline();
     startNotificationPolling();
   } catch (error) {
     showMessage(error.message || "Sign-in failed.");
@@ -3226,6 +3315,7 @@ async function verifySession() {
     await refreshPricingUploadsData();
     await refreshNotificationsData();
     await renderControlIntegrationPanel().catch(() => null);
+    await initPriceChangeBaseline();
     startNotificationPolling();
   } catch {
     setToken("");
