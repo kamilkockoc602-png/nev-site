@@ -116,6 +116,7 @@ const dom = {
   notifList: document.getElementById("notifList"),
   notifEmpty: document.getElementById("notifEmpty"),
   notifReadAllBtn: document.getElementById("notifReadAllBtn"),
+  notifTestBtn: document.getElementById("notifTestBtn"),
   themeToggleBtn: document.getElementById("themeToggleBtn"),
   themeLabel: document.getElementById("themeLabel"),
   ocrOriginInput: document.getElementById("ocrOriginInput"),
@@ -3961,6 +3962,15 @@ dom.notifReadAllBtn.addEventListener("click", async () => {
     // Sessiz gec.
   }
 });
+
+// TEST BİLDİRİMİ: sağ üstte örnek sticky bildirimler göster (sadece UI — hiçbir veriye dokunmaz).
+if (dom.notifTestBtn) {
+  dom.notifTestBtn.addEventListener("click", () => {
+    showToast({ head: "Fiyat değişti", route: "<b>Niğde Aydoğanlar</b> · Ankara → Adana<br>Test bildirimi", oldPrice: 900, newPrice: 798, kind: "down", sticky: true });
+    showToast({ head: "Fiyat değişti", route: "<b>Enver Geçgel</b> · Adana → Ankara<br>Test bildirimi", oldPrice: 800, newPrice: 900, kind: "up", sticky: true });
+    showToast({ head: "Yeni rakip", body: "Adana → Ankara: Metro Turizm bu hatta GİRDİ (test)", kind: "up", sticky: true });
+  });
+}
 
 dom.themeToggleBtn.addEventListener("click", () => {
   toggleTheme();
