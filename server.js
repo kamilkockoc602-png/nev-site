@@ -6456,12 +6456,15 @@ async function processObiletTarget(target) {
               total = rT; const sold = Math.max(0, Math.min(rT, rS));
               avail = rT - sold; occ = Math.round((sold / rT) * 100); source = "gercek";
             } else if (j.seatInfoReliable === true && Number.isFinite(Number(j.totalSeats)) && Number(j.totalSeats) > 0 && Number.isFinite(Number(j.availableSeats))) {
-              // 2) YEDEK: liste available-seats — gercek harita bu turda cekilemediyse "-" yerine deger goster.
-              //    KRITIK KORUMA: mevcut 'gercek' satirin UZERINE ASLA YAZMA. Gercek dogrudur; liste bazi
-              //    (ozellikle dolu) otobuslerde BAYAT olabilir. Boylece bir kez gercek yazilinca liste bozmaz.
-              const ex = db.prepare("SELECT source FROM obilet_occupancy WHERE target_id=? AND journey_date=? AND operator=? AND departure_time=?")
-                .get(target.id, j.journey_date, occOp, j.time);
-              if (ex && ex.source === "gercek") { continue; } // onceki GERCEK degeri koru, liste ile bozma
+              // 2) ANA KAYNAK (gercek cekim kapaliyken): oBilet liste available-seats. Her taramada TAZE gelir.
+              //    KORUMA yalnizca GERCEK CEKIM ACIKKEN gecerli: taze gercek liste ile bozulmasin. Gercek
+              //    KAPALIYKEN eski 'gercek' satirlar bayatladigi icin liste ONLARI da serbestce guncellemeli
+              //    (bayat 5 -> taze 29). Aksi halde dolu otobus eski dusuk degerde takili kalir.
+              if (REAL_SEATMAP_ENABLED) {
+                const ex = db.prepare("SELECT source FROM obilet_occupancy WHERE target_id=? AND journey_date=? AND operator=? AND departure_time=?")
+                  .get(target.id, j.journey_date, occOp, j.time);
+                if (ex && ex.source === "gercek") { continue; } // taze gercegi liste ile bozma
+              }
               total = Number(j.totalSeats); avail = Number(j.availableSeats);
               occ = Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100))); source = "liste";
             } else {
