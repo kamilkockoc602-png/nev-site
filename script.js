@@ -1354,6 +1354,9 @@ function render() {
   dom.loginView.classList.remove("active");
   dom.portalView.classList.add("active");
 
+  // "Test Bildirimi" butonu SADECE admin'e görünür (diğer kullanıcılar görmez).
+  if (dom.notifTestBtn) dom.notifTestBtn.classList.toggle("hidden", !state.currentUser.isAdmin);
+
   // Eski currentUserLabel (varsa hala bos durur)
   if (dom.currentUserLabel) {
     dom.currentUserLabel.textContent = "";
