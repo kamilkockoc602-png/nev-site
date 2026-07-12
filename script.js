@@ -5874,6 +5874,19 @@ const ST_PAGE = 50; // Kademeli yukleme adim boyu (kasmayi onlemek icin hepsini 
 function stCleanStop(s) {
   return String(s || "").replace(/\s+(otogar[ıi]?|otogan|terminal[ıi]?)$/i, "").trim();
 }
+// Güzergah hücresi: ana sefer (keşfedilen gerçek kalkış) öncelikli, yoksa oBilet güzergahı.
+function stGuzergahCell(j) {
+  if (j.parentOrigin) {
+    const from = occEsc(stCleanStop(j.parentOrigin));
+    const t = j.parentOriginTime ? ` <span style="opacity:.6;font-size:.85em">${occEsc(j.parentOriginTime)}</span>` : "";
+    const dest = occEsc(stCleanStop(j.parentDest) || stCleanStop(j.routeTo) || (j.destination || ""));
+    return `<b>${from}</b>${t} <span style="opacity:.55">→</span> <b>${dest}</b>`;
+  }
+  if (j.routeFrom || j.routeTo) {
+    return `<b>${occEsc(stCleanStop(j.routeFrom))}</b> <span style="opacity:.55">→</span> <b>${occEsc(stCleanStop(j.routeTo))}</b>`;
+  }
+  return `<span style="opacity:.45">-</span>`;
+}
 // Tek bir sefer satirinin HTML'i.
 function stRowHtml(j) {
   // Fiyat geçmişi: eski - ... - güncel, renkli oklarla.
@@ -5889,6 +5902,9 @@ function stRowHtml(j) {
     const pct = j.totalSeats ? Math.round((j.yolcu / j.totalSeats) * 100) : 0;
     dolCell = `<b style="color:${occColor(pct)}">${j.yolcu}/${j.totalSeats}</b> <span style="opacity:.7">(%${pct})</span>`;
   }
+  // Güzergah: ANA SEFER (feeder keşfiyle bulunan gerçek kalkış) öncelikli — örn. "Şanlıurfa 18:30 → Ankara".
+  // Yoksa oBilet'in kendi verdiği güzergaha (stops[0]→son) düş. İkisi de yoksa "-".
+  const guzergahCell = stGuzergahCell(j);
   // "Anlik cek" butonu kaldirildi — koltuk/plaka artik dogru geldigi icin gereksiz.
   return `<tr>
     <td>${occToDot(j.journey_date)}</td>
@@ -5903,7 +5919,7 @@ function stRowHtml(j) {
     <td><b>${j.currentPrice} TL</b></td>
     <td>${dolCell}</td>
     <td style="font-size:0.82rem;opacity:0.8;">${occEsc(j.lastChangedAt || "")}</td>
-    <td>${(j.routeFrom || j.routeTo) ? `<b>${occEsc(stCleanStop(j.routeFrom))}</b> <span style="opacity:.55">→</span> <b>${occEsc(stCleanStop(j.routeTo))}</b>` : `<span style="opacity:.45">-</span>`}</td>
+    <td>${guzergahCell}</td>
   </tr>`;
 }
 
@@ -5973,7 +5989,9 @@ function exportSeferTakipExcel() {
       j.totalSeats != null ? j.totalSeats : "",
       pct === "" ? "" : pct / 100,
       j.lastChangedAt || "",
-      (j.routeFrom || j.routeTo) ? `${stCleanStop(j.routeFrom)} → ${stCleanStop(j.routeTo)}` : "",
+      j.parentOrigin
+        ? `${stCleanStop(j.parentOrigin)}${j.parentOriginTime ? " " + j.parentOriginTime : ""} → ${stCleanStop(j.parentDest) || stCleanStop(j.routeTo) || (j.destination || "")}`
+        : ((j.routeFrom || j.routeTo) ? `${stCleanStop(j.routeFrom)} → ${stCleanStop(j.routeTo)}` : ""),
     ]);
   }
   const ws = XLSX.utils.aoa_to_sheet(aoa);

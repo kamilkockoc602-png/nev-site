@@ -672,6 +672,23 @@ try { db.exec("ALTER TABLE obilet_occupancy ADD COLUMN plate TEXT NOT NULL DEFAU
 // bas-bitis (Adana->Esenler/Istanbul) gosterilir. journey.stops'tan gelir, ek istek yok.
 try { db.exec("ALTER TABLE obilet_occupancy ADD COLUMN route_from TEXT NOT NULL DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE obilet_occupancy ADD COLUMN route_to TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+// Servis/sefer kimligi: journey.code'un ilk parcasi (orn "1212852-1376-1387" -> "1212852"). AYNI fiziksel
+// aracin farkli segmentleri (Adana->Ankara, Sanliurfa->Ankara) bu id'yi PAYLASIR. Ana sefer (gercek kalkis)
+// bununla eslestirilir. Sadece okuma/eslestirme icin; fiyat mantigini etkilemez.
+try { db.exec("ALTER TABLE obilet_occupancy ADD COLUMN service_id TEXT NOT NULL DEFAULT ''"); } catch(e) {}
+
+// ANA SEFER KESIF tablosu: feeder sehirlerden (Sanliurfa, Gaziantep...) yapilan taramada bulunan her servisin
+// GERCEK kalkis sehri/saati ve bitisini serviceId ile saklar. Sefer Takip, segmentin serviceId'siyle buraya
+// JOIN yaparak "Sanliurfa 18:30 -> Ankara" gibi ana seferi gosterir. Fiyat/tarama dongusunden BAGIMSIZ.
+try { db.exec(`CREATE TABLE IF NOT EXISTS obilet_service_routes (
+  service_id TEXT PRIMARY KEY,
+  operator TEXT NOT NULL DEFAULT '',
+  origin_city TEXT NOT NULL DEFAULT '',
+  origin_time TEXT NOT NULL DEFAULT '',
+  dest_city TEXT NOT NULL DEFAULT '',
+  stops_json TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT ''
+)`); } catch(e) {}
 
 // Kayitli PKM guzergahlari (Pkm Form menusu) — PAYLASIMLI: herkes gorur/acar. plan_json = {stops,legMin,peronMin,depMin}.
 try { db.exec(`CREATE TABLE IF NOT EXISTS pkm_routes (
@@ -4739,14 +4756,19 @@ async function scrapeObiletSeferlerPage(browser, routeId, dateIso, seatOperators
         // Orn. Adana->Nigde sorgusu: stops[0]=Adana, stops[son]=Esenler (Istanbul). is-destination bayragi
         // sorgulanan segment'i (Nigde) isaretler; biz SON duragi (gercek varis) aliriz.
         let routeFrom = "", routeTo = "";
+        let originStopTime = "";
         {
           const allStops = item?.journey?.stops || item?.stops || [];
           if (Array.isArray(allStops) && allStops.length) {
             routeFrom = String(allStops[0]?.name || "").trim();
             routeTo = String(allStops[allStops.length - 1]?.name || "").trim();
+            const m0 = String(allStops[0]?.time || "").match(/T?(\d{2}):(\d{2})/);
+            if (m0) originStopTime = `${m0[1]}:${m0[2]}`;
           }
         }
-        capturedJourneys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop, routeFrom, routeTo, totalSeats, availableSeats, seatInfoReliable, hasSeatInfoRaw: hasSeatInfo, shouldZeroRaw: shouldZeroSeats, matchKey: key });
+        // Servis kimligi: code "1212852-1376-1387" -> "1212852". Ana sefer eslestirmesi icin. (Fiyat mantigi kullanmaz.)
+        const serviceId = String(item?.journey?.code || item?.code || "").split("-")[0].trim();
+        capturedJourneys.push({ operator, time: tm[0], price, departureStop: depStop, arrivalStop: arrStop, routeFrom, routeTo, originStopTime, serviceId, totalSeats, availableSeats, seatInfoReliable, hasSeatInfoRaw: hasSeatInfo, shouldZeroRaw: shouldZeroSeats, matchKey: key });
         parsed++;
       }
       if (list.length > 0) {
@@ -6495,11 +6517,11 @@ async function processObiletTarget(target) {
             // bos ile silmemek icin: gercek+plaka varsa yaz, yoksa mevcut plakayi KORU (COALESCE).
             const plateVal = (source === "gercek" && j.realPlate) ? String(j.realPlate).trim() : "";
             db.prepare(`
-              INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated, source, plate, route_from, route_to)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated, source, plate, route_from, route_to, service_id)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(target_id, journey_date, operator, departure_time)
-              DO UPDATE SET departure_stop = excluded.departure_stop, total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated, source = excluded.source, plate = CASE WHEN excluded.plate != '' THEN excluded.plate ELSE obilet_occupancy.plate END, route_from = CASE WHEN excluded.route_from != '' THEN excluded.route_from ELSE obilet_occupancy.route_from END, route_to = CASE WHEN excluded.route_to != '' THEN excluded.route_to ELSE obilet_occupancy.route_to END
-            `).run(target.id, j.journey_date, occOp, j.time, j.departureStop || "", total, avail, occ, now, source, plateVal, String(j.routeFrom || ""), String(j.routeTo || ""));
+              DO UPDATE SET departure_stop = excluded.departure_stop, total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated, source = excluded.source, plate = CASE WHEN excluded.plate != '' THEN excluded.plate ELSE obilet_occupancy.plate END, route_from = CASE WHEN excluded.route_from != '' THEN excluded.route_from ELSE obilet_occupancy.route_from END, route_to = CASE WHEN excluded.route_to != '' THEN excluded.route_to ELSE obilet_occupancy.route_to END, service_id = CASE WHEN excluded.service_id != '' THEN excluded.service_id ELSE obilet_occupancy.service_id END
+            `).run(target.id, j.journey_date, occOp, j.time, j.departureStop || "", total, avail, occ, now, source, plateVal, String(j.routeFrom || ""), String(j.routeTo || ""), String(j.serviceId || ""));
             writtenOccKeys.add(`${occOp}|${j.time}`);
           } catch (occErr) {
             if (DEBUG_OBILET_PRICE) console.warn(`[Doluluk] yazma hatasi: ${occErr.message}`);
@@ -8055,10 +8077,18 @@ function computeJourneyTracking({ date, origin, destination, operator } = {}) {
 
   // 3) Doluluk haritasi. ONEMLI: ayni sefer icin (durak yazimi degisince) birden fazla
   // doluluk satiri olabilir; HER ZAMAN EN GUNCEL (last_updated) satiri al — eski satir cekilmesin.
+  // ANA SEFER: serviceId -> gercek kalkis sehri/saati/bitisi (feeder taramasindan kesfedilir).
+  const serviceRouteMap = new Map();
+  try {
+    for (const r of db.prepare("SELECT service_id, origin_city, origin_time, dest_city FROM obilet_service_routes").all()) {
+      if (r.service_id) serviceRouteMap.set(String(r.service_id), r);
+    }
+  } catch (e) { /* tablo yoksa yok say */ }
+
   const occMap = new Map();
   try {
     const occRows = db.prepare(
-      "SELECT target_id, journey_date, operator, departure_time, total_seats, available_seats, plate, route_from, route_to, last_updated FROM obilet_occupancy"
+      "SELECT target_id, journey_date, operator, departure_time, total_seats, available_seats, plate, route_from, route_to, service_id, last_updated FROM obilet_occupancy"
     ).all();
     const tsKey = (s) => {
       const m = String(s || "").match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
@@ -8091,12 +8121,18 @@ function computeJourneyTracking({ date, origin, destination, operator } = {}) {
     const plate = occ && occ.plate ? String(occ.plate) : "";
     const routeFrom = occ && occ.route_from ? String(occ.route_from) : "";
     const routeTo = occ && occ.route_to ? String(occ.route_to) : "";
+    // ANA SEFER: bu segmentin serviceId'si feeder taramasinda bulunduysa gercek kalkis sehri/saati gelir.
+    const svc = occ && occ.service_id ? serviceRouteMap.get(String(occ.service_id)) : null;
+    const parentOrigin = svc && svc.origin_city ? String(svc.origin_city) : "";
+    const parentOriginTime = svc && svc.origin_time ? String(svc.origin_time) : "";
+    const parentDest = svc && svc.dest_city ? String(svc.dest_city) : "";
     return {
       target_id: s.target_id,
       journey_date: s.journey_date, origin: s.origin, destination: s.destination,
       operator: s.operator, departure_time: s.departure_time, departure_stop: s.departure_stop,
       changeCount, prices, currentPrice: s.price,
       totalSeats, availableSeats, yolcu, plate, routeFrom, routeTo, lastChangedAt,
+      parentOrigin, parentOriginTime, parentDest,
     };
   }).sort((a, b) =>
     String(a.journey_date).localeCompare(String(b.journey_date)) ||
@@ -8518,6 +8554,110 @@ app.get("/api/obilet/debug-prices/:targetId", requireAuth, (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
+
+// ===================== ANA SEFER KESFI (feeder tarama) =====================
+// Enver gibi ara-segmentini gizleyen firmalarin GERCEK kalkis sehri oBilet'te yalnizca aracin gercek
+// kalktigi sehirden sorgulaninca gorunur (orn. Sanliurfa->Ankara sorgusunun stops dizisinde Adana 00:30
+// + serviceId cikar). Bu is feeder sehirleri tarar, her servisin serviceId'sini gercek kalkis/saat/bitisiyle
+// eslestirip obilet_service_routes'a yazar. Sefer Takip segmentin serviceId'siyle JOIN yapip ana seferi gosterir.
+// FIYAT/DEGISIKLIK/TELEGRAM dongusune HIC DOKUNMAZ — tamamen ayri tablo, ayri zamanlayici, dusuk frekans.
+const ROUTE_DISCOVERY_ENABLED = true;
+// Adana'yi besleyen guneydogu/dogu hub sehirleri (kucuk kanit seti). Bu sehirlerden kalkan uzun yol
+// otobusleri Adana/Mersin gibi hub'lardan gecer.
+const ROUTE_DISCOVERY_FEEDERS = ["Şanlıurfa", "Gaziantep", "Diyarbakır", "Mardin", "Adıyaman", "Osmaniye", "Kadirli", "Hatay"];
+const ROUTE_DISCOVERY_MAX_SCANS = 24;     // tek turda en fazla feeder-tarama (Cloudflare yuku sinirli)
+const ROUTE_DISCOVERY_MAX_DATES = 2;      // hedef basina en fazla tarih
+const ROUTE_DISCOVERY_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 saat (rotalar sabit, sik taramaya gerek yok)
+let routeDiscoveryRunning = false;
+
+async function discoverParentRoutes() {
+  if (routeDiscoveryRunning) return { ok: false, reason: "already-running" };
+  routeDiscoveryRunning = true;
+  let scanned = 0, upserts = 0, combos = 0;
+  try {
+    const today = todayIsoInIstanbul();
+    // Aktif hedeflerin (varis, tarih) kombinasyonlari — feeder'lardan bu varislere ayni tarihte tarariz.
+    const destDates = new Map(); // destination -> Set(dateIso)
+    for (const t of db.prepare("SELECT destination, date, end_date FROM obilet_targets WHERE is_active = 1").all()) {
+      const dest = String(t.destination || "").trim();
+      if (!dest) continue;
+      const dates = buildIsoDateRange(t.date, t.end_date || t.date)
+        .filter((d) => d >= today)
+        .slice(0, ROUTE_DISCOVERY_MAX_DATES);
+      if (!destDates.has(dest)) destDates.set(dest, new Set());
+      dates.forEach((d) => destDates.get(dest).add(d));
+    }
+    if (!destDates.size) { destDates.set("Ankara", new Set([today])); }
+
+    const stmt = db.prepare(`INSERT INTO obilet_service_routes (service_id, operator, origin_city, origin_time, dest_city, stops_json, updated_at)
+      VALUES (?, ?, ?, ?, ?, '', ?)
+      ON CONFLICT(service_id) DO UPDATE SET operator=excluded.operator, origin_city=excluded.origin_city, origin_time=excluded.origin_time, dest_city=excluded.dest_city, updated_at=excluded.updated_at`);
+    const now = nowStamp();
+    let lockFails = 0; // fiyat taramasi surekli mesgulse bosuna beklememek icin
+
+    outer:
+    for (const feeder of ROUTE_DISCOVERY_FEEDERS) {
+      for (const [dest, dateSet] of destDates) {
+        if (slugTr(feeder) === slugTr(dest)) continue;
+        const routeId = buildObiletRouteIdLocal(feeder, dest);
+        if (!routeId) continue;
+        for (const dateIso of dateSet) {
+          if (scanned >= ROUTE_DISCOVERY_MAX_SCANS) break outer;
+          combos++;
+          // FIYAT TARAMASINI BLOKLAMA: kilidi HER tarama icin ayri al/birak — aralarda fiyat turu girebilsin.
+          // Fiyat taramasi mesgulse (kilit alinamaz) bu feeder-taramayi atla, 6 saat sonra tekrar denenir.
+          const locked = await acquireObiletLock(60000);
+          if (!locked) {
+            // Fiyat taramasi surekli mesgul: 3 kez ust uste alinamazsa bu turu birak (6 saat sonra tekrar).
+            if (++lockFails >= 3) { console.log("[Ana Sefer Kesfi] fiyat taramasi mesgul, tur ertelendi."); break outer; }
+            continue;
+          }
+          lockFails = 0;
+          let journeys = [];
+          try {
+            const browser = await getBrowserInstance();
+            journeys = await scrapeObiletSeferlerPage(browser, routeId, dateIso, null);
+          } catch (e) { journeys = []; }
+          finally { releaseObiletLock(); }
+          scanned++;
+          for (const j of journeys) {
+            const sid = String(j.serviceId || "").trim();
+            if (!sid) continue;
+            const origin = String(j.routeFrom || feeder).trim();
+            const originTime = String(j.originStopTime || j.time || "").trim();
+            const dcity = String(j.routeTo || dest).trim();
+            try { stmt.run(sid, String(j.operator || ""), origin, originTime, dcity, now); upserts++; } catch (e) {}
+          }
+          await new Promise((r) => setTimeout(r, 2500)); // Cloudflare burst tespitini onle (kilit disinda)
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[Ana Sefer Kesfi] hata:", e.message);
+  } finally {
+    routeDiscoveryRunning = false;
+  }
+  console.log(`[Ana Sefer Kesfi] ${scanned}/${combos} feeder-tarama, ${upserts} servis eslestirildi.`);
+  return { ok: true, scanned, combos, upserts };
+}
+
+// Manuel tetikleme (admin) — kanit icin "hemen kesfet".
+app.post("/api/obilet/discover-routes", requireAuth, requireAdmin, (req, res) => {
+  try {
+    const before = db.prepare("SELECT COUNT(*) AS c FROM obilet_service_routes").get().c;
+    if (routeDiscoveryRunning) return res.json({ ok: true, started: false, running: true, totalServices: before });
+    // Uzun surebilir (dakikalar) — arka planda calistir, HTTP'yi bekletme.
+    discoverParentRoutes().catch((e) => console.warn("[Ana Sefer Kesfi] manuel tetik hatasi:", e.message));
+    res.json({ ok: true, started: true, totalServices: before, note: "Kesif arka planda basladi; birkac dakika sonra Sefer Takip'te gorunur." });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Kesif basarisiz." });
+  }
+});
+
+if (ROUTE_DISCOVERY_ENABLED) {
+  setTimeout(() => { discoverParentRoutes().catch(() => null); }, 90 * 1000); // boot'tan 90 sn sonra (ilk fiyat taramasindan sonra)
+  setInterval(() => { discoverParentRoutes().catch(() => null); }, ROUTE_DISCOVERY_INTERVAL_MS);
+}
 
 // Sunucu Başladığında ve Her X Dakikada Bir Otomatik Kontrol Zamanlayıcı
 setTimeout(() => {
