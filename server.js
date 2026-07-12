@@ -713,6 +713,8 @@ try { db.exec(`CREATE TABLE IF NOT EXISTS obilet_structure_changes (
   is_read INTEGER NOT NULL DEFAULT 0
 )`); } catch(e) {}
 try { db.exec("CREATE INDEX IF NOT EXISTS idx_obilet_structure_changes_id ON obilet_structure_changes(id DESC)"); } catch(e) {}
+// Kapasite artti/azaldi bildirimleri kaldirildi (gurultu) — mevcut kayitli olanlari da temizle ki gorunmesin.
+try { db.exec("DELETE FROM obilet_structure_changes WHERE change_type IN ('capacity_up','capacity_down')"); } catch(e) {}
 
 // KULLANICI-BAZLI bildirim "gorüldü" takibi: her kullanici (user_id) icin, her tur (kind: 'price'|'structure')
 // EN SON GORDUGU degisim id'si. Boylece bir kullanici giris yapmadigi surece degisimleri kacirmaz; giris
@@ -6877,14 +6879,11 @@ function computeStructureDiff(prev, cur, routeLabel) {
     for (const rt of removed) if (!usedRem.has(rt)) {
       changes.push({ type: "removed_departure", operator: op, message: `${routeLabel}: ${op} ${rt} seferini KALDIRDI` });
     }
-    // Ayni saatte kapasite / ek arac.
+    // Ek arac (ayni saatte 2. otobus). NOT: "kapasite artti/azaldi" (koltuk sayisi 1-3 oynamasi) KALDIRILDI —
+    // oBilet total-seats degeri tur tur ufak dalgalaniyordu, gercek kapasite degisimi degil, gurultu.
     for (const t of Object.keys(cT)) {
       if (!pT[t]) continue;
-      const ps = pT[t].seats, cs = cT[t].seats, pb = pT[t].buses, cb = cT[t].buses;
-      if (ps > 0 && cs > 0 && cs !== ps) {
-        changes.push({ type: cs > ps ? "capacity_up" : "capacity_down", operator: op,
-          message: `${routeLabel}: ${op} ${t} kapasite ${ps} → ${cs} koltuk` });
-      }
+      const pb = pT[t].buses, cb = cT[t].buses;
       // Ek arac SADECE iki fotograf da busCount tasiyorsa (XHR path) — DOM fallback'te busCount=1 varsayilir,
       // DOM->XHR gecisi yanlis "ek arac" uretmesin diye.
       if (cb > pb && prev && prev.hasBusInfo && cur && cur.hasBusInfo) {
