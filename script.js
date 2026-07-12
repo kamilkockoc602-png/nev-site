@@ -5872,7 +5872,10 @@ const ST_PAGE = 50; // Kademeli yukleme adim boyu (kasmayi onlemek icin hepsini 
 
 // Durak adindan " Otogari/Otogan/Terminali" ekini kaldirir: "Adana Otogari" -> "Adana", "Esenler Otogari" -> "Esenler".
 function stCleanStop(s) {
-  return String(s || "").replace(/\s+(otogar[ıi]?|otogan|terminal[ıi]?)$/i, "").trim();
+  let c = String(s || "").replace(/\s+(otogar[ıi]?|otogan|terminal[ıi]?)$/i, "").trim();
+  // İstanbul'un ilçe terminalleri (Esenler, Alibeyköy, Dudullu...) -> "İstanbul" (kullanıcıya şehir adı net gelsin).
+  if (/^(esenler|alibeyk[öo]y|dudullu|harem|ata[şs]ehir|bayrampa[şs]a|b[üu]y[üu]k[çc]ekmece|kad[ıi]k[öo]y)$/i.test(c)) return "İstanbul";
+  return c;
 }
 // Güzergah hücresi: ana sefer (keşfedilen gerçek kalkış) öncelikli, yoksa oBilet güzergahı.
 function stGuzergahCell(j) {

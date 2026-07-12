@@ -8562,11 +8562,19 @@ app.get("/api/obilet/debug-prices/:targetId", requireAuth, (req, res) => {
 // eslestirip obilet_service_routes'a yazar. Sefer Takip segmentin serviceId'siyle JOIN yapip ana seferi gosterir.
 // FIYAT/DEGISIKLIK/TELEGRAM dongusune HIC DOKUNMAZ — tamamen ayri tablo, ayri zamanlayici, dusuk frekans.
 const ROUTE_DISCOVERY_ENABLED = true;
-// Adana'yi besleyen guneydogu/dogu hub sehirleri (kucuk kanit seti). Bu sehirlerden kalkan uzun yol
-// otobusleri Adana/Mersin gibi hub'lardan gecer.
-const ROUTE_DISCOVERY_FEEDERS = ["Şanlıurfa", "Gaziantep", "Diyarbakır", "Mardin", "Adıyaman", "Osmaniye", "Kadirli", "Hatay"];
-const ROUTE_DISCOVERY_MAX_SCANS = 24;     // tek turda en fazla feeder-tarama (Cloudflare yuku sinirli)
-const ROUTE_DISCOVERY_MAX_DATES = 2;      // hedef basina en fazla tarih
+// CIFT YONLU feeder hub'lari: takip edilen hattin HANGI yonde oldugu onceden bilinmez. Bir segmentin
+// (orn. Ankara->Adana) gercek kalkisi, aracin gercek kalktigi sehirden sorgulaninca gorunur:
+//  - Ankara->Adana (guneye giden) araclar KUZEYBATI'dan gelir: Istanbul, Bursa, Eskisehir, Bolu, Izmir...
+//    (canli kanit: Istanbul->Adana, 14 Ankara->Adana Enver seferinin 12'sini yakaladi.)
+//  - Adana->Ankara (kuzeye giden) araclar GUNEYDOGU'dan gelir: Sanliurfa, Gaziantep, Diyarbakir...
+// Bu yuzden her iki bolgenin hub'larini tarariz; feeder->hedef rotasi tracked-Origin'den gecmiyorsa
+// serviceId eslesmez (zararsiz). En yuksek verimli hub'lar basta (tarama limiti onlara oncelik verir).
+const ROUTE_DISCOVERY_FEEDERS = [
+  "İstanbul", "Şanlıurfa", "Gaziantep", "Bursa", "Konya", "Kayseri", "Eskişehir",
+  "Bolu", "İzmir", "Diyarbakır", "Adıyaman", "Osmaniye", "Kadirli", "Hatay", "Balıkesir", "Mersin"
+];
+const ROUTE_DISCOVERY_MAX_SCANS = 40;     // tek turda en fazla feeder-tarama (Cloudflare yuku sinirli)
+const ROUTE_DISCOVERY_MAX_DATES = 1;      // hedef basina 1 tarih yeter — serviceId tarih-bagimsiz (schedule id)
 const ROUTE_DISCOVERY_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 saat (rotalar sabit, sik taramaya gerek yok)
 let routeDiscoveryRunning = false;
 
