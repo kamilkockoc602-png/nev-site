@@ -5780,6 +5780,10 @@ async function searchSeferTakip(initial = false) {
 
 const ST_PAGE = 50; // Kademeli yukleme adim boyu (kasmayi onlemek icin hepsini birden cizmiyoruz)
 
+// Durak adindan " Otogari/Otogan/Terminali" ekini kaldirir: "Adana Otogari" -> "Adana", "Esenler Otogari" -> "Esenler".
+function stCleanStop(s) {
+  return String(s || "").replace(/\s+(otogar[ıi]?|otogan|terminal[ıi]?)$/i, "").trim();
+}
 // Tek bir sefer satirinin HTML'i.
 function stRowHtml(j) {
   // Fiyat geçmişi: eski - ... - güncel, renkli oklarla.
@@ -5809,7 +5813,7 @@ function stRowHtml(j) {
     <td><b>${j.currentPrice} TL</b></td>
     <td>${dolCell}</td>
     <td style="font-size:0.82rem;opacity:0.8;">${occEsc(j.lastChangedAt || "")}</td>
-    <td>${j.plate ? `<b>${occEsc(j.plate)}</b>` : `<span style="opacity:.45">NULL</span>`}</td>
+    <td>${(j.routeFrom || j.routeTo) ? `<b>${occEsc(stCleanStop(j.routeFrom))}</b> <span style="opacity:.55">→</span> <b>${occEsc(stCleanStop(j.routeTo))}</b>` : `<span style="opacity:.45">-</span>`}</td>
   </tr>`;
 }
 
@@ -5862,7 +5866,7 @@ function exportSeferTakipExcel() {
   if (!XLSX) { alert("Excel kütüphanesi yüklenemedi."); return; }
   const aoa = [[
     "Sefer Tarihi", "Saat", "Firma", "Güzergah", "Kalkış Durağı",
-    "Değişiklik", "Fiyat Geçmişi", "Güncel (TL)", "Yolcu", "Koltuk", "Doluluk %", "Son Değişiklik", "Plaka",
+    "Değişiklik", "Fiyat Geçmişi", "Güncel (TL)", "Yolcu", "Koltuk", "Doluluk %", "Son Değişiklik", "Güzergah",
   ]];
   for (const j of journeys) {
     const pct = (j.totalSeats && j.yolcu != null) ? Math.round((j.yolcu / j.totalSeats) * 100) : "";
@@ -5879,7 +5883,7 @@ function exportSeferTakipExcel() {
       j.totalSeats != null ? j.totalSeats : "",
       pct === "" ? "" : pct / 100,
       j.lastChangedAt || "",
-      j.plate ? j.plate : "NULL",
+      (j.routeFrom || j.routeTo) ? `${stCleanStop(j.routeFrom)} → ${stCleanStop(j.routeTo)}` : "",
     ]);
   }
   const ws = XLSX.utils.aoa_to_sheet(aoa);
