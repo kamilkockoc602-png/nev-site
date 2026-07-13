@@ -5880,7 +5880,7 @@ function setupSeferTakipPanel() {
       const old = realOccBtn.textContent;
       realOccBtn.disabled = true;
       realOccBtn.textContent = "Hesaplanıyor…";
-      if (statusEl) statusEl.textContent = "Rezerve yolcular dahil gerçek doluluk çekiliyor (koltuk haritası)… bu birkaç saniye sürebilir.";
+      if (statusEl) statusEl.textContent = "Fiyat taraması kısa süre duraklatıldı; rezerve yolcular dahil gerçek doluluk çekiliyor (koltuk haritası)… çalışan bir tarama varsa bitmesi beklenir, biraz sürebilir.";
       try {
         const r = await apiFetch("/api/obilet/journey-tracking/refresh-occupancy", {
           method: "POST",

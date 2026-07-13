@@ -6808,6 +6808,10 @@ let obiletTaskRunning = false;
 const obiletPendingManualTargets = new Set(); // target.id'leri — ayni hatta duplicate basmayi engeller
 let obiletPendingFullRefresh = false;          // "tum hatlari yenile" tek bir kuyrukta tutulur
 const obiletPriorityQueue = [];                // Anlik Tara: siranin ONUNE gecen hatlar (paralel degil!)
+// ONCELIKLI DURAKLATMA: "Rezerve yolcuyu dahil et" (doluluk cekimi) gibi kullanici-tetiklemeli oncelikli
+// isler icin fiyat taramasi BU ANA (ms) kadar bir sonraki hatti islemeden park eder (kilidi birakir).
+// Guvenlik: en fazla ~3dk ileri set edilir — buton olse/koptuysa bile fiyat taramasi kendini toparlar.
+let obiletScanPauseUntil = 0;
 
 // Acquire / release helpers: lock'u atomic almak icin.
 async function acquireObiletLock(timeoutMs = 120000) {
@@ -7002,6 +7006,22 @@ async function refreshObiletPricesTask() {
     let idx = 0;
     let firstTarget = true;
     while (idx < targets.length || obiletPriorityQueue.length > 0) {
+      // ONCELIKLI DURAKLATMA KAPISI: kullanici "Rezerve yolcuyu dahil et" (oncelikli doluluk cekimi)
+      // baslatinca fiyat taramasi burada — bir sonraki hat islenmeden ONCE — kilidi birakip kisa sure
+      // park eder; oncelikli is bitince devam eder. Boylece doluluk butonu kilidi kesin alir ("sistem
+      // mesgul" 409 kalkar). processObiletTarget'a (fiyat/degisiklik/Telegram) DOKUNULMAZ — bu SADECE
+      // dongu zamanlamasi (mevcut 20sn kilit-birak deseniyle ayni kategori). obiletScanPauseUntil en fazla
+      // ~3dk ileri oldugu icin oncelikli is coker/kopsa bile tarama en gec ~3dk sonra kendi kendine devam eder.
+      if (Date.now() < obiletScanPauseUntil) {
+        console.log(`[Takip Görevi] Öncelikli iş (doluluk çekimi) için duraklatıldı — kilit bırakılıyor.`);
+        releaseObiletLock();
+        while (Date.now() < obiletScanPauseUntil) {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        let re = await acquireObiletLock(300000);
+        while (!re) { re = await acquireObiletLock(60000); }
+        console.log(`[Takip Görevi] Duraklatma bitti — fiyat taraması devam ediyor.`);
+      }
       let target = null;
       if (obiletPriorityQueue.length > 0) {
         const pid = obiletPriorityQueue.shift();
@@ -8506,11 +8526,18 @@ app.post("/api/obilet/journey-tracking/refresh-occupancy", requireAuth, async (r
     const toProcess = groupList.slice(0, REFRESH_OCC_MAX_GROUPS);
     const opKey = operator ? operator.toLocaleLowerCase("tr-TR").trim() : null;
 
-    // CAKISMA ONLEME: fiyat taramasi / Doluluk Iscisi / Ana Sefer Kesfi ile AYNI ANDA oBilet'e vurmayi
-    // onlemek icin kilidi al (bkz. runOccupancyWorker/seat-refresh). Kullanici butonu beklerken UI donmasin
-    // diye makul timeout; alinamazsa 409 + "birazdan tekrar dene".
-    const locked = await acquireObiletLock(30000);
-    if (!locked) return res.status(409).json({ ok: false, message: "Sistem su an mesgul (baska bir tarama calisiyor), birazdan tekrar deneyin." });
+    // CAKISMA ONLEME + ONCELIK: Fiyat taramasina "duraklat" de (bir sonraki hatti baslatmadan park eder),
+    // sonra kilidi al. Boylece calisan bir tarama yuzunden "sistem mesgul" 409 almak yerine, o tarama mevcut
+    // hattini bitirince kilit KESIN bize gecer. Guvenlik: pauseUntil ~3dk ileri + asagida finally'de temizlenir
+    // (bu istek coker/koparsa bile fiyat taramasi en gec ~3dk sonra kendi kendine devam eder). Fiyat taramasi
+    // kisa sure (bu cekim boyunca) duraklar — fiyat degisiklik tespiti birkac saniye/dakika gecikir, sonra
+    // "en uzun suredir taranmayan hat once" siralamasiyla hicbir hat ac kalmadan devam eder.
+    obiletScanPauseUntil = Date.now() + 180000;
+    const locked = await acquireObiletLock(180000);
+    if (!locked) {
+      obiletScanPauseUntil = 0;
+      return res.status(409).json({ ok: false, message: "Sistem su an cok yogun, kilit alinamadi. Birazdan tekrar deneyin." });
+    }
 
     let refreshed = 0, doneGroups = 0;
     try {
@@ -8529,6 +8556,7 @@ app.post("/api/obilet/journey-tracking/refresh-occupancy", requireAuth, async (r
       }
     } finally {
       releaseObiletLock();
+      obiletScanPauseUntil = 0; // fiyat taramasi HEMEN devam etsin (park kapisindan cikar)
     }
     console.log(`[Rezerve Dahil Et] ${doneGroups}/${toProcess.length} grup, ${refreshed} sefer GERCEK yazildi${capped ? ` (${groupList.length} gruptan ilk ${REFRESH_OCC_MAX_GROUPS}'i)` : ""}.`);
     res.json({
