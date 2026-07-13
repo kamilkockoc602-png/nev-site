@@ -6881,6 +6881,11 @@ function releaseObiletLock() {
   obiletTaskRunning = false;
   obiletLockAcquiredAt = 0;
 }
+// Uzun suren (cok gruplu/yuksek cap) kullanici islemleri icin: kilit HALA bizdeyken "taze" damgala ki
+// bayat-kilit oto-kurtarmasi (OBILET_LOCK_STALE_MS) calisirken devralmasin. Ilerleme oldukca cagrilir.
+function renewObiletLock() {
+  if (obiletTaskRunning) obiletLockAcquiredAt = Date.now();
+}
 
 // "DD.MM.YYYY HH:mm:ss" -> ms (TZ-notr; yalnizca FARK icin, iki damga ayni frame'de). Parse edilemezse NaN.
 function occStampToMs(ts) {
@@ -8677,6 +8682,9 @@ app.post("/api/obilet/journey-tracking/refresh-occupancy", requireAuth, async (r
     const capped = groupList.length > REFRESH_OCC_MAX_GROUPS;
     const toProcess = groupList.slice(0, REFRESH_OCC_MAX_GROUPS);
     const opKey = operator ? operator.toLocaleLowerCase("tr-TR").trim() : null;
+    // allFirms (Tüm firmalar) modunda tarih basi cekim ust siniri 100 (tek basista bir gunun tamamini kapsa,
+    // "sonraki basista" kalmasin). Izlenen modda varsayilan (45). Kilit + breaker + throttle ayni.
+    const perDateCap = allFirms ? 100 : OCCUPANCY_MAX_SEFER_PER_DATE;
 
     // CAKISMA ONLEME + ONCELIK: Fiyat taramasina "duraklat" de (bir sonraki hatti baslatmadan park eder),
     // sonra kilidi al. Boylece calisan bir tarama yuzunden "sistem mesgul" 409 almak yerine, o tarama mevcut
@@ -8701,8 +8709,12 @@ app.post("/api/obilet/journey-tracking/refresh-occupancy", requireAuth, async (r
         const ops = parseCsvList(target.operators).map(normalizeObiletOperatorName).filter(Boolean);
         // allFirms modunda ops filtresi bypass edildigi icin bos/"*" ops sorun degil; yalnizca izlenen modda atla.
         if (!allFirms && (!ops.length || ops.includes("*"))) continue;
+        // Her grup oncesi duraklatmayi + kilit tazeligini yenile: cok gruplu/100-cap islem uzun surse bile
+        // (a) fiyat taramasi park kalir, (b) bayat-kilit oto-kurtarmasi kilidi ELIMIZDEN ALMAZ.
+        obiletScanPauseUntil = Date.now() + 180000;
+        renewObiletLock();
         try {
-          const written = await occupancyForHatDate(target, routeId, ops, g.date, opKey, null, allFirms);
+          const written = await occupancyForHatDate(target, routeId, ops, g.date, opKey, null, allFirms, perDateCap);
           refreshed += (written || []).length;
           doneGroups++;
         } catch (e) { console.warn(`[Rezerve Dahil Et] ${g.target_id}/${g.date} hata: ${e.message}`); }
@@ -9376,7 +9388,7 @@ const OCCUPANCY_MAX_SEFER_PER_DATE = 45;
 
 // filterOpKey/filterTime verilirse SADECE o seferi isler (admin "hemen kontrol" butonu icin).
 // Doner: [{operator,time,sold,total,occ}] yazilan seferler.
-async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = null, filterTime = null, allFirms = false) {
+async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = null, filterTime = null, allFirms = false, maxSefer = OCCUPANCY_MAX_SEFER_PER_DATE) {
   const browser = await getBrowserInstance();
   const page = await setupObiletPage(browser);
   const journeyItems = [];
@@ -9437,7 +9449,7 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
     }).filter((x) => x.id && x.time && (allFirms || ops.some((op) => isObiletOperatorMatch(op, x.firma))))
       .filter((x) => (!filterTime || x.time === filterTime) &&
         (!filterOpKey || x.firma.toLocaleLowerCase("tr-TR").includes(filterOpKey)))
-      .slice(0, OCCUPANCY_MAX_SEFER_PER_DATE);
+      .slice(0, maxSefer);
 
     if (!infos.length) { console.log(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso}: takip edilen sefer yok.`); return []; }
 
