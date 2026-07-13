@@ -5877,14 +5877,17 @@ function setupSeferTakipPanel() {
       const origin = document.getElementById("stOrigin")?.value.trim() || "";
       const destination = document.getElementById("stDestination")?.value.trim() || "";
       const operator = document.getElementById("stOperator")?.value || "";
+      const allFirms = !!document.getElementById("stAllFirms")?.checked;
       const old = realOccBtn.textContent;
       realOccBtn.disabled = true;
       realOccBtn.textContent = "Hesaplanıyor…";
-      if (statusEl) statusEl.textContent = "Fiyat taraması kısa süre duraklatıldı; rezerve yolcular dahil gerçek doluluk çekiliyor (koltuk haritası)… çalışan bir tarama varsa bitmesi beklenir, biraz sürebilir.";
+      if (statusEl) statusEl.textContent = allFirms
+        ? "Fiyat taraması kısa süre duraklatıldı; TÜM firmaların (rakipler dahil) gerçek koltuk doluluğu çekiliyor… biraz sürebilir."
+        : "Fiyat taraması kısa süre duraklatıldı; rezerve yolcular dahil gerçek doluluk çekiliyor (koltuk haritası)… çalışan bir tarama varsa bitmesi beklenir, biraz sürebilir.";
       try {
         const r = await apiFetch("/api/obilet/journey-tracking/refresh-occupancy", {
           method: "POST",
-          body: JSON.stringify({ date, origin, destination, operator }),
+          body: JSON.stringify({ date, origin, destination, operator, allFirms: allFirms ? "1" : "" }),
         });
         // Taze degerleri gostermek icin listeyi yeniden yukle (secim/filtre korunur).
         await searchSeferTakip();
@@ -5986,6 +5989,13 @@ async function searchSeferTakip(initial = false) {
       if (cur && data.operators.includes(cur)) opSel.value = cur;
     }
     seferTakipState.journeys = data.journeys || [];
+    // Firma + tarih basina sefer sayisi (firmanin altina "günde N sefer" yazmak icin).
+    const fdc = {};
+    for (const j of seferTakipState.journeys) {
+      const k = `${j.operator}|${j.journey_date}`;
+      fdc[k] = (fdc[k] || 0) + 1;
+    }
+    seferTakipState.firmDayCount = fdc;
     renderSeferTakip(seferTakipState.journeys);
     if (statusEl) {
       const n = seferTakipState.journeys.length;
@@ -6048,7 +6058,10 @@ function stRowHtml(j) {
   return `<tr>
     <td>${occToDot(j.journey_date)}</td>
     <td>${occEsc(j.departure_time || "")}</td>
-    <td>${occEsc(j.operator || "")}</td>
+    <td>${occEsc(j.operator || "")}${(() => {
+      const c = seferTakipState.firmDayCount && seferTakipState.firmDayCount[`${j.operator}|${j.journey_date}`];
+      return c ? `<div style="font-size:0.72rem;opacity:0.6;">bu tarihte ${c} sefer</div>` : "";
+    })()}</td>
     <td>
       <b>${occEsc((j.origin || "").toUpperCase())} - ${occEsc((j.destination || "").toUpperCase())}</b>
       ${j.departure_stop ? `<div style="font-size:0.78rem;opacity:0.6;">${occEsc(j.departure_stop)}</div>` : ""}

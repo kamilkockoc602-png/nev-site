@@ -8660,10 +8660,12 @@ app.post("/api/obilet/journey-tracking/refresh-occupancy", requireAuth, async (r
     const origin = String(req.body?.origin ?? req.query.origin ?? "").trim();
     const destination = String(req.body?.destination ?? req.query.destination ?? "").trim();
     const operator = String(req.body?.operator ?? req.query.operator ?? "").trim();
+    const af = req.body?.allFirms ?? req.query.allFirms;
+    const allFirms = af === true || af === 1 || af === "1" || af === "true";
 
     // Gorunen seferleri, listeyi besleyen AYNI mantikla (computeJourneyTracking) cikar -> panelde ne
-    // goruyorsa tam onu tazeler. Gecmis seferler (kalkisi gecmis) atlanir.
-    const { journeys } = computeJourneyTracking({ date, origin, destination, operator });
+    // goruyorsa tam onu tazeler. Gecmis seferler (kalkisi gecmis) atlanir. allFirms ise rakipler de dahil.
+    const { journeys } = computeJourneyTracking({ date, origin, destination, operator, allFirms });
     const today = todayIsoInIstanbul();
     const groups = new Map(); // `${target_id}|${date}` -> {target_id, date}
     for (const j of journeys) {
@@ -8697,9 +8699,10 @@ app.post("/api/obilet/journey-tracking/refresh-occupancy", requireAuth, async (r
         const routeId = String(target.route_id || "").trim();
         if (!/^\d+-\d+$/.test(routeId)) continue;
         const ops = parseCsvList(target.operators).map(normalizeObiletOperatorName).filter(Boolean);
-        if (!ops.length || ops.includes("*")) continue;
+        // allFirms modunda ops filtresi bypass edildigi icin bos/"*" ops sorun degil; yalnizca izlenen modda atla.
+        if (!allFirms && (!ops.length || ops.includes("*"))) continue;
         try {
-          const written = await occupancyForHatDate(target, routeId, ops, g.date, opKey);
+          const written = await occupancyForHatDate(target, routeId, ops, g.date, opKey, null, allFirms);
           refreshed += (written || []).length;
           doneGroups++;
         } catch (e) { console.warn(`[Rezerve Dahil Et] ${g.target_id}/${g.date} hata: ${e.message}`); }
@@ -9373,7 +9376,7 @@ const OCCUPANCY_MAX_SEFER_PER_DATE = 45;
 
 // filterOpKey/filterTime verilirse SADECE o seferi isler (admin "hemen kontrol" butonu icin).
 // Doner: [{operator,time,sold,total,occ}] yazilan seferler.
-async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = null, filterTime = null) {
+async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = null, filterTime = null, allFirms = false) {
   const browser = await getBrowserInstance();
   const page = await setupObiletPage(browser);
   const journeyItems = [];
@@ -9428,7 +9431,10 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
       const dep = String(it?.journey?.departure || it?.departure || "");
       const tm = dep.match(/(\d{2}:\d{2})/);
       return { id: it?.id != null ? String(it.id) : null, firma: String(it?.["partner-name"] || "").trim(), time: tm ? tm[1] : "" };
-    }).filter((x) => x.id && x.time && ops.some((op) => isObiletOperatorMatch(op, x.firma)))
+    // allFirms=true ise TUM firmalarin koltugu cekilir (rakipler dahil) — "Rezerve yolcuyu dahil et" + "Tüm
+    // firmaları göster" birlikte acikken. Aksi halde yalnizca takip edilen firmalar (ops). Cap + kilit + breaker
+    // ayni oldugu icin yuk taviani degismez (tarih basi <=OCCUPANCY_MAX_SEFER_PER_DATE cekim).
+    }).filter((x) => x.id && x.time && (allFirms || ops.some((op) => isObiletOperatorMatch(op, x.firma))))
       .filter((x) => (!filterTime || x.time === filterTime) &&
         (!filterOpKey || x.firma.toLocaleLowerCase("tr-TR").includes(filterOpKey)))
       .slice(0, OCCUPANCY_MAX_SEFER_PER_DATE);
