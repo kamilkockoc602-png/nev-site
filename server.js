@@ -8724,45 +8724,99 @@ app.post("/api/obilet/journey-tracking/refresh-occupancy", requireAuth, async (r
 function computeMarketShare(date) {
   const today = todayIsoInIstanbul();
   try { db.prepare("DELETE FROM obilet_occupancy WHERE journey_date < ?").run(shiftIsoDate(today, -10)); } catch (e) {}
-  const availableDates = db.prepare(
-    "SELECT DISTINCT journey_date FROM obilet_occupancy WHERE journey_date >= ? ORDER BY journey_date"
-  ).all(today).map((r) => r.journey_date);
+  try { db.prepare("DELETE FROM obilet_market_journeys WHERE journey_date < ?").run(shiftIsoDate(today, -10)); } catch (e) {}
 
   const dateOk = date && /^\d{4}-\d{2}-\d{2}$/.test(date);
-  const occWhere = dateOk ? "AND o.journey_date = ?" : "AND o.journey_date >= ?";
-  const occParam = dateOk ? date : today;
-  const occ = db.prepare(`
-    SELECT o.target_id, t.origin, t.destination, o.operator,
-           COUNT(*) AS sefer,
-           SUM(o.total_seats) AS kapasite,
-           SUM(o.total_seats - o.available_seats) AS yolcu
-      FROM obilet_occupancy o
-      JOIN obilet_targets t ON t.id = o.target_id
-     WHERE o.total_seats > 0 ${occWhere}
-     GROUP BY o.target_id, o.operator
-  `).all(occParam);
+  const dateCond = dateOk ? "= ?" : ">= ?";
+  const param = dateOk ? date : today;
 
-  const prWhere = dateOk ? "AND journey_date = ?" : "AND journey_date >= ?";
-  const prices = db.prepare(`
-    SELECT target_id, operator, MIN(price) AS fmin, MAX(price) AS fmax
-      FROM obilet_prices WHERE price > 0 ${prWhere}
-     GROUP BY target_id, operator
-  `).all(occParam);
+  // Tarih dropdown'i: hem izlenen (occupancy) hem tum-firma (market) tarihlerinin birlesimi.
+  const availableDates = db.prepare(
+    `SELECT DISTINCT d FROM (
+        SELECT journey_date AS d FROM obilet_occupancy WHERE journey_date >= ?
+        UNION SELECT journey_date AS d FROM obilet_market_journeys WHERE journey_date >= ?
+     ) ORDER BY d`
+  ).all(today, today).map((r) => r.d);
+
+  // GERCEK doluluk haritasi (izlenen firmalar) — market satirlarindaki 'liste' dolulugunu zenginlestirmek icin.
+  const occByKey = new Map();
+  try {
+    for (const o of db.prepare(
+      `SELECT target_id, operator, journey_date, departure_time, total_seats, available_seats, service_id
+         FROM obilet_occupancy WHERE total_seats > 0 AND journey_date ${dateCond}`
+    ).all(param)) {
+      occByKey.set(`${o.target_id}|${o.journey_date}|${o.operator}|${o.departure_time}`, o);
+    }
+  } catch (e) {}
+
+  // KAYNAK = obilet_market_journeys (TUM firmalar; serviceId XHR yolundan gelir). Yoksa (henuz dolmadiysa)
+  // occupancy'ye geri dus ki rapor bos kalmasin.
+  let srcRows = [];
+  try {
+    srcRows = db.prepare(
+      `SELECT target_id, journey_date, operator, departure_time, total_seats, available_seats, price, service_id
+         FROM obilet_market_journeys WHERE journey_date ${dateCond}`
+    ).all(param);
+  } catch (e) {}
+  if (!srcRows.length) {
+    srcRows = [...occByKey.values()].map((o) => ({
+      target_id: o.target_id, journey_date: o.journey_date, operator: o.operator, departure_time: o.departure_time,
+      total_seats: o.total_seats, available_seats: o.available_seats, price: null, service_id: o.service_id || "",
+    }));
+  }
+
+  const tgtMap = new Map();
+  for (const t of db.prepare("SELECT id, origin, destination FROM obilet_targets").all()) tgtMap.set(t.id, t);
+
+  // FIZIKSEL SEFER DEDUP: ayni otobus Istanbul'da birden cok terminalde (Esenler/Alibeykoy, farkli saat) ayri
+  // satir olur; hepsi AYNI serviceId'yi paylasir -> serviceId ile TEK say. serviceId bos ise saate gore ayrilir
+  // (dedup edilemeyen az sayida satir icin en iyi caba). Ayni fiziksel otobusun en DOLU (en az bos) goruntusu alinir.
+  const buses = new Map(); // dedupKey -> {target_id, operator, total, sold, _avail, price}
+  for (const r of srcRows) {
+    if (!(Number(r.total_seats) > 0)) continue;
+    const g = occByKey.get(`${r.target_id}|${r.journey_date}|${r.operator}|${r.departure_time}`);
+    const total = (g && g.total_seats > 0) ? g.total_seats : Number(r.total_seats);
+    const availRaw = (g && g.available_seats != null) ? g.available_seats : r.available_seats;
+    const avail = Number.isFinite(Number(availRaw)) ? Number(availRaw) : total;
+    const svc = String(r.service_id || (g && g.service_id) || "").trim();
+    const dedupKey = svc
+      ? `${r.target_id}|${r.operator}|${r.journey_date}|svc:${svc}`
+      : `${r.target_id}|${r.operator}|${r.journey_date}|t:${r.departure_time}`;
+    const sold = Math.max(0, Math.min(total, total - avail));
+    const prev = buses.get(dedupKey);
+    if (!prev || avail < prev._avail) {
+      buses.set(dedupKey, { target_id: r.target_id, operator: r.operator, total, sold, _avail: avail, price: (r.price != null ? Number(r.price) : null) });
+    }
+  }
+
+  // Fiyat min/max: market (tum firmalar) varsa oradan, yoksa obilet_prices (izlenen).
   const priceMap = new Map();
-  for (const p of prices) priceMap.set(`${p.target_id}|${p.operator}`, p);
+  try {
+    let pr = db.prepare(`SELECT target_id, operator, MIN(price) AS fmin, MAX(price) AS fmax FROM obilet_market_journeys WHERE price > 0 AND journey_date ${dateCond} GROUP BY target_id, operator`).all(param);
+    if (!pr.length) pr = db.prepare(`SELECT target_id, operator, MIN(price) AS fmin, MAX(price) AS fmax FROM obilet_prices WHERE price > 0 AND journey_date ${dateCond} GROUP BY target_id, operator`).all(param);
+    for (const p of pr) priceMap.set(`${p.target_id}|${p.operator}`, p);
+  } catch (e) {}
+
+  // (target, operator) bazinda topla — her fiziksel otobus BIR kez.
+  const agg = new Map();
+  for (const b of buses.values()) {
+    const k = `${b.target_id}|${b.operator}`;
+    let a = agg.get(k);
+    if (!a) { a = { target_id: b.target_id, operator: b.operator, sefer: 0, kapasite: 0, yolcu: 0 }; agg.set(k, a); }
+    a.sefer += 1; a.kapasite += b.total; a.yolcu += b.sold;
+  }
 
   const routes = new Map();
-  for (const r of occ) {
-    if (!routes.has(r.target_id)) {
-      routes.set(r.target_id, {
-        route: `${(r.origin || "").toUpperCase()}-${(r.destination || "").toUpperCase()}`,
-        firms: [],
-      });
+  for (const a of agg.values()) {
+    const t = tgtMap.get(a.target_id);
+    if (!t) continue;
+    if (!routes.has(a.target_id)) {
+      routes.set(a.target_id, { route: `${(t.origin || "").toUpperCase()}-${(t.destination || "").toUpperCase()}`, firms: [] });
     }
-    const pm = priceMap.get(`${r.target_id}|${r.operator}`) || {};
-    const doluluk = r.kapasite ? Math.round((r.yolcu / r.kapasite) * 10000) / 100 : 0;
-    routes.get(r.target_id).firms.push({
-      operator: r.operator, sefer: r.sefer, kapasite: r.kapasite || 0, yolcu: r.yolcu || 0,
+    const pm = priceMap.get(`${a.target_id}|${a.operator}`) || {};
+    const doluluk = a.kapasite ? Math.round((a.yolcu / a.kapasite) * 10000) / 100 : 0;
+    routes.get(a.target_id).firms.push({
+      operator: a.operator, sefer: a.sefer, kapasite: a.kapasite || 0, yolcu: a.yolcu || 0,
       doluluk, fiyatMin: pm.fmin != null ? pm.fmin : null, fiyatMax: pm.fmax != null ? pm.fmax : null,
     });
   }
