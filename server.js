@@ -5141,13 +5141,14 @@ function tgDate2(s) {
 function tgAttachOccupancy(rows) {
   try {
     if (!rows || !rows.length) return rows;
-    const occ = db.prepare("SELECT target_id, operator, journey_date, departure_time, total_seats, available_seats, plate FROM obilet_occupancy").all();
+    const occ = db.prepare("SELECT target_id, operator, journey_date, departure_time, total_seats, available_seats, plate, source FROM obilet_occupancy").all();
     if (!occ.length) return rows;
     const map = new Map();
     for (const o of occ) map.set(`${o.target_id}|${o.operator}|${o.journey_date}|${o.departure_time}`, o);
     for (const r of rows) {
       const m = map.get(`${r.target_id}|${r.operator}|${r.journey_date}|${r.departure_time}`);
-      if (m) { r.total_seats = m.total_seats; r.available_seats = m.available_seats; r.plate = m.plate; }
+      // source: 'gercek' (koltuk haritasi = gercek doluluk) / 'liste' (available-seats = gecis seferinde eksik).
+      if (m) { r.total_seats = m.total_seats; r.available_seats = m.available_seats; r.plate = m.plate; r.occSource = m.source; }
     }
   } catch (e) { /* yok say */ }
   return rows;
@@ -5199,9 +5200,12 @@ function tgChangesGrouped(rows) {
         fark: (diff > 0 ? "+" : "") + diff,
       };
       // Dolu = araçtaki yolcu (total - available). "38/41" => 41 koltukta 38 dolu.
+      // Kaynak: 'gercek' (koltuk haritasi = GERCEK doluluk, gecis seferindeki binmis yolcular dahil) net
+      // yazilir; 'liste' (available-seats, gecis seferinde EKSIK) "~" ile tahmini isaretlenir.
       if (hasOcc) {
         if (r.total_seats != null && r.available_seats != null) {
-          row.dol = `${Math.max(0, r.total_seats - r.available_seats)}/${r.total_seats}`;
+          const mark = r.occSource === "gercek" ? "" : "~";
+          row.dol = `${mark}${Math.max(0, r.total_seats - r.available_seats)}/${r.total_seats}`;
         } else { row.dol = "—"; }
       }
       // Plaka: varsa yaz, yoksa NULL (istenen davranis).
@@ -5214,7 +5218,11 @@ function tgChangesGrouped(rows) {
       const wo = g.items.filter((r) => r.total_seats != null && r.available_seats != null && r.total_seats > 0);
       if (wo.length) {
         const avg = Math.round(wo.reduce((s, r) => s + ((r.total_seats - r.available_seats) / r.total_seats) * 100, 0) / wo.length);
-        occLabel = ` · <b>%${avg} dolu</b>`;
+        // Kaynak: hepsi gercek koltuk haritasindansa "(gerçek)", hepsi liste ise "(~tahmini)", karisiksa "(kısmen ~tahmini)".
+        const allG = wo.every((r) => r.occSource === "gercek");
+        const anyG = wo.some((r) => r.occSource === "gercek");
+        const src = allG ? " (gerçek)" : anyG ? " (kısmen ~tahmini)" : " (~tahmini)";
+        occLabel = ` · <b>%${avg} dolu</b>${src}`;
       }
     }
     const partCount = Math.ceil(tableRows.length / MAX_ROWS);
@@ -5308,10 +5316,16 @@ async function sendObiletTelegramAlert(target, changes) {
     old_price: c.oldPrice,
     new_price: c.newPrice,
   }));
-  tgAttachOccupancy(rows); // her degisikligin yanina bos/dolu koltuk
+  tgAttachOccupancy(rows); // her degisikligin yanina dolu/koltuk + kaynak (gercek koltuk haritasi / liste)
+  // Doluluk kaynagi karisik olabilir: gercek koltuk haritasi (net) vs liste (gecis seferinde eksik, "~").
+  // Herhangi bir satir liste ise mesaja kisa aciklama ekle (kullanici "~"nin ne demek oldugunu bilsin).
+  const anyListe = rows.some((r) => r.total_seats != null && r.occSource !== "gercek");
+  const legend = anyListe
+    ? `\n\n<i>Doluluk: işaretsiz = gerçek koltuk haritası; ~ = tahmini (liste, geçiş seferinde eksik olabilir).</i>`
+    : "";
   const text =
     `<b>Fiyat Değişikliği</b> · ${changes.length} değişim\n\n` +
-    tgChangesGrouped(rows);
+    tgChangesGrouped(rows) + legend;
 
   for (const chatId of chatIds) {
     await sendTelegramLong(chatId, text);
