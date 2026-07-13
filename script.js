@@ -5867,6 +5867,35 @@ function setupSeferTakipPanel() {
     btn.addEventListener("click", () => searchSeferTakip());
     const exportBtn = document.getElementById("stExportBtn");
     if (exportBtn) exportBtn.addEventListener("click", exportSeferTakipExcel);
+    // "Rezerve yolcuyu dahil et": SU AN filtrelenen seferlerin GERCEK dolulugunu (koltuk haritasi,
+    // baska sehirden binip gecen yolcular dahil) HEMEN cek + panele yaz. Sadece ekrandaki seferleri
+    // ceker -> az yuk. Arka plan iscisini beklemeye gerek kalmaz.
+    const realOccBtn = document.getElementById("stRealOccBtn");
+    if (realOccBtn) realOccBtn.addEventListener("click", async () => {
+      const statusEl = document.getElementById("stStatusMsg");
+      const date = document.getElementById("stDate")?.value || "";
+      const origin = document.getElementById("stOrigin")?.value.trim() || "";
+      const destination = document.getElementById("stDestination")?.value.trim() || "";
+      const operator = document.getElementById("stOperator")?.value || "";
+      const old = realOccBtn.textContent;
+      realOccBtn.disabled = true;
+      realOccBtn.textContent = "Hesaplanıyor…";
+      if (statusEl) statusEl.textContent = "Rezerve yolcular dahil gerçek doluluk çekiliyor (koltuk haritası)… bu birkaç saniye sürebilir.";
+      try {
+        const r = await apiFetch("/api/obilet/journey-tracking/refresh-occupancy", {
+          method: "POST",
+          body: JSON.stringify({ date, origin, destination, operator }),
+        });
+        // Taze degerleri gostermek icin listeyi yeniden yukle (secim/filtre korunur).
+        await searchSeferTakip();
+        if (statusEl && r && r.message) statusEl.textContent = r.message;
+      } catch (err) {
+        if (statusEl) statusEl.textContent = `Hata: ${err.message}`;
+      } finally {
+        realOccBtn.disabled = false;
+        realOccBtn.textContent = old;
+      }
+    });
     const reset = document.getElementById("stResetBtn");
     if (reset) reset.addEventListener("click", () => {
       ["stOrigin", "stDestination"].forEach((id) => { const el = document.getElementById(id); if (el) el.value = ""; });

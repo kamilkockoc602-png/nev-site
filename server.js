@@ -8476,6 +8476,72 @@ app.get("/api/obilet/journey-tracking", requireAuth, (req, res) => {
   }
 });
 
+// "REZERVE YOLCUYU DAHIL ET": Sefer Takip'te SU AN filtrelenen (tarih+kalkis+varis+firma) seferlerin
+// GERCEK dolulugunu (koltuk haritasi: erkek+kadin=dolu, gecis seferlerinde binmis yolcular DAHIL) HEMEN
+// hesaplar ve panele yazar. Arka plan iscisini beklemeye gerek kalmadan, yalnizca BAKILAN seferleri
+// ceker -> AZ YUK + tek tikta hepsi. Kullanici: "gercek koltugu gormek icin surekli elle test yapmam sacma".
+// Gorunen seferleri (target_id, tarih) gruplarina ayirir; her grup occupancyForHatDate ile TEK sayfa
+// yuklemesiyle (o firmanin) tum seferlerini ceker. 429 korumasi: paylasilan kilit + circuit breaker +
+// grup ust siniri. Fiyat/degisiklik-tespiti/Telegram/mail mantigina DOKUNMAZ (yalnizca occupancy tablosu).
+const REFRESH_OCC_MAX_GROUPS = 8; // (target_id, tarih) grubu ust siniri — kazara cok genis filtrede yuku bagla
+app.post("/api/obilet/journey-tracking/refresh-occupancy", requireAuth, async (req, res) => {
+  try {
+    const date = String(req.body?.date ?? req.query.date ?? "").trim();
+    const origin = String(req.body?.origin ?? req.query.origin ?? "").trim();
+    const destination = String(req.body?.destination ?? req.query.destination ?? "").trim();
+    const operator = String(req.body?.operator ?? req.query.operator ?? "").trim();
+
+    // Gorunen seferleri, listeyi besleyen AYNI mantikla (computeJourneyTracking) cikar -> panelde ne
+    // goruyorsa tam onu tazeler. Gecmis seferler (kalkisi gecmis) atlanir.
+    const { journeys } = computeJourneyTracking({ date, origin, destination, operator });
+    const today = todayIsoInIstanbul();
+    const groups = new Map(); // `${target_id}|${date}` -> {target_id, date}
+    for (const j of journeys) {
+      if (String(j.journey_date) < today) continue;
+      groups.set(`${j.target_id}|${j.journey_date}`, { target_id: j.target_id, date: j.journey_date });
+    }
+    const groupList = [...groups.values()];
+    if (!groupList.length) return res.json({ ok: true, refreshed: 0, groups: 0, message: "Yenilenecek (gelecek tarihli) sefer bulunamadi." });
+    const capped = groupList.length > REFRESH_OCC_MAX_GROUPS;
+    const toProcess = groupList.slice(0, REFRESH_OCC_MAX_GROUPS);
+    const opKey = operator ? operator.toLocaleLowerCase("tr-TR").trim() : null;
+
+    // CAKISMA ONLEME: fiyat taramasi / Doluluk Iscisi / Ana Sefer Kesfi ile AYNI ANDA oBilet'e vurmayi
+    // onlemek icin kilidi al (bkz. runOccupancyWorker/seat-refresh). Kullanici butonu beklerken UI donmasin
+    // diye makul timeout; alinamazsa 409 + "birazdan tekrar dene".
+    const locked = await acquireObiletLock(30000);
+    if (!locked) return res.status(409).json({ ok: false, message: "Sistem su an mesgul (baska bir tarama calisiyor), birazdan tekrar deneyin." });
+
+    let refreshed = 0, doneGroups = 0;
+    try {
+      for (const g of toProcess) {
+        const target = db.prepare("SELECT * FROM obilet_targets WHERE id = ?").get(g.target_id);
+        if (!target) continue;
+        const routeId = String(target.route_id || "").trim();
+        if (!/^\d+-\d+$/.test(routeId)) continue;
+        const ops = parseCsvList(target.operators).map(normalizeObiletOperatorName).filter(Boolean);
+        if (!ops.length || ops.includes("*")) continue;
+        try {
+          const written = await occupancyForHatDate(target, routeId, ops, g.date, opKey);
+          refreshed += (written || []).length;
+          doneGroups++;
+        } catch (e) { console.warn(`[Rezerve Dahil Et] ${g.target_id}/${g.date} hata: ${e.message}`); }
+      }
+    } finally {
+      releaseObiletLock();
+    }
+    console.log(`[Rezerve Dahil Et] ${doneGroups}/${toProcess.length} grup, ${refreshed} sefer GERCEK yazildi${capped ? ` (${groupList.length} gruptan ilk ${REFRESH_OCC_MAX_GROUPS}'i)` : ""}.`);
+    res.json({
+      ok: true, refreshed, groups: doneGroups, capped,
+      message: refreshed
+        ? `${refreshed} seferin gerçek dolulugu güncellendi${capped ? ` (çok geniş filtre; ilk ${REFRESH_OCC_MAX_GROUPS} grup — daha dar filtreleyin)` : ""}.`
+        : "Koltuk haritası şu an çekilemedi (Cloudflare/rate-limit), birazdan tekrar deneyin.",
+    });
+  } catch (e) {
+    res.status(500).json({ message: e.message || "Rezerve yolcu hesaplaması başarısız." });
+  }
+});
+
 // Pazar payi verisini hesaplar (hat + firma bazinda). date bos ise tum gelecek seferler.
 function computeMarketShare(date) {
   const today = todayIsoInIstanbul();
