@@ -7715,7 +7715,19 @@ async function probeObiletSeatMap(routeId, dateIso, timeFilter = "", operatorFil
     const pageUrl = `https://www.obilet.com/seferler/${routeId}/${dateIso}?t=${Date.now()}`;
     console.log(`[SeatProbe] Sayfa aciliyor: ${pageUrl} (saat filtresi: ${timeFilter || "ilk sefer"})`);
     await gotoAndHandleCloudflare(page, pageUrl);
-    await new Promise(r => setTimeout(r, 4500)); // getbusjourneys ve render
+    // Journeys (liste) XHR GELENE KADAR bekle (sabit 4.5sn yerine — soguk/Cloudflare sayfalari yavas
+    // yukleniyor, sabit sure yetmeyince "liste hic gelmedi" oluyordu). Max ~30sn, 2sn'de bir kontrol.
+    for (let i = 0; i < 15 && !journeyItems.length; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    if (!journeyItems.length) {
+      // Bir kez daha yukle (ilk yukleme Cloudflare'e takilmis olabilir).
+      console.log(`[SeatProbe] Liste gelmedi, sayfa 1 kez daha yukleniyor...`);
+      await gotoAndHandleCloudflare(page, pageUrl);
+      for (let i = 0; i < 12 && !journeyItems.length; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
 
     // Liste verisinden (journeyItems) bu saatteki TUM seferleri cikar: firma + id + koltuk.
     const itemInfo = (it) => {
@@ -7849,9 +7861,17 @@ app.post("/api/obilet/targets/:id/seatmap-probe", requireAuth, requireAdmin, asy
     const dateIso = String(req.query.date || target.date || "").trim();
     const time = String(req.query.time || "").trim();
     const operator = String(req.query.operator || "").trim();
-    // NOT: obiletTaskRunning kilidine DOKUNMUYORUZ — calisan taramanin kilidini bozmamak icin.
-    // Probe tek hafif sayfa acar (tek sefer), tam taramaya gore dusuk yuk; paralel calisabilir.
-    const result = await probeObiletSeatMap(routeId, dateIso, time, operator);
+    // KILIT AL: Canli tespit — probe kilitsizken, calisan tarama (fiyat/Doluluk İşçisi) ile PARALEL
+    // sayfa acinca Cloudflare'e takiliyor ve liste (journeys XHR) BILE GELMIYOR ("hicbir endpoint").
+    // Kilit ile calisan tarama bosalinca calisir. Admin butonu; alinamazsa 409 + "birazdan tekrar dene".
+    const locked = await acquireObiletLock(45000);
+    if (!locked) return res.status(409).json({ ok: false, message: "Sistem su an mesgul (baska bir tarama calisiyor), 1 dk sonra tekrar deneyin." });
+    let result;
+    try {
+      result = await probeObiletSeatMap(routeId, dateIso, time, operator);
+    } finally {
+      releaseObiletLock();
+    }
     const listSold = (result.listTotal != null && result.listAvail != null) ? result.listTotal - result.listAvail : null;
     const gercek = result.soldRealSvg != null ? `${result.soldRealSvg} dolu / ${result.totalRealSvg}` : `${result.soldReal ?? "?"} dolu / ${result.totalReal ?? "?"} (DOM)`;
     res.json({
