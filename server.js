@@ -6828,17 +6828,31 @@ const obiletPriorityQueue = [];                // Anlik Tara: siranin ONUNE gece
 let obiletScanPauseUntil = 0;
 
 // Acquire / release helpers: lock'u atomic almak icin.
+let obiletLockAcquiredAt = 0; // ms — kilit ne zaman alindi (bayat-kilit oto-kurtarmasi icin)
+// BAYAT-KILIT ESIGI: bir tutucu (fiyat taramasi / doluluk butonu / isci / rota kesfi) bu sureden UZUN
+// suredir kilidi birakmadiysa HUNG/OLU say -> devral. Boylece takilan TEK bir Puppeteer islemi (release'siz
+// cikis/sonsuz bekleme) TUM guncellemeleri sonsuza kadar durduramaz. Esik, en uzun MESRU tutmadan cok uzun:
+// bir hat = processObiletTarget ~1-3dk; doluluk butonu <=8 grup ~5dk. 10dk'ya sadece gercek hung ulasir.
+const OBILET_LOCK_STALE_MS = 10 * 60 * 1000; // 10 dk
 async function acquireObiletLock(timeoutMs = 120000) {
   const start = Date.now();
   while (obiletTaskRunning) {
+    // Kilit 10 dk'dan uzun tutulduysa: tutucu hung/olu. Devral (gercek hung olmadan bu esige ulasilmaz;
+    // olu tutucu artik istek atmadigi icin es-zamanli oBilet/429 riski ihmal edilebilir). Sistem kilitli kalmasin.
+    if (obiletLockAcquiredAt && (Date.now() - obiletLockAcquiredAt) > OBILET_LOCK_STALE_MS) {
+      console.warn(`[oBilet Kilit] BAYAT KILIT devralindi (${Math.round((Date.now() - obiletLockAcquiredAt) / 1000)}s tutulmus, birakilmamis) — guncellemeler sonsuza kadar durmasin.`);
+      break;
+    }
     if (Date.now() - start > timeoutMs) return false;
     await new Promise(r => setTimeout(r, 1000));
   }
   obiletTaskRunning = true;
+  obiletLockAcquiredAt = Date.now();
   return true;
 }
 function releaseObiletLock() {
   obiletTaskRunning = false;
+  obiletLockAcquiredAt = 0;
 }
 
 // "DD.MM.YYYY HH:mm:ss" -> ms (TZ-notr; yalnizca FARK icin, iki damga ayni frame'de). Parse edilemezse NaN.
