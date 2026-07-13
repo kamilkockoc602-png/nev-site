@@ -6303,7 +6303,8 @@ function renderObiletTargetCards(listEl) {
         if (Array.isArray(r.seferler) && r.seferler.length) {
           list = "\n\nBu saatteki firmalar:\n" + r.seferler.map(s => `${s.firma}: ${(s.total!=null&&s.avail!=null)?(s.total-s.avail):"?"}/${s.total} dolu`).join("\n");
         }
-        alert(`KOLTUK TESTİ SONUCU\n\n${r.ozet}${list}\n\n(Detay: Railway loglarında "[SeatProbe]". Liste ile gerçek harita farklıysa liste güvenilmez demektir.)`);
+        const noteLine = r.note ? `\n\n⚠ ${r.note}` : "";
+        alert(`KOLTUK TESTİ SONUCU\n\n${r.ozet}${noteLine}${list}\n\n(Detay: Railway loglarında "[SeatProbe]". Liste ile gerçek harita farklıysa liste güvenilmez demektir.)`);
       } catch (err) {
         alert("Koltuk testi başarısız: " + err.message);
       } finally {

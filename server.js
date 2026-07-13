@@ -7745,47 +7745,26 @@ async function probeObiletSeatMap(routeId, dateIso, timeFilter = "", operatorFil
       console.log(`[SeatProbe] SECILEN firma: ${chosen.firma} ${chosen.time} — liste: ${(chosen.total != null && chosen.avail != null) ? chosen.total - chosen.avail : "?"}/${chosen.total}`);
     }
 
-    // Koltuk haritasini TIKLAMA ile ac (fetch HTML donduruyor; tarayicinin kendi AJAX'i /json/sefer'i
-    // getiriyor, response listener yakalar). Kart secimi: icinde KOLTUK/SEC butonu OLAN + saat iceren
-    // + (firma verildiyse) firma eslesen kart. Filtre cubugu vb. elenir (koltuk butonu yok).
-    result.clicked = await page.evaluate((t, firm) => {
-      const hasSeatBtn = (el) => Array.from(el.querySelectorAll("button,a,span,div"))
-        .some((b) => /koltuk|koltuğa|seç|^sec$|satın al|satin al/i.test((b.innerText || "").trim()));
-      let cards = Array.from(document.querySelectorAll("div,li,article"))
-        .filter((el) => (el.innerText || "").length < 700 && /\d{2}:\d{2}/.test(el.innerText || "") && hasSeatBtn(el));
-      const matchFirm = (el) => {
-        if (!firm) return true;
-        const txt = (el.innerText || "").toLowerCase();
-        if (txt.includes(firm)) return true;
-        return Array.from(el.querySelectorAll("img")).some((im) =>
-          ((im.getAttribute("alt") || "") + (im.getAttribute("title") || "")).toLowerCase().includes(firm));
-      };
-      const timed = t ? cards.filter((el) => (el.innerText || "").includes(t)) : cards;
-      const target = (firm && timed.find(matchFirm)) || timed[0] || null;
-      if (!target) return "uygun-kart-yok";
-      // En kucuk (en ic) uygun karti sec — buyuk kapsayicilar yerine tek sefer karti.
-      let best = target;
-      const inner = cards.filter((c) => target.contains(c) && c !== target);
-      for (const c of inner) if ((c.innerText || "").includes(t || "")) { best = c; break; }
-      const btn = Array.from(best.querySelectorAll("button,a,span,div"))
-        .find((b) => /koltuk|seç|^sec$|satın al|satin al/i.test((b.innerText || "").trim()));
-      (btn || best).click();
-      return (best.innerText || "").replace(/\s+/g, " ").trim().slice(0, 90);
-    }, timeFilter, opKey).catch((e) => "click-hata:" + e.message);
-    console.log(`[SeatProbe] Tiklanan kart: ${result.clicked}`);
-
-    await new Promise(r => setTimeout(r, 7000)); // koltuk haritasi acilsin + /json/sefer AJAX gelsin
-
-    // Yakalanan /json/sefer yanit(lar)ini SVG parser ile say.
-    for (const sr of seatResponses) {
-      const c = countSeatsFromSeferJson(sr.data);
+    // GERCEK koltuk haritasini TIKLAMASIZ DOGRUDAN cek — secilen seferin id'siyle fetchSeferRealSeats
+    // (Doluluk İşçisi ile AYNI kanitlanmis yontem, POST /json/sefer/{id}). ESKI TIKLAMA yontemi
+    // "Sirala Kalkis Hizli Filtreler" gibi filtre cubuklarini sefer karti sanip YANLIS tiklayip koltuk
+    // haritasini hic acamiyordu -> GERCEK null -> kullanici "?" goruyordu (canli SeatProbe logunda tespit).
+    if (chosen && chosen.id != null) {
+      result.clickedSeferId = String(chosen.id);
+      const c = await fetchSeferRealSeats(page, chosen.id);
       if (c) {
-        console.log(`[SeatProbe] SVG say (${sr.url}): dolu=${c.sold} bos=${c.empty} toplam=${c.total} bilinmeyen=${c.unknown}`);
-        if (result.soldRealSvg == null || c.sold > result.soldRealSvg) { result.soldRealSvg = c.sold; result.totalRealSvg = c.total; }
+        result.soldRealSvg = c.sold; result.totalRealSvg = c.total;
+        result.clicked = `dogrudan-fetch id=${chosen.id}`;
+        console.log(`[SeatProbe] >>> GERCEK (dogrudan fetch, id=${chosen.id}): ${c.sold}/${c.total} dolu (liste bu firmada ${(result.listTotal != null && result.listAvail != null) ? result.listTotal - result.listAvail : "?"} diyordu)`);
+      } else {
+        result.clicked = `fetch-basarisiz id=${chosen.id}`;
+        result.note = "Koltuk haritasi cekilemedi (Cloudflare/rate-limit veya kismi harita). Birazdan tekrar deneyin.";
+        console.log(`[SeatProbe] GERCEK cekilemedi (id=${chosen.id}) — Cloudflare/rate-limit veya bos/kismi harita.`);
       }
-    }
-    if (result.soldRealSvg != null) {
-      console.log(`[SeatProbe] >>> SVG SONUC: gercek ${result.soldRealSvg}/${result.totalRealSvg} dolu (liste bu firmada ${(result.listTotal != null && result.listAvail != null) ? result.listTotal - result.listAvail : "?"} diyordu)`);
+    } else {
+      result.clicked = "sefer-secilemedi";
+      result.note = `Bu tarih/saat/firmada sefer bulunamadi (liste ${timeFilter || "(ilk)"} saatinde ${infos.length} sefer gordu).`;
+      console.log(`[SeatProbe] Sefer secilemedi: saat=${timeFilter || "(ilk)"} firma=${opKey || "(yok)"} — liste ${infos.length} sefer.`);
     }
 
     // FETCH TESTI: yakalanan GOVDE ile POST fetch calisiyor mu? (bulk icin kritik)
@@ -7878,6 +7857,7 @@ app.post("/api/obilet/targets/:id/seatmap-probe", requireAuth, requireAdmin, asy
     res.json({
       ok: true,
       ozet: `Sefer: ${result.matchedFirma || operator || "?"} ${time || "(ilk)"}\nListe API: ${listSold ?? "?"} dolu / ${result.listTotal ?? "?"}  |  GERÇEK: ${gercek}`,
+      note: result.note || "",
       seferler: result.seferlerAtTime || [],
       result,
     });
