@@ -9103,15 +9103,15 @@ app.get("/api/obilet/toast-feed", requireAuth, (req, res) => {
     const uid = req.auth.user.id;
     const FEED_LIMIT = 6; // ekrandaki toast ust siniriyla ayni -> donen her toast gerceklen gosterilir (sessiz elenme yok)
     const priceSeen = getUserLastSeen(uid, "price");
-    const structSeen = getUserLastSeen(uid, "structure");
     // ASCENDING (eski->yeni) dondur ki toast'lar dogru sirayla dizilsin.
     const price = db.prepare(
       "SELECT id, origin, destination, operator, departure_time, journey_date, old_price, new_price FROM obilet_price_history WHERE id > ? ORDER BY id DESC LIMIT ?"
     ).all(priceSeen, FEED_LIMIT).reverse();
-    const structure = db.prepare(
-      "SELECT id, route_label, change_type, message FROM obilet_structure_changes WHERE id > ? ORDER BY id DESC LIMIT ?"
-    ).all(structSeen, FEED_LIMIT).reverse();
-    res.json({ ok: true, price, structure });
+    // SADECE FIYAT DEGISIKLIGI toast'i cikar (kullanici istegi: "sadece fiyat değişince bildirim gelsin").
+    // Yapisal degisiklikler (sefer kaldirildi/eklendi/ek arac) artik TOAST OLMAZ — ama kayit edilmeye
+    // devam eder (obilet_structure_changes) ve "Ağ & Kapasite Diff" panelinde
+    // (/api/obilet/structure-changes/recent) gorulebilir. Fiyat mantigina dokunulmaz (salt okuma).
+    res.json({ ok: true, price, structure: [] });
   } catch (error) {
     res.status(500).json({ message: error.message || "Bildirim feed alınamadı." });
   }
