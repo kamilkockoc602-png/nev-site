@@ -7753,6 +7753,7 @@ async function probeObiletSeatMap(routeId, dateIso, timeFilter = "", operatorFil
     if (!chosen) chosen = atTime[0] || infos[0] || null;
     if (chosen) {
       result.matchedFirma = chosen.firma;
+      result.chosenTime = chosen.time; // Panel yazimi icin gercek sefer saati (timeFilter bos olsa da bilinsin)
       result.listTotal = chosen.total; result.listAvail = chosen.avail;
       console.log(`[SeatProbe] SECILEN firma: ${chosen.firma} ${chosen.time} — liste: ${(chosen.total != null && chosen.avail != null) ? chosen.total - chosen.avail : "?"}/${chosen.total}`);
     }
@@ -7872,6 +7873,26 @@ app.post("/api/obilet/targets/:id/seatmap-probe", requireAuth, requireAdmin, asy
     } finally {
       releaseObiletLock();
     }
+    // PANELE YAZ: probe gercek koltuk haritasini (fetchSeferRealSeats) basariyla saydiysa, bulunan degeri
+    // obilet_occupancy'ye Doluluk İşçisi ile AYNI upsert ile yaz. Boylece "Koltuk Testi" sadece teshis
+    // degil, panelde bayat kalan degeri de HEMEN duzeltir (kullanici: test 11 buldu ama panel 8 gosteriyordu).
+    // Gercek harita en taze/dogru kaynak oldugu icin kosulsuz 'gercek' yazilir (isçinin 9154'teki deseniyle bire bir).
+    // Fiyat/degisiklik-tespiti/Telegram/mail mantigina DOKUNULMAZ — sadece occupancy tablosu.
+    try {
+      const wSold = result.soldRealSvg, wTotal = result.totalRealSvg;
+      const wTime = (result.chosenTime || time || "").trim();
+      const wOp = normalizeObiletOperatorName(result.matchedFirma || operator) || (result.matchedFirma || operator || "").trim();
+      if (wSold != null && wTotal != null && wTotal > 0 && wTime && wOp && dateIso) {
+        const occ = Math.max(0, Math.min(100, Math.round((wSold / wTotal) * 100)));
+        db.prepare(`
+          INSERT INTO obilet_occupancy (target_id, journey_date, operator, departure_time, departure_stop, total_seats, available_seats, occupancy_percent, last_updated, source)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'gercek')
+          ON CONFLICT(target_id, journey_date, operator, departure_time)
+          DO UPDATE SET total_seats = excluded.total_seats, available_seats = excluded.available_seats, occupancy_percent = excluded.occupancy_percent, last_updated = excluded.last_updated, source = 'gercek'
+        `).run(target.id, dateIso, wOp, wTime, "", wTotal, Math.max(0, wTotal - wSold), occ, nowStamp());
+        console.log(`[SeatProbe] PANELE YAZILDI (gercek): ${wOp} ${wTime} ${dateIso} -> ${wSold}/${wTotal} (%${occ})`);
+      }
+    } catch (e) { console.warn(`[SeatProbe] panele yazma atlandi: ${e.message}`); }
     const listSold = (result.listTotal != null && result.listAvail != null) ? result.listTotal - result.listAvail : null;
     const gercek = result.soldRealSvg != null ? `${result.soldRealSvg} dolu / ${result.totalRealSvg}` : `${result.soldReal ?? "?"} dolu / ${result.totalReal ?? "?"} (DOM)`;
     res.json({
