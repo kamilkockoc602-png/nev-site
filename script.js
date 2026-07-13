@@ -5901,8 +5901,12 @@ function setupSeferTakipPanel() {
       ["stOrigin", "stDestination"].forEach((id) => { const el = document.getElementById(id); if (el) el.value = ""; });
       const op = document.getElementById("stOperator"); if (op) op.value = "";
       const d = document.getElementById("stDate"); if (d) d.value = "";
+      const af = document.getElementById("stAllFirms"); if (af) af.checked = false;
       searchSeferTakip();
     });
+    // "Tüm firmalar" toggle: değişince listeyi yeniden çek (rakip firmalar dahil/hariç).
+    const allFirmsCb = document.getElementById("stAllFirms");
+    if (allFirmsCb) allFirmsCb.addEventListener("change", () => searchSeferTakip());
     ["stOrigin", "stDestination"].forEach((id) => {
       const el = document.getElementById(id);
       if (!el) return;
@@ -5963,6 +5967,7 @@ async function searchSeferTakip(initial = false) {
   const origin = document.getElementById("stOrigin")?.value.trim() || "";
   const destination = document.getElementById("stDestination")?.value.trim() || "";
   const operator = document.getElementById("stOperator")?.value || "";
+  const allFirms = !!document.getElementById("stAllFirms")?.checked;
   if (statusEl) statusEl.textContent = "Aranıyor...";
   try {
     const params = new URLSearchParams();
@@ -5970,6 +5975,7 @@ async function searchSeferTakip(initial = false) {
     if (origin) params.set("origin", origin);
     if (destination) params.set("destination", destination);
     if (operator) params.set("operator", operator);
+    if (allFirms) params.set("allFirms", "1");
     const data = await apiFetch(`/api/obilet/journey-tracking?${params.toString()}`);
     // Firma dropdown'i doldur (secim korunur).
     const opSel = document.getElementById("stOperator");
@@ -5982,9 +5988,16 @@ async function searchSeferTakip(initial = false) {
     seferTakipState.journeys = data.journeys || [];
     renderSeferTakip(seferTakipState.journeys);
     if (statusEl) {
-      statusEl.textContent = seferTakipState.journeys.length
-        ? `${seferTakipState.journeys.length} sefer bulundu (son 3 günün fiyat değişiklikleri).`
-        : "Bu kritere uygun fiyat değişikliği yok. (Not: sadece son 3 gün tutulur.)";
+      const n = seferTakipState.journeys.length;
+      if (!n) {
+        statusEl.textContent = allFirms
+          ? "Bu kritere uygun sefer bulunamadı. (Tüm firma verisi taramalar ilerledikçe dolar.)"
+          : "Bu kritere uygun fiyat değişikliği yok. (Not: sadece son 3 gün tutulur.)";
+      } else {
+        statusEl.textContent = allFirms
+          ? `${n} sefer bulundu — TÜM firmalar (izlemediğimiz rakipler dahil). Rakip firmalarda fiyat değişiklik geçmişi tutulmaz; doluluk ~tahmini olabilir.`
+          : `${n} sefer bulundu (son 3 günün fiyat değişiklikleri).`;
+      }
     }
   } catch (err) {
     if (statusEl) statusEl.textContent = `Hata: ${err.message}`;

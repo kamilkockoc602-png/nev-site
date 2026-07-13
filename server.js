@@ -727,6 +727,27 @@ try { db.exec("CREATE INDEX IF NOT EXISTS idx_obilet_structure_changes_id ON obi
 // Kapasite artti/azaldi bildirimleri kaldirildi (gurultu) — mevcut kayitli olanlari da temizle ki gorunmesin.
 try { db.exec("DELETE FROM obilet_structure_changes WHERE change_type IN ('capacity_up','capacity_down')"); } catch(e) {}
 
+// TUM FIRMALAR: takip edilen hatta oBilet'in dondurdugu SEFERLERIN TAMAMI (izlenmeyen rakip firmalar
+// dahil). Fiyat taramasi zaten tum firmalari cekiyor ama sadece izlenenleri obilet_prices'a yaziyor;
+// bu tablo geri kalanini da tutar ki "Sefer Takip > Tum firmalar" acikken rakipler de gorunsun.
+// FIYAT/DEGISIKLIK/TELEGRAM mantigina dokunmaz — ayni 'journeys' verisini OKUR, ayri tabloya yazar.
+// Doluluk burada 'liste' (available-seats); izlenen firmalarin gercek dolulugu obilet_occupancy'de kalir.
+try { db.exec(`CREATE TABLE IF NOT EXISTS obilet_market_journeys (
+  target_id INTEGER NOT NULL,
+  journey_date TEXT NOT NULL,
+  operator TEXT NOT NULL DEFAULT '',
+  departure_time TEXT NOT NULL DEFAULT '',
+  departure_stop TEXT NOT NULL DEFAULT '',
+  arrival_stop TEXT NOT NULL DEFAULT '',
+  total_seats INTEGER,
+  available_seats INTEGER,
+  price INTEGER,
+  occupancy_percent INTEGER,
+  service_id TEXT NOT NULL DEFAULT '',
+  last_updated TEXT NOT NULL DEFAULT ''
+)`); } catch(e) {}
+try { db.exec("CREATE INDEX IF NOT EXISTS idx_obilet_market_journeys ON obilet_market_journeys(target_id, journey_date)"); } catch(e) {}
+
 // KULLANICI-BAZLI bildirim "gorüldü" takibi: her kullanici (user_id) icin, her tur (kind: 'price'|'structure')
 // EN SON GORDUGU degisim id'si. Boylece bir kullanici giris yapmadigi surece degisimleri kacirmaz; giris
 // yapinca gormedikleri sag-ust STICKY bildirim olarak cikar, kendi eliyle kapatir (kapatinca id ilerler).
@@ -6737,6 +6758,12 @@ async function processObiletTarget(target) {
           try { captureStructureSnapshot(target, journeyDate, journeys); structureCaptured = true; }
           catch (e) { if (DEBUG_OBILET_PRICE) console.warn(`[Yapi Diff] kanca hatasi: ${e.message}`); }
         }
+
+        // TUM FIRMALAR: bu tarihteki TUM firmalarin seferlerini (izlenmeyen rakipler dahil) ayri tabloya
+        // yaz — "Sefer Takip > Tum firmalar" toggle'i acikken gorunsun. captureStructureSnapshot ile AYNI
+        // desen (ayni 'journeys'i OKUR, ayri tabloya yazar); fiyat/degisiklik/Telegram mantigina DOKUNMAZ.
+        // Kendi try/catch'i var -> hata olsa bile fiyat akisini bozmaz. HER tarih icin calisir.
+        captureAllFirmsJourneys(target, journeyDate, journeys);
     }
 
     if (trackedJourneys.length === 0) {
@@ -6965,6 +6992,45 @@ function computeStructureDiff(prev, cur, routeLabel) {
 }
 
 // Bir gunun ham seferlerinden yapi fotografini al, onceki tur ile kiyasla, farklari kaydet.
+// TUM FIRMALAR yakalama: bu tarihteki tum firmalarin (izlenmeyenler dahil) seferlerini obilet_market_journeys'e
+// yazar (target+tarih basina delete+insert -> her zaman en guncel tam liste; iptal edilen sefer duser).
+// Doluluk 'liste' (available-seats). Kendi try/catch'i var; fiyat/Telegram mantigina DOKUNMAZ.
+function captureAllFirmsJourneys(target, journeyDate, journeys) {
+  try {
+    if (!Array.isArray(journeys) || !journeys.length) return;
+    const now = nowStamp();
+    const rows = [];
+    const seen = new Set();
+    for (const j of journeys) {
+      const op = String(normalizeObiletOperatorName(j.operator) || j.operator || "").trim();
+      const t = String(j.time || "").trim();
+      if (!op || !/^\d{2}:\d{2}$/.test(t)) continue;
+      if (!isJourneyInFuture(journeyDate, t)) continue; // gecmis kalkani tutma
+      const stop = String(j.departureStop || "").trim();
+      const key = `${op}|${t}|${stop}`;
+      if (seen.has(key)) continue; seen.add(key);
+      const total = Number(j.totalSeats), avail = Number(j.availableSeats);
+      const hasSeat = Number.isFinite(total) && total > 0 && Number.isFinite(avail);
+      rows.push({
+        op, t, stop,
+        arr: String(j.arrivalStop || ""),
+        total: Number.isFinite(total) ? total : null,
+        avail: Number.isFinite(avail) ? avail : null,
+        price: Number.isFinite(Number(j.price)) ? Number(j.price) : null,
+        occ: hasSeat ? Math.max(0, Math.min(100, Math.round((1 - avail / total) * 100))) : null,
+        svc: String(j.serviceId || ""),
+      });
+    }
+    if (!rows.length) return;
+    const del = db.prepare("DELETE FROM obilet_market_journeys WHERE target_id = ? AND journey_date = ?");
+    const ins = db.prepare("INSERT INTO obilet_market_journeys (target_id, journey_date, operator, departure_time, departure_stop, arrival_stop, total_seats, available_seats, price, occupancy_percent, service_id, last_updated) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)");
+    db.transaction(() => {
+      del.run(target.id, journeyDate);
+      for (const r of rows) ins.run(target.id, journeyDate, r.op, r.t, r.stop, r.arr, r.total, r.avail, r.price, r.occ, r.svc, now);
+    })();
+  } catch (e) { if (DEBUG_OBILET_PRICE) console.warn(`[TumFirma] yakalama hatasi: ${e.message}`); }
+}
+
 function captureStructureSnapshot(target, journeyDate, journeys) {
   if (!STRUCTURE_DIFF_ENABLED) return;
   if (!Array.isArray(journeys) || journeys.length === 0) return; // bos/basarisiz tarama -> dokunma
@@ -8399,16 +8465,23 @@ app.post("/api/analysis/scan", requireAuth, requireAdmin, (req, res) => {
 });
 
 // Sefer bazli fiyat degisiklik gecmisi + doluluk hesaplar. Hem API hem bot kullanir.
-function computeJourneyTracking({ date, origin, destination, operator } = {}) {
+function computeJourneyTracking({ date, origin, destination, operator, allFirms } = {}) {
   const norm = (s) => String(s || "").toLocaleLowerCase("tr-TR").trim();
   const originQ = norm(origin);
   const destQ = norm(destination);
   const op = String(operator || "").trim();
+  const withAll = allFirms === true || allFirms === 1 || allFirms === "1" || allFirms === "true";
 
-  // Firma listesi: TUM takip edilen firmalar (guncel seferlerden).
-  const operators = db.prepare(
+  // Firma listesi: TUM takip edilen firmalar (guncel seferlerden). allFirms ise izlenmeyen rakip firmalar da eklenir.
+  let operators = db.prepare(
     "SELECT DISTINCT operator FROM obilet_prices WHERE operator != '' ORDER BY operator"
   ).all().map((r) => r.operator);
+  if (withAll) {
+    try {
+      const mo = db.prepare("SELECT DISTINCT operator FROM obilet_market_journeys WHERE operator != ''").all().map((r) => r.operator);
+      operators = [...new Set([...operators, ...mo])].sort((a, b) => String(a).localeCompare(String(b), "tr"));
+    } catch (e) { /* tablo yoksa yok say */ }
+  }
 
   // 1) ANA LISTE = guncel seferler (obilet_prices) — oBilet Takip'in gosterdigi seferlerin aynisi.
   const conds = ["p.price > 0"];
@@ -8508,15 +8581,64 @@ function computeJourneyTracking({ date, origin, destination, operator } = {}) {
     String(a.operator).localeCompare(String(b.operator), "tr")
   );
 
+  // TUM FIRMALAR: allFirms ise, obilet_prices'ta OLMAYAN (izlenmeyen rakip) firmalarin seferlerini
+  // obilet_market_journeys'ten ekle. Bunlarda fiyat degisiklik gecmisi yok (changeCount=0, tek fiyat);
+  // doluluk 'liste' (varsa obilet_occupancy'deki 'gercek' tercih edilir). Salt okuma — fiyat mantigina dokunmaz.
+  if (withAll) {
+    try {
+      const existing = new Set(journeys.map((j) => `${j.target_id}|${j.journey_date}|${j.operator}|${j.departure_time}`));
+      const tgtMap = new Map();
+      for (const t of db.prepare("SELECT id, origin, destination FROM obilet_targets").all()) tgtMap.set(t.id, t);
+      const mConds = [], mParams = [];
+      if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) { mConds.push("journey_date = ?"); mParams.push(date); }
+      if (op) { mConds.push("operator = ?"); mParams.push(op); }
+      const mRows = db.prepare(`SELECT * FROM obilet_market_journeys ${mConds.length ? "WHERE " + mConds.join(" AND ") : ""}`).all(...mParams);
+      for (const m of mRows) {
+        const tgt = tgtMap.get(m.target_id);
+        if (!tgt) continue;
+        if (originQ && !norm(tgt.origin).includes(originQ)) continue;
+        if (destQ && !norm(tgt.destination).includes(destQ)) continue;
+        const key = `${m.target_id}|${m.journey_date}|${m.operator}|${m.departure_time}`;
+        if (existing.has(key)) continue;
+        existing.add(key);
+        const occ = occMap.get(key);
+        const totalSeats = (occ && occ.total_seats != null) ? occ.total_seats : (m.total_seats != null ? m.total_seats : null);
+        const availableSeats = (occ && occ.available_seats != null) ? occ.available_seats : (m.available_seats != null ? m.available_seats : null);
+        const yolcu = (totalSeats != null && availableSeats != null) ? (totalSeats - availableSeats) : null;
+        const occSource = (occ && occ.source) ? String(occ.source) : (m.total_seats != null ? "liste" : "");
+        const svcId = (occ && occ.service_id) ? occ.service_id : m.service_id;
+        const svc = svcId ? serviceRouteMap.get(String(svcId)) : null;
+        journeys.push({
+          target_id: m.target_id, journey_date: m.journey_date, origin: tgt.origin, destination: tgt.destination,
+          operator: m.operator, departure_time: m.departure_time, departure_stop: m.departure_stop || "",
+          changeCount: 0, prices: [m.price], currentPrice: m.price,
+          totalSeats, availableSeats, yolcu, plate: "", routeFrom: "", routeTo: "", lastChangedAt: "",
+          parentOrigin: svc && svc.origin_city ? String(svc.origin_city) : "",
+          parentOriginTime: svc && svc.origin_time ? String(svc.origin_time) : "",
+          parentDest: svc && svc.dest_city ? String(svc.dest_city) : "",
+          occSource, occLastUpdated: (occ && occ.last_updated) ? String(occ.last_updated) : "",
+          isMarket: true,
+        });
+      }
+      journeys.sort((a, b) =>
+        String(a.journey_date).localeCompare(String(b.journey_date)) ||
+        String(a.departure_time).localeCompare(String(b.departure_time)) ||
+        String(a.operator).localeCompare(String(b.operator), "tr"));
+    } catch (e) { /* market merge hatasi -> yalnizca izlenen firmalar donsun */ }
+  }
+
   return { operators, journeys };
 }
 
 // SEFER TAKIP — bir seferin son 3 gundeki fiyat degisiklik gecmisi (kac kez, eski->guncel).
 app.get("/api/obilet/journey-tracking", requireAuth, (req, res) => {
   try {
+    // Eski (10 gunden eski) market satirlarini temizle — tablo sismesin (salt-okuma tarafinda, ucuz).
+    try { db.prepare("DELETE FROM obilet_market_journeys WHERE journey_date < ?").run(shiftIsoDate(todayIsoInIstanbul(), -10)); } catch (e) {}
     const { operators, journeys } = computeJourneyTracking({
       date: String(req.query.date || "").trim(),
       origin: req.query.origin, destination: req.query.destination, operator: req.query.operator,
+      allFirms: req.query.allFirms,
     });
     res.json({ ok: true, operators, count: journeys.length, journeys });
   } catch (error) {
