@@ -4382,6 +4382,7 @@ const OBILET_STATION_IDS_SEED = {
   "istanbul": 349,     // İstanbul
   "izmir": 383,        // İzmir
   "kadirli": 595,
+  "kastamonu": 385,
   "kayseri": 386,
   "kilis": 425,
   "konya": 389,
@@ -4395,6 +4396,7 @@ const OBILET_STATION_IDS_SEED = {
   "trabzon": 407,
   "usak": 410,         // Uşak
   "van": 411,
+  "zonguldak": 413,
 };
 
 function cityKey(cityName) {
