@@ -4371,6 +4371,7 @@ const OBILET_STATION_IDS_SEED = {
   "balikesir": 360,    // Balıkesir
   "bolu": 364,
   "bursa": 366,
+  "canakkale": 367,    // Çanakkale
   "ceyhan": 488,
   "diyarbakir": 371,   // Diyarbakır
   "eskisehir": 376,    // Eskişehir
