@@ -9562,7 +9562,7 @@ let occupancyWorkerRunning = false;
 // duser); yazdigi 'gercek' degeri fiyat taramasinin 'liste'siyle EZILMEZ (koruma+bayatlik).
 const OCCUPANCY_WORKER_ENABLED = true;
 const OCCUPANCY_NEAR_DAYS = 7;          // 1 hafta (bugun + 6 gun)
-const OCCUPANCY_WORKER_INTERVAL_MS = 15 * 60 * 1000; // 15 dk
+const OCCUPANCY_WORKER_INTERVAL_MS = 30 * 60 * 1000; // 30 dk (15->30: fiyat taramasina daha cok oBilet zamani birak)
 // Tarih basi en fazla kac sefer koltuk cekilir. 20 iken cok-firmali hatlarda (5 firma) slotlar paylasilip
 // bir firmanin gec seferleri (Enver 15:00-19:30) disarda kaliyordu -> onlar liste'de takili kaliyordu. 45'e
 // cikarildi ki TUM izlenen firmalarin TUM seferleri gercek koltuk alsin. (Cloudflare yuku artar; fetch=0'a
