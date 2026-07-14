@@ -4369,6 +4369,7 @@ const OBILET_STATION_IDS_SEED = {
   "ankara": 356,
   "antalya": 357,
   "balikesir": 360,    // Balıkesir
+  "bodrum": 476,
   "bolu": 364,
   "bursa": 366,
   "canakkale": 367,    // Çanakkale
@@ -4385,6 +4386,7 @@ const OBILET_STATION_IDS_SEED = {
   "kilis": 425,
   "konya": 389,
   "kozan": 617,
+  "marmaris": 644,
   "mersin": 382,
   "nigde": 398,        // Niğde
   "osmaniye": 426,
