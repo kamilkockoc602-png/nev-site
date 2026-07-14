@@ -5444,6 +5444,63 @@ function telegramNotifyChatIds(target) {
   }
   return [...set];
 }
+
+// UNDERCUT ANLIK UYARISI (salt-okuma; cekirdek fiyat-tespiti/Telegram-alert mantigina DOKUNMAZ). Bir RAKIP
+// (izlenen firma) fiyatini DUSURUP Kamil Koc'un ayni hat+saat (±45dk) penceresindeki fiyatinin ALTINA inince
+// Telegram + toast bildirir. KK cogu zaman premium (pahali) oldugundan "rakip ucuz" surekli dogru -> SPAM
+// olmasin diye YALNIZCA yeni fiyat-DUSUS olaylarini (obilet_price_history) isler. Pointer (son islenen history
+// id) tekrar/su-basmayi onler; ilk calismada seed eder (gecmis dususlere alarm YOK). oBilet istegi YOK.
+let __undercutLastHistoryId = null;
+function checkUndercutAlerts() {
+  try {
+    const maxRow = db.prepare("SELECT MAX(id) AS m FROM obilet_price_history").get();
+    const maxId = (maxRow && maxRow.m) || 0;
+    if (__undercutLastHistoryId == null) { __undercutLastHistoryId = maxId; return; } // ilk tur: yalnizca seed
+    if (maxId <= __undercutLastHistoryId) return;
+    const drops = db.prepare(
+      "SELECT id, target_id, origin, destination, journey_date, operator, departure_time, old_price, new_price FROM obilet_price_history WHERE id > ? AND new_price < old_price ORDER BY id ASC LIMIT 100"
+    ).all(__undercutLastHistoryId);
+    const isKK = (op) => /kamil ?ko[çc]/i.test(op || "");
+    const toMin = (t) => { const m = /^(\d{2}):(\d{2})$/.exec(String(t || "")); return m ? (+m[1] * 60 + +m[2]) : null; };
+    const dot = (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || "")); return m ? `${m[3]}.${m[2]}` : String(iso || ""); };
+    let sent = 0;
+    for (const d of drops) {
+      if (sent >= 15) break;
+      if (isKK(d.operator)) continue; // rakip dususu ariyoruz (KK'nin kendi dususu degil)
+      const dm = toMin(d.departure_time); if (dm == null) continue;
+      // Kamil Koc'un ayni hat+tarih ±45dk penceresindeki EN DUSUK fiyati (market tablosu = tum firmalar).
+      let kkPrice = null;
+      try {
+        const kkRows = db.prepare("SELECT operator, departure_time, price FROM obilet_market_journeys WHERE target_id=? AND journey_date=? AND price>0").all(d.target_id, d.journey_date);
+        for (const k of kkRows) {
+          if (!isKK(k.operator)) continue;
+          const km = toMin(k.departure_time); if (km == null || Math.abs(km - dm) > 45) continue;
+          if (kkPrice == null || k.price < kkPrice) kkPrice = k.price;
+        }
+      } catch (e) {}
+      if (kkPrice == null || !(d.new_price < kkPrice)) continue; // KK yok veya rakip KK altinda degil -> gec
+      const pct = Math.round((1 - d.new_price / kkPrice) * 100);
+      const hat = `${(d.origin || "").toUpperCase()} - ${(d.destination || "").toUpperCase()}`;
+      const msg = `UNDERCUT — ${hat} ${d.departure_time} (${dot(d.journey_date)}): ${d.operator} ${d.old_price}→${d.new_price} TL'ye düştü; Kamil Koç ${kkPrice} TL'nin %${pct} altında.`;
+      try {
+        db.prepare("INSERT INTO obilet_structure_changes (target_id, journey_date, route_label, change_type, operator, message, detected_at, is_read) VALUES (?,?,?,?,?,?,?,0)")
+          .run(d.target_id, d.journey_date, hat, "undercut", d.operator, msg, nowStamp());
+      } catch (e) {}
+      if (TELEGRAM_ENABLED) {
+        try {
+          const target = db.prepare("SELECT * FROM obilet_targets WHERE id=?").get(d.target_id);
+          for (const cid of telegramNotifyChatIds(target)) sendTelegramMessage(cid, `<b>Rakip Undercut</b>\n${tgEscape(msg)}`);
+        } catch (e) {}
+      }
+      sent++;
+    }
+    __undercutLastHistoryId = maxId;
+    // Eski undercut toast satirlarini bounded tut (son 500).
+    try { db.prepare("DELETE FROM obilet_structure_changes WHERE change_type='undercut' AND id NOT IN (SELECT id FROM obilet_structure_changes WHERE change_type='undercut' ORDER BY id DESC LIMIT 500)").run(); } catch (e) {}
+    if (sent) console.log(`[Undercut] ${sent} yeni undercut uyarisi gonderildi.`);
+  } catch (e) { console.warn(`[Undercut] hata: ${e.message}`); }
+}
+
 // Abonelik klavyesi: her hat icin (abone) / (degil) butonu.
 function tgBuildAboneKeyboard(chatId) {
   const routes = db.prepare("SELECT id, origin, destination FROM obilet_targets ORDER BY origin, destination").all();
@@ -9331,11 +9388,14 @@ app.get("/api/obilet/toast-feed", requireAuth, (req, res) => {
     const price = db.prepare(
       "SELECT id, origin, destination, operator, departure_time, journey_date, old_price, new_price FROM obilet_price_history WHERE id > ? ORDER BY id DESC LIMIT ?"
     ).all(priceSeen, FEED_LIMIT).reverse();
-    // SADECE FIYAT DEGISIKLIGI toast'i cikar (kullanici istegi: "sadece fiyat değişince bildirim gelsin").
-    // Yapisal degisiklikler (sefer kaldirildi/eklendi/ek arac) artik TOAST OLMAZ — ama kayit edilmeye
-    // devam eder (obilet_structure_changes) ve "Ağ & Kapasite Diff" panelinde
-    // (/api/obilet/structure-changes/recent) gorulebilir. Fiyat mantigina dokunulmaz (salt okuma).
-    res.json({ ok: true, price, structure: [] });
+    // Toast: fiyat degisikligi + UNDERCUT (rakip KK altina indi). Diger yapisal degisiklikler (sefer
+    // kaldirildi/eklendi/ek arac) TOAST OLMAZ (kayit edilir, "Ağ & Kapasite Diff" panelinde gorulur) —
+    // kullanici "sadece fiyat degisince" demisti; undercut de fiyat-odakli bir olay oldugu icin dahil.
+    const structSeen = getUserLastSeen(uid, "structure");
+    const structure = db.prepare(
+      "SELECT id, route_label, change_type, message FROM obilet_structure_changes WHERE change_type='undercut' AND id > ? ORDER BY id DESC LIMIT ?"
+    ).all(structSeen, FEED_LIMIT).reverse();
+    res.json({ ok: true, price, structure });
   } catch (error) {
     res.status(500).json({ message: error.message || "Bildirim feed alınamadı." });
   }
@@ -9370,6 +9430,11 @@ setTimeout(() => {
 setInterval(() => {
   refreshObiletPricesTask().catch(err => console.error("[Otomatik Kontrol] Zamanlayici hatasi:", err.message));
 }, OBILET_CHECK_INTERVAL_MS);
+
+// UNDERCUT UYARISI: rakip fiyat dususleriyle KK'nin altina inisleri izler (salt-okuma; oBilet istegi yok).
+// Boot'tan 3 dk sonra seed, sonra 5 dk'da bir. Cekirdek fiyat/Telegram mantigina dokunmaz.
+setTimeout(() => { try { checkUndercutAlerts(); } catch (e) {} }, 3 * 60 * 1000);
+setInterval(() => { try { checkUndercutAlerts(); } catch (e) {} }, 5 * 60 * 1000);
 
 // ===================== DOLULUK İŞÇİSİ (fiyat taramasindan TAMAMEN AYRI) =====================
 // Fiyat çekme koduna DOKUNMAZ. Kendi sayfasini acar, takip edilen seferlerin GERCEK koltuk
