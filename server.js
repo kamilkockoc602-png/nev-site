@@ -7567,6 +7567,9 @@ app.get("/api/obilet/prices/:targetId", requireAuth, (req, res) => {
 // API: Tüm hatlar için manuel yenileme (kuyruga al, duplicate engelle)
 app.post("/api/obilet/refresh", requireAuth, async (req, res) => {
   try {
+    if (obiletMaintenancePaused) {
+      return res.status(409).json({ ok: false, queued: false, message: "Bakım modu açık — tarama duraklatıldı. Önce bakımı kapatın." });
+    }
     if (obiletPendingFullRefresh) {
       return res.status(409).json({
         ok: false,
@@ -7625,6 +7628,9 @@ app.post("/api/obilet/refresh", requireAuth, async (req, res) => {
 // API: Tek Hat Manuel Güncelleme (kuyruga al, ayni hatta duplicate engelle)
 app.post("/api/obilet/targets/:id/refresh", requireAuth, async (req, res) => {
   try {
+    if (obiletMaintenancePaused) {
+      return res.status(409).json({ ok: false, message: "Bakım modu açık — tarama duraklatıldı. Önce bakımı kapatın." });
+    }
     const targetId = parseInt(req.params.id, 10);
     if (!targetId) {
       return res.status(400).json({ message: "Gecersiz hat ID." });
@@ -7689,6 +7695,9 @@ app.post("/api/obilet/targets/:id/refresh", requireAuth, async (req, res) => {
 // Mevcut kuyruk sistemine dokunmaz; bagimsiz, aninda calisir.
 app.post("/api/obilet/targets/:id/priority-refresh", requireAuth, requireAdmin, async (req, res) => {
   try {
+    if (obiletMaintenancePaused) {
+      return res.status(409).json({ ok: false, queued: false, message: "Bakım modu açık — tarama duraklatıldı. Önce bakımı kapatın." });
+    }
     const targetId = parseInt(req.params.id, 10);
     const target = db.prepare("SELECT * FROM obilet_targets WHERE id = ?").get(targetId);
     if (!target) return res.status(404).json({ message: "Hat bulunamadi." });

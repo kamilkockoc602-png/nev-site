@@ -1409,10 +1409,11 @@ function setContentHeader(opts) {
 
 // ===== Göreli zaman ("2dk önce") =====
 function relativeTime(input) {
-  // input: "DD.MM.YYYY HH:mm:ss" Istanbul-local
-  const m = String(input || "").match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/);
+  // input: "DD.MM.YYYY HH:mm:ss" Istanbul-local (ayrac boşluk VEYA virgül olabilir — ICU tr-TR)
+  const m = String(input || "").match(/^(\d{2})\.(\d{2})\.(\d{4})[\s,]+(\d{2}):(\d{2}):(\d{2})$/);
   if (!m) return input || "";
-  const past = new Date(`${m[3]}-${m[2]}-${m[1]}T${m[4]}:${m[5]}:${m[6]}`).getTime();
+  // İstanbul duvar-saati (UTC+3) -> mutlak an; tarayıcı saat diliminden bağımsız doğru.
+  const past = Date.UTC(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]) - 3 * 3600 * 1000;
   const diffSec = Math.floor((Date.now() - past) / 1000);
   if (diffSec < 60) return "az önce";
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)} dk önce`;
@@ -4647,7 +4648,7 @@ function openBulkDatesModal() {
   const targets = obiletState.targets || [];
   // Varsayilan: ilk hattin mevcut tarihleri, yoksa bugun.
   const first = targets[0] || {};
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayIsoDate(); // yerel gün (UTC toISOString gece 00-03 arası dünü verir)
   const defStart = first.date || today;
   const defEnd = first.end_date || first.date || today;
   const backdrop = document.createElement("div");
@@ -4680,10 +4681,10 @@ function openBulkDatesModal() {
   // Tarih preset: bugün → bugün+N gün (item 8).
   backdrop.querySelectorAll(".ob-preset").forEach((b) => b.addEventListener("click", () => {
     const days = parseInt(b.dataset.days, 10) || 7;
-    const iso = (d) => d.toISOString().slice(0, 10);
+    const localIso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     const end = new Date(); end.setDate(end.getDate() + days);
-    document.getElementById("obDateStart").value = iso(new Date());
-    document.getElementById("obDateEnd").value = iso(end);
+    document.getElementById("obDateStart").value = todayIsoDate();
+    document.getElementById("obDateEnd").value = localIso(end);
   }));
   document.getElementById("obBulkSave").addEventListener("click", async () => {
     const date = document.getElementById("obDateStart").value;
@@ -6441,10 +6442,12 @@ function openObiletEditModal(t) {
 
 // "DD.MM.YYYY HH:mm:ss" -> kac dakika once (tazelik noktasi rengi icin). Parse edilemezse null.
 function obiletAgeMin(s) {
-  const m = /^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/.exec(String(s || "").trim());
+  // Ayrac boşluk VEYA virgül (ICU tr-TR bazı sürümlerde "12.07.2026, 22:44:16" verir) — sunucudaki occStampToMs ile hizalı.
+  const m = /^(\d{2})\.(\d{2})\.(\d{4})[\s,]+(\d{2}):(\d{2}):(\d{2})$/.exec(String(s || "").trim());
   if (!m) return null;
-  const d = new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]);
-  return Math.max(0, Math.round((Date.now() - d.getTime()) / 60000));
+  // Damga İstanbul duvar-saati (UTC+3); tarayıcı saat diliminden bağımsız doğru yaş için mutlak an olarak parse et.
+  const ms = Date.UTC(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]) - 3 * 3600 * 1000;
+  return Math.max(0, Math.round((Date.now() - ms) / 60000));
 }
 // Ust ozet seridi: hatlarin tazelik dagilimi (yesil/sari/kirmizi/pasif).
 function obiletRenderSummary(all) {
