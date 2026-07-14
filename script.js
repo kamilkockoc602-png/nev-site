@@ -5905,11 +5905,24 @@ function setupSeferTakipPanel() {
       const op = document.getElementById("stOperator"); if (op) op.value = "";
       const d = document.getElementById("stDate"); if (d) d.value = "";
       const af = document.getElementById("stAllFirms"); if (af) af.checked = false;
+      const oo = document.getElementById("stOppOnly"); if (oo) oo.checked = false;
       searchSeferTakip();
     });
     // "Tüm firmalar" toggle: değişince listeyi yeniden çek (rakip firmalar dahil/hariç).
     const allFirmsCb = document.getElementById("stAllFirms");
     if (allFirmsCb) allFirmsCb.addEventListener("change", () => searchSeferTakip());
+    // "Sadece fırsatlar" (Fırsat Radarı) toggle: yeniden ÇEKMEZ, önbellekten filtreler + yeniden çizer.
+    const oppCb = document.getElementById("stOppOnly");
+    if (oppCb) oppCb.addEventListener("change", () => {
+      const shown = stApplyDisplay();
+      const statusEl = document.getElementById("stStatusMsg");
+      const total = (seferTakipState.journeys || []).length;
+      if (statusEl && total) {
+        statusEl.textContent = oppCb.checked
+          ? `${shown} FIRSAT seferi (rakip dolu/pahalı iken biz boş/ucuz) — toplam ${total} sefer.`
+          : `${total} sefer gösteriliyor.`;
+      }
+    });
     ["stOrigin", "stDestination"].forEach((id) => {
       const el = document.getElementById(id);
       if (!el) return;
@@ -5996,17 +6009,22 @@ async function searchSeferTakip(initial = false) {
       fdc[k] = (fdc[k] || 0) + 1;
     }
     seferTakipState.firmDayCount = fdc;
-    renderSeferTakip(seferTakipState.journeys);
+    // Rakip kiyas (fiyat sirasi + undercut + firsat) — istemci-tarafi, ek oBilet istegi yok.
+    seferTakipState.seferComp = computeSeferComp(seferTakipState.journeys);
+    const shown = stApplyDisplay(); // Firsat Radari filtresi uygular + cizer
     if (statusEl) {
-      const n = seferTakipState.journeys.length;
-      if (!n) {
+      const total = seferTakipState.journeys.length;
+      const oppOnly = !!document.getElementById("stOppOnly")?.checked;
+      if (!total) {
         statusEl.textContent = allFirms
           ? "Bu kritere uygun sefer bulunamadı. (Tüm firma verisi taramalar ilerledikçe dolar.)"
           : "Bu kritere uygun fiyat değişikliği yok. (Not: sadece son 3 gün tutulur.)";
+      } else if (oppOnly) {
+        statusEl.textContent = `${shown} FIRSAT seferi (rakip dolu/pahalı iken biz boş/ucuz) — toplam ${total} sefer tarandı.`;
       } else {
         statusEl.textContent = allFirms
-          ? `${n} sefer bulundu — TÜM firmalar (izlemediğimiz rakipler dahil). Rakip firmalarda fiyat değişiklik geçmişi tutulmaz; doluluk otomatik gerçeğe çekiliyor.`
-          : `${n} sefer bulundu (son 3 günün fiyat değişiklikleri).`;
+          ? `${total} sefer bulundu — TÜM firmalar (izlemediğimiz rakipler dahil). Rakip firmalarda fiyat değişiklik geçmişi tutulmaz; doluluk otomatik gerçeğe çekiliyor.`
+          : `${total} sefer bulundu (son 3 günün fiyat değişiklikleri).`;
       }
     }
     // TALEP-ANINDA OTOMATIK: "Tüm firmalar" acikken ve ekranda 'gercek' olmayan (liste/eksik) satir varsa,
@@ -6070,6 +6088,68 @@ function stGuzergahCell(j) {
   }
   return `<span style="opacity:.45">-</span>`;
 }
+// Operator normalizasyonu (kiyas anahtari icin).
+function stNorm(s) { return String(s || "").toLocaleLowerCase("tr-TR").trim(); }
+function stIsKK(op) { return /kamil ?ko[çc]/i.test(op || ""); }
+function stToMin(t) { const m = /^(\d{2}):(\d{2})$/.exec(t || ""); return m ? (+m[1] * 60 + +m[2]) : null; }
+function stPct(j) { return (j && j.totalSeats && j.yolcu != null) ? Math.round((j.yolcu / j.totalSeats) * 100) : null; }
+
+// RAKIP KIYAS: her sefer icin ayni hat+tarih + ±45dk penceresindeki firmalar arasinda fiyat sirasi,
+// Kamil Koc'a gore undercut, ve "firsat" (rakip dolu/pahali iken biz bos/ucuz) hesaplar. Salt istemci-tarafi
+// (ek oBilet istegi YOK) — mevcut journeys verisiyle. Anahtar: normOp|tarih|saat.
+function computeSeferComp(journeys) {
+  const map = new Map();
+  const WIN = 45;
+  for (const j of journeys) {
+    if (j.currentPrice == null) continue;
+    const jm = stToMin(j.departure_time); if (jm == null) continue;
+    const byOp = new Map(); // ayni saat penceresinde firma basi EN UCUZ (mukerrer terminal/araci ele)
+    for (const k of journeys) {
+      if (k.origin !== j.origin || k.destination !== j.destination || k.journey_date !== j.journey_date) continue;
+      if (k.currentPrice == null) continue;
+      const km = stToMin(k.departure_time); if (km == null || Math.abs(km - jm) > WIN) continue;
+      const o = stNorm(k.operator); const prev = byOp.get(o);
+      if (!prev || k.currentPrice < prev.currentPrice) byOp.set(o, k);
+    }
+    const uniq = [...byOp.values()];
+    const sorted = uniq.slice().sort((a, b) => a.currentPrice - b.currentPrice);
+    const rank = sorted.findIndex(p => stNorm(p.operator) === stNorm(j.operator)) + 1;
+    const n = uniq.length;
+    const mine = stIsKK(j.operator);
+    const kkPeer = uniq.find(p => stIsKK(p.operator));
+    let undercutPct = null, kkBeatenBy = 0, opportunity = false, oppReason = "";
+    if (!mine && kkPeer && j.currentPrice < kkPeer.currentPrice) {
+      undercutPct = Math.round((1 - j.currentPrice / kkPeer.currentPrice) * 100);
+    }
+    if (mine) {
+      kkBeatenBy = uniq.filter(p => !stIsKK(p.operator) && p.currentPrice < j.currentPrice).length;
+      const myPct = stPct(j);
+      const fullRival = uniq.some(p => !stIsKK(p.operator) && stPct(p) != null && stPct(p) >= 70);
+      const pricierRival = uniq.some(p => !stIsKK(p.operator) && p.currentPrice > j.currentPrice);
+      if ((fullRival || pricierRival) && (myPct == null || myPct < 60)) {
+        opportunity = true;
+        oppReason = fullRival ? "rakip dolu, bizde yer var" : "rakip daha pahalı, biz ucuzuz";
+      }
+    }
+    map.set(`${stNorm(j.operator)}|${j.journey_date}|${j.departure_time}`, { rank, n, isCheapest: rank === 1 && n > 1, undercutPct, kkBeatenBy, mine, opportunity, oppReason });
+  }
+  return map;
+}
+
+// Fiyat gecmisi mini cizgi grafik (sparkline) — prices[] dizisinden, ek veri yok.
+function stSparkline(prices) {
+  const arr = (prices || []).map(Number).filter(Number.isFinite);
+  if (arr.length < 2) return "";
+  const w = 52, h = 15, pad = 2;
+  const min = Math.min(...arr), max = Math.max(...arr), rng = (max - min) || 1;
+  const xy = (v, i) => [pad + (i / (arr.length - 1)) * (w - 2 * pad), h - pad - ((v - min) / rng) * (h - 2 * pad)];
+  const pts = arr.map((v, i) => xy(v, i).map(n => n.toFixed(1)).join(",")).join(" ");
+  const last = arr[arr.length - 1], prev = arr[arr.length - 2];
+  const col = last < prev ? "#2ecc71" : last > prev ? "#e74c3c" : "#8899a6";
+  const [lx, ly] = xy(last, arr.length - 1);
+  return `<svg width="${w}" height="${h}" style="vertical-align:middle;margin-left:6px;overflow:visible;" aria-hidden="true"><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="1.4"/><circle cx="${lx.toFixed(1)}" cy="${ly.toFixed(1)}" r="2" fill="${col}"/></svg>`;
+}
+
 // Tek bir sefer satirinin HTML'i.
 function stRowHtml(j) {
   // Fiyat geçmişi: eski - ... - güncel, renkli oklarla.
@@ -6083,7 +6163,24 @@ function stRowHtml(j) {
   let dolCell = "<span style='opacity:.5'>-</span>";
   if (j.totalSeats != null && j.yolcu != null) {
     const pct = j.totalSeats ? Math.round((j.yolcu / j.totalSeats) * 100) : 0;
-    dolCell = `<b style="color:${occColor(pct)}">${j.yolcu}/${j.totalSeats}</b> <span style="opacity:.7">(%${pct})</span>${occSourceBadge(j.occSource, j.occLastUpdated)}`;
+    const bar = `<div style="height:5px;background:rgba(127,127,127,.22);border-radius:3px;margin-top:3px;max-width:120px;overflow:hidden;"><div style="height:100%;width:${Math.max(2, Math.min(100, pct))}%;background:${occColor(pct)};"></div></div>`;
+    let thr = "";
+    if (pct >= 95) thr = ` <span style="background:#c0392b;color:#fff;border-radius:8px;padding:0 6px;font-size:.66rem;">DOLDU</span>`;
+    else if (pct >= 80) thr = ` <span style="background:#e67e22;color:#fff;border-radius:8px;padding:0 6px;font-size:.66rem;">yakında dolacak</span>`;
+    dolCell = `<b style="color:${occColor(pct)}">${j.yolcu}/${j.totalSeats}</b> <span style="opacity:.7">(%${pct})</span>${thr}${occSourceBadge(j.occSource, j.occLastUpdated)}${bar}`;
+  }
+  // Rakip kiyas rozetleri: fiyat sirasi (en ucuz / k/n), Kamil Koc'a gore undercut, FIRSAT — computeSeferComp'tan.
+  const comp = seferTakipState.seferComp && seferTakipState.seferComp.get(`${stNorm(j.operator)}|${j.journey_date}|${j.departure_time}`);
+  let priceBadges = "";
+  if (comp) {
+    if (comp.n > 1) {
+      priceBadges += comp.isCheapest
+        ? ` <span style="background:#1e7e34;color:#fff;border-radius:8px;padding:0 6px;font-size:.66rem;">en ucuz</span>`
+        : ` <span style="background:#34506e;color:#cfe3f5;border-radius:8px;padding:0 6px;font-size:.66rem;" title="aynı saatteki firmalar arasında fiyat sırası">${comp.rank}/${comp.n}</span>`;
+    }
+    if (comp.undercutPct != null) priceBadges += ` <span style="background:#c0392b;color:#fff;border-radius:8px;padding:0 6px;font-size:.66rem;" title="Kamil Koç'un fiyatının altına girmiş">KK'den %${comp.undercutPct} ucuz</span>`;
+    if (comp.mine && comp.kkBeatenBy > 0) priceBadges += ` <span style="background:#8e2b2b;color:#fff;border-radius:8px;padding:0 6px;font-size:.66rem;" title="bu saatte bizden ucuz rakip sayısı">${comp.kkBeatenBy} rakip ucuz</span>`;
+    if (comp.opportunity) priceBadges += ` <span style="background:#6c3483;color:#fff;border-radius:8px;padding:0 6px;font-size:.66rem;" title="${occEsc(comp.oppReason)}">FIRSAT</span>`;
   }
   // Güzergah: ANA SEFER (feeder keşfiyle bulunan gerçek kalkış) öncelikli — örn. "Şanlıurfa 18:30 → Ankara".
   // Yoksa oBilet'in kendi verdiği güzergaha (stops[0]→son) düş. İkisi de yoksa "-".
@@ -6101,8 +6198,8 @@ function stRowHtml(j) {
       ${j.departure_stop ? `<div style="font-size:0.78rem;opacity:0.6;">${occEsc(j.departure_stop)}</div>` : ""}
     </td>
     <td style="text-align:center;">${changeBadge}</td>
-    <td>${seq}</td>
-    <td><b>${j.currentPrice} TL</b></td>
+    <td>${seq}${stSparkline(j.prices)}</td>
+    <td><b>${j.currentPrice} TL</b>${priceBadges}</td>
     <td>${dolCell}</td>
     <td style="font-size:0.82rem;opacity:0.8;">${occEsc(j.lastChangedAt || "")}</td>
     <td>${guzergahCell}</td>
@@ -6134,6 +6231,24 @@ function stBindLoadMore(journeys) {
     body.insertAdjacentHTML("beforeend", stLoadMoreRowHtml(journeys.length, end));
     stBindLoadMore(journeys);
   });
+}
+
+// FIRSAT RADARI: tüm journeys kıyas için tutulur; ekranda "Sadece fırsatlar" açıksa yalnızca FIRSAT
+// (rakip dolu/pahalı iken biz boş/ucuz) işaretli KK satırları gösterilir. Çizilen satır sayısını döner.
+function stApplyDisplay() {
+  const all = seferTakipState.journeys || [];
+  const comp = seferTakipState.seferComp;
+  const oppOnly = !!document.getElementById("stOppOnly")?.checked;
+  let list = all;
+  if (oppOnly && comp) {
+    list = all.filter((j) => {
+      const c = comp.get(`${stNorm(j.operator)}|${j.journey_date}|${j.departure_time}`);
+      return c && c.opportunity;
+    });
+  }
+  seferTakipState.displayJourneys = list;
+  renderSeferTakip(list);
+  return list.length;
 }
 
 function renderSeferTakip(journeys) {
