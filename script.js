@@ -6005,13 +6005,47 @@ async function searchSeferTakip(initial = false) {
           : "Bu kritere uygun fiyat değişikliği yok. (Not: sadece son 3 gün tutulur.)";
       } else {
         statusEl.textContent = allFirms
-          ? `${n} sefer bulundu — TÜM firmalar (izlemediğimiz rakipler dahil). Rakip firmalarda fiyat değişiklik geçmişi tutulmaz; doluluk ~tahmini olabilir.`
+          ? `${n} sefer bulundu — TÜM firmalar (izlemediğimiz rakipler dahil). Rakip firmalarda fiyat değişiklik geçmişi tutulmaz; doluluk otomatik gerçeğe çekiliyor.`
           : `${n} sefer bulundu (son 3 günün fiyat değişiklikleri).`;
       }
     }
+    // TALEP-ANINDA OTOMATIK: "Tüm firmalar" acikken ve ekranda 'gercek' olmayan (liste/eksik) satir varsa,
+    // rakiplerin gercek dolulugunu ARKA PLANDA otomatik cek (bayatlari; taze olanlari atlar). Butona gerek yok.
+    maybeAutoRefreshAllFirms(allFirms, date, origin, destination, operator);
   } catch (err) {
     if (statusEl) statusEl.textContent = `Hata: ${err.message}`;
   }
+}
+
+// "Tüm firmalar" gorunumunde, gorunen seferlerde 'gercek' olmayan (liste/eksik) varsa rakiplerin gercek
+// dolulugunu arka planda otomatik ceker (skip-fresh: taze olanlar atlanir). Debounce ile ayni gorunumu
+// sik sik tekrar tetiklemez (loop + gereksiz yuk onlenir). Sonuc gelince listeyi bir kez tazeler.
+async function maybeAutoRefreshAllFirms(allFirms, date, origin, destination, operator) {
+  try {
+    if (!allFirms) return;
+    if (!origin || !destination) return; // bir hat secili olsun ki yuk sinirli kalsin
+    const js = seferTakipState.journeys || [];
+    const stale = js.some((j) => j.occSource !== "gercek"); // duzeltilecek (liste/eksik) satir var mi
+    if (!stale) return;
+    const key = `${origin}|${destination}|${date}|${operator}`;
+    const now = Date.now();
+    const last = seferTakipState.autoOcc;
+    if (last && last.key === key && (now - last.at) < 300000) return; // 5 dk debounce (loop/spam onle)
+    seferTakipState.autoOcc = { key, at: now };
+    if (seferTakipState.autoOccBusy) return;
+    seferTakipState.autoOccBusy = true;
+    const statusEl = document.getElementById("stStatusMsg");
+    if (statusEl) statusEl.textContent += "  •  rakip doluluklar gerçeğe çekiliyor…";
+    try {
+      await apiFetch("/api/obilet/journey-tracking/refresh-occupancy", {
+        method: "POST",
+        body: JSON.stringify({ date, origin, destination, operator, allFirms: "1", auto: "1" }),
+      });
+      await searchSeferTakip(); // taze 'gercek' degerlerle yeniden ciz (debounce tekrar tetiklemeyi onler)
+    } finally {
+      seferTakipState.autoOccBusy = false;
+    }
+  } catch (e) { /* sessiz — liste degeri kalir */ }
 }
 
 const ST_PAGE = 50; // Kademeli yukleme adim boyu (kasmayi onlemek icin hepsini birden cizmiyoruz)

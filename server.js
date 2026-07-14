@@ -8667,6 +8667,11 @@ app.post("/api/obilet/journey-tracking/refresh-occupancy", requireAuth, async (r
     const operator = String(req.body?.operator ?? req.query.operator ?? "").trim();
     const af = req.body?.allFirms ?? req.query.allFirms;
     const allFirms = af === true || af === 1 || af === "1" || af === "true";
+    const auto = req.body?.auto ?? req.query.auto;
+    const isAuto = auto === true || auto === 1 || auto === "1" || auto === "true";
+    // Talep-aninda otomatik tazeleme: DB'de zaten TAZE 'gercek' (45 dk) olan seferleri atla -> tekrar
+    // aramalar neredeyse bedava, yalnizca bayat/eksik olanlar cekilir. Manuel butonda 0 (hepsini tazele).
+    const skipFreshMin = isAuto ? 45 : 0;
 
     // Gorunen seferleri, listeyi besleyen AYNI mantikla (computeJourneyTracking) cikar -> panelde ne
     // goruyorsa tam onu tazeler. Gecmis seferler (kalkisi gecmis) atlanir. allFirms ise rakipler de dahil.
@@ -8714,7 +8719,7 @@ app.post("/api/obilet/journey-tracking/refresh-occupancy", requireAuth, async (r
         obiletScanPauseUntil = Date.now() + 180000;
         renewObiletLock();
         try {
-          const written = await occupancyForHatDate(target, routeId, ops, g.date, opKey, null, allFirms, perDateCap);
+          const written = await occupancyForHatDate(target, routeId, ops, g.date, opKey, null, allFirms, perDateCap, skipFreshMin);
           refreshed += (written || []).length;
           doneGroups++;
         } catch (e) { console.warn(`[Rezerve Dahil Et] ${g.target_id}/${g.date} hata: ${e.message}`); }
@@ -9388,7 +9393,7 @@ const OCCUPANCY_MAX_SEFER_PER_DATE = 45;
 
 // filterOpKey/filterTime verilirse SADECE o seferi isler (admin "hemen kontrol" butonu icin).
 // Doner: [{operator,time,sold,total,occ}] yazilan seferler.
-async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = null, filterTime = null, allFirms = false, maxSefer = OCCUPANCY_MAX_SEFER_PER_DATE) {
+async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = null, filterTime = null, allFirms = false, maxSefer = OCCUPANCY_MAX_SEFER_PER_DATE, skipFreshMin = 0) {
   const browser = await getBrowserInstance();
   const page = await setupObiletPage(browser);
   const journeyItems = [];
@@ -9439,7 +9444,7 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
     }
 
     // Takip edilen operatorlerin seferleri (id + firma + saat)
-    const infos = journeyItems.map((it) => {
+    let infos = journeyItems.map((it) => {
       const dep = String(it?.journey?.departure || it?.departure || "");
       const tm = dep.match(/(\d{2}:\d{2})/);
       return { id: it?.id != null ? String(it.id) : null, firma: String(it?.["partner-name"] || "").trim(), time: tm ? tm[1] : "" };
@@ -9448,10 +9453,21 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
     // ayni oldugu icin yuk taviani degismez (tarih basi <=OCCUPANCY_MAX_SEFER_PER_DATE cekim).
     }).filter((x) => x.id && x.time && (allFirms || ops.some((op) => isObiletOperatorMatch(op, x.firma))))
       .filter((x) => (!filterTime || x.time === filterTime) &&
-        (!filterOpKey || x.firma.toLocaleLowerCase("tr-TR").includes(filterOpKey)))
-      .slice(0, maxSefer);
+        (!filterOpKey || x.firma.toLocaleLowerCase("tr-TR").includes(filterOpKey)));
 
-    if (!infos.length) { console.log(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso}: takip edilen sefer yok.`); return []; }
+    // TAZE-ATLA: talep-aninda otomatik tazelemede (skipFreshMin>0), DB'de zaten TAZE 'gercek' dolulugu olan
+    // seferleri tekrar CEKME -> tekrar aramalar neredeyse bedava; yalnizca bayat/eksik olanlar cekilir.
+    if (skipFreshMin > 0) {
+      try {
+        const rows = db.prepare("SELECT operator, departure_time, last_updated FROM obilet_occupancy WHERE target_id=? AND journey_date=? AND source='gercek'").all(target.id, dateIso);
+        const fresh = new Set();
+        for (const r of rows) if (!isOccStale(r.last_updated, skipFreshMin)) fresh.add(`${(normalizeObiletOperatorName(r.operator) || r.operator || "").toLocaleLowerCase("tr-TR")}|${r.departure_time}`);
+        if (fresh.size) infos = infos.filter((x) => !fresh.has(`${(normalizeObiletOperatorName(x.firma) || x.firma || "").toLocaleLowerCase("tr-TR")}|${x.time}`));
+      } catch (e) {}
+    }
+    infos = infos.slice(0, maxSefer);
+
+    if (!infos.length) { console.log(`[Doluluk İşçisi] ${target.origin}->${target.destination} ${dateIso}: cekilecek (bayat/eksik) sefer yok.`); return []; }
 
     // Seferleri oku: TIKLAMASIZ dogrudan POST (/json/sefer/{id}, body "{}") — fetchSeferRealSeats. Sefer id
     // ile DOGRUDAN cekildigi icin eski "yanlis otobus" riski YOK. Cloudflare burst'unu onlemek icin arada bekleme
