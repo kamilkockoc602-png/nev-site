@@ -4581,6 +4581,65 @@ async function initObiletPanel() {
     bulkBtn.dataset.wired = "1";
     bulkBtn.addEventListener("click", openBulkDatesModal);
   }
+  // Arama kutusu: yaz-anlik istemci filtresi (oBilet istegi yok) — kartlari yeniden ciz.
+  const search = document.getElementById("obiletSearch");
+  if (search && !search.dataset.wired) {
+    search.dataset.wired = "1";
+    search.addEventListener("input", () => {
+      const listEl = document.getElementById("obiletTargetsList");
+      if (listEl) renderObiletTargetCards(listEl);
+    });
+  }
+  // Bakim Modu butonu (admin): tum oBilet taramasini duraklat/devam.
+  const maintBtn = document.getElementById("obiletMaintBtn");
+  if (maintBtn && !maintBtn.dataset.wired) {
+    maintBtn.dataset.wired = "1";
+    maintBtn.addEventListener("click", () => toggleObiletMaintenance());
+  }
+  // Tarama Sağlığı şeridi: 15sn'de bir /scan-health (salt-okuma). Menuden cikinca durdurulur.
+  obiletStartHealthPoll();
+}
+
+// TARAMA SAĞLIĞI: /scan-health'i cek + serit + son loglari ciz. 15sn'de bir.
+let __obiletHealthTimer = null;
+async function refreshObiletScanHealth() {
+  const el = document.getElementById("obiletScanHealth");
+  if (!el) { if (__obiletHealthTimer) { clearInterval(__obiletHealthTimer); __obiletHealthTimer = null; } return; }
+  const panel = document.getElementById("panelObiletTracker");
+  if (panel && panel.classList.contains("hidden")) return; // menu aktif degil -> bosuna istek atma
+  let h;
+  try { h = await apiFetch("/api/obilet/scan-health"); } catch { el.innerHTML = `<span style="opacity:.6">Durum alınamadı.</span>`; return; }
+  const chip = (txt, col) => `<span style="background:${col};color:#fff;border-radius:8px;padding:1px 8px;">${txt}</span>`;
+  const parts = [];
+  if (h.maintenance) parts.push(chip("BAKIM MODU (durduruldu)", "#c0392b"));
+  else if (h.rateLimitedForSec > 0) parts.push(chip(`Rate-limit soğuması ${h.rateLimitedForSec}sn`, "#e67e22"));
+  else if (h.pausedForSec > 0) parts.push(chip(`Öncelikli iş için park (${h.pausedForSec}sn)`, "#8e44ad"));
+  else if (h.running) parts.push(chip(`Tarama çalışıyor${h.lockHeldSec ? " (" + h.lockHeldSec + "sn)" : ""}`, "#1e7e34"));
+  else parts.push(chip("Boşta (sırada bekliyor)", "#34506e"));
+  if (h.occupancyRunning) parts.push(`<span style="opacity:.8">doluluk işçisi aktif</span>`);
+  if (h.queueLen > 0) parts.push(`<span style="opacity:.8">kuyruk: ${h.queueLen}</span>`);
+  if (h.blockStreak > 0) parts.push(`<span style="color:#e67e22">429 serisi: ${h.blockStreak}</span>`);
+  parts.push(`<span style="opacity:.6">tur aralığı ~${h.intervalMin}dk</span>`);
+  const logs = (h.logs || []).slice(-8).reverse().map(l => `<div style="opacity:.75;">${escapeHtml((l.line || "").slice(0, 140))}</div>`).join("");
+  el.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:.5rem .9rem;align-items:center;">${parts.join(" ")}</div>${logs ? `<details style="margin-top:.4rem;"><summary style="cursor:pointer;opacity:.8;">son tarama logları</summary><div style="font-family:monospace;font-size:.72rem;margin-top:.3rem;max-height:180px;overflow:auto;">${logs}</div></details>` : ""}`;
+  // Bakim butonu etiketini durumla esitle.
+  const mb = document.getElementById("obiletMaintBtn");
+  if (mb) mb.textContent = h.maintenance ? "Bakımı Kapat (devam)" : "Bakım Modu";
+}
+function obiletStartHealthPoll() {
+  if (__obiletHealthTimer) clearInterval(__obiletHealthTimer);
+  refreshObiletScanHealth();
+  __obiletHealthTimer = setInterval(refreshObiletScanHealth, 15000);
+}
+async function toggleObiletMaintenance() {
+  let cur = false;
+  try { const h = await apiFetch("/api/obilet/scan-health"); cur = !!h.maintenance; } catch {}
+  const next = !cur;
+  if (next && !confirm("Bakım modu: TÜM oBilet taraması duracak (fiyat + doluluk). Devam?")) return;
+  try {
+    await apiFetch("/api/obilet/maintenance", { method: "POST", body: JSON.stringify({ paused: next }) });
+    refreshObiletScanHealth();
+  } catch (err) { alert("Ayarlanamadı: " + (err.message || "")); }
 }
 
 function openBulkDatesModal() {
@@ -4602,6 +4661,12 @@ function openBulkDatesModal() {
         <label style="display:flex;flex-direction:column;gap:0.3rem;"><span>Başlangıç</span><input id="obDateStart" type="date" value="${defStart}" /></label>
         <label style="display:flex;flex-direction:column;gap:0.3rem;"><span>Bitiş</span><input id="obDateEnd" type="date" value="${defEnd}" /></label>
       </div>
+      <div style="display:flex;gap:.4rem;margin-top:.6rem;flex-wrap:wrap;">
+        <span style="opacity:.7;font-size:.82rem;align-self:center;">Hızlı:</span>
+        <button type="button" class="btn btn-sm btn-ghost ob-preset" data-days="7">Bugün +7g</button>
+        <button type="button" class="btn btn-sm btn-ghost ob-preset" data-days="14">+14g</button>
+        <button type="button" class="btn btn-sm btn-ghost ob-preset" data-days="30">+30g</button>
+      </div>
       <p id="obBulkMsg" style="min-height:1.2em;margin:0.7rem 0;"></p>
       <div style="display:flex;gap:0.6rem;justify-content:flex-end;">
         <button id="obBulkCancel" class="btn btn-ghost" type="button">İptal</button>
@@ -4612,6 +4677,14 @@ function openBulkDatesModal() {
   const close = () => backdrop.remove();
   backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
   document.getElementById("obBulkCancel").addEventListener("click", close);
+  // Tarih preset: bugün → bugün+N gün (item 8).
+  backdrop.querySelectorAll(".ob-preset").forEach((b) => b.addEventListener("click", () => {
+    const days = parseInt(b.dataset.days, 10) || 7;
+    const iso = (d) => d.toISOString().slice(0, 10);
+    const end = new Date(); end.setDate(end.getDate() + days);
+    document.getElementById("obDateStart").value = iso(new Date());
+    document.getElementById("obDateEnd").value = iso(end);
+  }));
   document.getElementById("obBulkSave").addEventListener("click", async () => {
     const date = document.getElementById("obDateStart").value;
     const endDate = document.getElementById("obDateEnd").value;
@@ -6366,6 +6439,62 @@ function openObiletEditModal(t) {
   });
 }
 
+// "DD.MM.YYYY HH:mm:ss" -> kac dakika once (tazelik noktasi rengi icin). Parse edilemezse null.
+function obiletAgeMin(s) {
+  const m = /^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}):(\d{2}):(\d{2})$/.exec(String(s || "").trim());
+  if (!m) return null;
+  const d = new Date(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]);
+  return Math.max(0, Math.round((Date.now() - d.getTime()) / 60000));
+}
+// Ust ozet seridi: hatlarin tazelik dagilimi (yesil/sari/kirmizi/pasif).
+function obiletRenderSummary(all) {
+  const el = document.getElementById("obiletSummary");
+  if (!el) return;
+  let green = 0, yellow = 0, red = 0, passive = 0;
+  for (const t of all) {
+    if (!t.is_active) { passive++; continue; }
+    const err = /hata|bulunamadi|alinmadi/i.test(String(t.last_sync_status || ""));
+    const age = obiletAgeMin(t.last_sync_at);
+    if (err || age == null || age > 120) red++;
+    else if (age > 30) yellow++;
+    else green++;
+  }
+  el.innerHTML = `<span title="son 30dk içinde taranmış">🟢${green}</span> · <span title="30dk-2s">🟡${yellow}</span> · <span title="2s+ veya hatalı">🔴${red}</span>${passive ? ` · <span title="pasif" style="opacity:.7">⏸${passive}</span>` : ""} / ${all.length} hat`;
+}
+
+// Ekleme formunda Kalkis/Varis yazilinca route_id'yi YEREL istasyon haritasindan otomatik coz (oBilet istegi
+// yok) + kutuya doldur (bosaltiysa) + rozet goster. (item 3 — elle route_id girme derdini bitirir.)
+function obiletBindRouteResolve(row) {
+  const oEl = row.querySelector(".obilet-origin");
+  const dEl = row.querySelector(".obilet-destination");
+  const rEl = row.querySelector(".obilet-route-id");
+  if (!oEl || !dEl || !rEl || rEl.dataset.resolveWired) return;
+  rEl.dataset.resolveWired = "1";
+  const resolve = async () => {
+    const o = oEl.value.trim(), d = dEl.value.trim();
+    if (!o || !d) return;
+    let hint = rEl.parentElement && rEl.parentElement.querySelector(".obilet-route-hint");
+    if (!hint && rEl.parentElement) {
+      hint = document.createElement("div");
+      hint.className = "obilet-route-hint";
+      hint.style.cssText = "font-size:.72rem;margin-top:2px;";
+      rEl.parentElement.appendChild(hint);
+    }
+    try {
+      const r = await apiFetch(`/api/obilet/resolve-route?origin=${encodeURIComponent(o)}&destination=${encodeURIComponent(d)}`);
+      if (r.routeId) {
+        if (!rEl.value.trim()) rEl.value = r.routeId;
+        if (hint) { hint.style.color = "#2ecc71"; hint.textContent = `route_id çözüldü: ${r.routeId}`; }
+      } else if (hint) {
+        hint.style.color = "#e67e22";
+        hint.textContent = "route_id otomatik çözülemedi — bilinmeyen şehir, elle girin.";
+      }
+    } catch { /* sessiz */ }
+  };
+  oEl.addEventListener("change", resolve);
+  dEl.addEventListener("change", resolve);
+}
+
 async function renderObiletTargets() {
   const listEl = document.getElementById("obiletTargetsList");
   if (!listEl) return;
@@ -6381,6 +6510,13 @@ async function renderObiletTargets() {
 }
 
 function renderObiletTargetCards(listEl) {
+  // Ust ozet seridi (tum hatlar uzerinden) + arama filtresi (goruntulenen liste).
+  obiletRenderSummary(obiletState.targets || []);
+  const q = (document.getElementById("obiletSearch")?.value || "").toLocaleLowerCase("tr-TR").trim();
+  const list = q
+    ? (obiletState.targets || []).filter(t => `${t.origin} ${t.destination} ${t.operators}`.toLocaleLowerCase("tr-TR").includes(q))
+    : (obiletState.targets || []);
+
   if (!obiletState.targets.length) {
     listEl.innerHTML = `
       <div class="obilet-empty">
@@ -6389,9 +6525,13 @@ function renderObiletTargetCards(listEl) {
       </div>`;
     return;
   }
+  if (!list.length) {
+    listEl.innerHTML = `<div class="obilet-empty"><p>"${escapeHtml(q)}" ile eşleşen hat yok.</p></div>`;
+    return;
+  }
 
   const isAdmin = !!(state.currentUser && state.currentUser.isAdmin);
-  listEl.innerHTML = obiletState.targets.map(t => {
+  listEl.innerHTML = list.map(t => {
     const dateFormatted = (t.date || "").split("-").reverse().join(".");
     const endDateFormatted = ((t.end_date || t.date) || "").split("-").reverse().join(".");
     const periodLabel = endDateFormatted && endDateFormatted !== dateFormatted
@@ -6402,13 +6542,18 @@ function renderObiletTargetCards(listEl) {
     const syncStatus = String(t.last_sync_status || "").trim();
     const syncAt = String(t.last_sync_at || "").trim();
     const statusClass = /hata|bulunamadi|alinmadi/i.test(syncStatus) ? "obilet-passive" : "obilet-active";
+    // Tazelik noktasi: pasif=gri, hata veya >2s/hiç=kırmızı, 30dk-2s=sarı, <30dk=yeşil.
+    const _err = /hata|bulunamadi|alinmadi/i.test(syncStatus);
+    const _age = obiletAgeMin(syncAt);
+    const _dotCol = !t.is_active ? "#6b7280" : (_err || _age == null || _age > 120) ? "#e74c3c" : _age > 30 ? "#f1c40f" : "#2ecc71";
+    const _dot = `<span title="${syncAt ? "son tarama: " + (relativeTime(syncAt) || syncAt) : "henüz taranmadı"}" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${_dotCol};margin-right:7px;vertical-align:middle;"></span>`;
     return `
       <div class="obilet-target-card" data-id="${t.id}">
         <div class="obilet-card-header">
           <div class="obilet-card-route">
             <span class="obilet-route-icon"></span>
             <div>
-              <strong>${t.origin.toUpperCase()} - ${t.destination.toUpperCase()}</strong>
+              <strong>${_dot}${t.origin.toUpperCase()} - ${t.destination.toUpperCase()}</strong>
               <span class="obilet-date-badge">${periodLabel}</span>
             </div>
           </div>
@@ -6419,6 +6564,7 @@ function renderObiletTargetCards(listEl) {
             <button class="btn btn-sm btn-ghost obilet-edit-btn" data-id="${t.id}" title="Düzenle">Düzenle</button>
             <button class="btn btn-sm btn-success obilet-excel-btn" data-id="${t.id}" title="Excel İndir">Excel</button>
             <button class="btn btn-sm btn-ghost obilet-expand-btn" data-id="${t.id}" title="Fiyatları Göster">Fiyatlar</button>
+            <button class="btn btn-sm ${t.is_active ? 'btn-ghost' : 'btn-primary'} obilet-active-btn" data-id="${t.id}" data-active="${t.is_active ? 1 : 0}" title="${t.is_active ? 'Geçici pasife al (veri korunur, taranmaz)' : 'Tekrar aktif et'}">${t.is_active ? 'Pasife Al' : 'Aktif Et'}</button>
             <button class="btn btn-sm btn-danger obilet-delete-btn" data-id="${t.id}" title="Sil">Sil</button>
           </div>
         </div>
@@ -6431,7 +6577,8 @@ function renderObiletTargetCards(listEl) {
             ${t.is_active ? 'Aktif' : 'Pasif'}
           </span>
           <span class="obilet-tag ${statusClass}">${syncStatus || "Henüz kontrol edilmedi"}</span>
-          ${syncAt ? `<span class="obilet-tag">${syncAt}</span>` : ""}
+          ${syncAt ? `<span class="obilet-tag" title="${relativeTime(syncAt) || ""}">${syncAt}</span>` : ""}
+          ${t.undercut_count > 0 ? `<span class="obilet-tag" style="background:#c0392b;color:#fff;" title="rakip Kamil Koç'un fiyat altına indi olayları (son dönem)">Rekabet baskısı: ${t.undercut_count} undercut</span>` : ""}
         </div>
         <div class="obilet-prices-area hidden" id="pricesArea-${t.id}">
           <div class="obilet-loading">Fiyatlar yükleniyor...</div>
@@ -6440,6 +6587,22 @@ function renderObiletTargetCards(listEl) {
   }).join("");
 
   // Event listeners
+  // Tek-tik "Geçici Pasife Al / Aktif Et" (hafif is_active toggle; veri korunur, silme riski yok).
+  listEl.querySelectorAll(".obilet-active-btn").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.id;
+      const makeActive = btn.dataset.active === "0"; // su an pasifse aktif et, aktifse pasife al
+      btn.disabled = true;
+      try {
+        await apiFetch(`/api/obilet/targets/${id}/active`, { method: "POST", body: JSON.stringify({ isActive: makeActive }) });
+        await renderObiletTargets();
+      } catch (err) {
+        btn.disabled = false;
+        alert("Değiştirilemedi: " + (err.message || ""));
+      }
+    });
+  });
   listEl.querySelectorAll(".obilet-delete-btn").forEach(btn => {
     btn.addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -6726,6 +6889,7 @@ function setupObiletForm() {
   const initRow = (row) => {
     bindRowDateSync(row);
     setupObiletOperatorPicker(row);
+    obiletBindRouteResolve(row); // Kalkis/Varis girilince route_id'yi otomatik coz + onizle (item 3)
     const removeBtn = row.querySelector(".obilet-remove-row");
     if (removeBtn) {
       removeBtn.addEventListener("click", () => {
@@ -6800,6 +6964,17 @@ function setupObiletForm() {
         operators,
         emailNotifications: emails,
       });
+    }
+
+    // KOPYA-HAT UYARISI (item 6): ayni Kalkis+Varis zaten izleniyorsa onayla — cift/olu hat sismesini onler.
+    const _norm = (s) => String(s || "").toLocaleLowerCase("tr-TR").trim();
+    const dupWarn = [];
+    for (const p of payloads) {
+      const hit = (obiletState.targets || []).find((t) => _norm(t.origin) === _norm(p.origin) && _norm(t.destination) === _norm(p.destination));
+      if (hit) dupWarn.push(`${p.origin} → ${p.destination} (zaten izleniyor #${hit.id})`);
+    }
+    if (dupWarn.length && !confirm(`Bu hat(lar) zaten izleniyor:\n- ${dupWarn.join("\n- ")}\n\nYine de eklensin mi?`)) {
+      return;
     }
 
     try {

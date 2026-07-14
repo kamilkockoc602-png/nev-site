@@ -6944,6 +6944,28 @@ function renewObiletLock() {
   if (obiletTaskRunning) obiletLockAcquiredAt = Date.now();
 }
 
+// ==== oBilet Takip paneli: Bakim Modu + tarama-log ring buffer (salt-okuma "Tarama Sağlığı" seridi icin) ====
+// Bakim Modu: true iken fiyat taramasi VE doluluk isçisi YENI TUR baslatmaz (calisan tur guvenle biter) —
+// 429/deploy aninda tum oBilet trafigini kesen kill-switch; yuku AZALTIR, cekirdek mantiga dokunmaz.
+let obiletMaintenancePaused = false;
+// Son N oBilet log satiri — panelde Railway'e gitmeden gormek icin. console.log'u tee'leyip oBilet-etiketli
+// satirlari bounded bir diziye yazar (orijinal log aynen calisir).
+const __obiletLogBuf = [];
+const OBILET_LOG_BUF_MAX = 80;
+(() => {
+  const orig = console.log.bind(console);
+  console.log = (...args) => {
+    orig(...args);
+    try {
+      const line = args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ");
+      if (/^\s*\[(Takip Görevi|oBilet|Öncelikli|Manuel|Doluluk|Undercut|Rezerve|SeatProbe|Yapi Diff|Ana Sefer|Talep)/i.test(line)) {
+        __obiletLogBuf.push({ t: nowStamp(), line: line.slice(0, 300) });
+        if (__obiletLogBuf.length > OBILET_LOG_BUF_MAX) __obiletLogBuf.shift();
+      }
+    } catch (e) { /* log tee asla akisi bozmasin */ }
+  };
+})();
+
 // "DD.MM.YYYY HH:mm:ss" -> ms (TZ-notr; yalnizca FARK icin, iki damga ayni frame'de). Parse edilemezse NaN.
 function occStampToMs(ts) {
   // Ayrac boşluk VEYA virgül olabilir (ICU tr-TR bazı sürümlerde "12.07.2026, 22:44:16" verebilir) — [\s,]+ ile tolere et.
@@ -7131,6 +7153,11 @@ function captureStructureSnapshot(target, journeyDate, journeys) {
 
 // oBilet Fiyat Senkronizasyonu Arka Plan Görevi (Tüm Hatlar)
 async function refreshObiletPricesTask() {
+  // BAKIM MODU: acikken yeni tur baslatma (calisan tur guvenle biter). oBilet trafigini kesen kill-switch.
+  if (obiletMaintenancePaused) {
+    console.log(`[Takip Görevi] Bakım modu açık — tarama atlandı.`);
+    return;
+  }
   // Eğer başka bir task çalışıyorsa atla
   if (obiletTaskRunning) {
     console.log(`[Takip Görevi] Zaten bir task çalışıyor, bu çalıştırma atlanıyor.`);
@@ -7230,9 +7257,81 @@ async function refreshObiletPricesTask() {
 app.get("/api/obilet/targets", requireAuth, (req, res) => {
   try {
     const targets = db.prepare("SELECT * FROM obilet_targets ORDER BY id DESC").all();
+    // Her hat icin undercut sayisi (risk vurgusu) — obilet_structure_changes'ten (rakip KK altina indi olaylari).
+    try {
+      const uc = db.prepare("SELECT target_id, COUNT(*) AS c FROM obilet_structure_changes WHERE change_type='undercut' GROUP BY target_id").all();
+      const m = new Map(uc.map((r) => [r.target_id, r.c]));
+      for (const t of targets) t.undercut_count = m.get(t.id) || 0;
+    } catch (e) { /* tablo yoksa yok say */ }
     res.json({ ok: true, targets });
   } catch (error) {
     res.status(500).json({ message: error.message || "Liste alinamadi." });
+  }
+});
+
+// oBilet Takip: TARAMA SAGLIGI (salt-okuma) — panel ust seridi icin. oBilet istegi YOK.
+app.get("/api/obilet/scan-health", requireAuth, (req, res) => {
+  try {
+    const now = Date.now();
+    res.json({
+      ok: true,
+      running: !!obiletTaskRunning,
+      maintenance: !!obiletMaintenancePaused,
+      occupancyRunning: !!occupancyWorkerRunning,
+      lockHeldSec: obiletLockAcquiredAt ? Math.round((now - obiletLockAcquiredAt) / 1000) : 0,
+      pausedForSec: obiletScanPauseUntil > now ? Math.round((obiletScanPauseUntil - now) / 1000) : 0,
+      rateLimitedForSec: (typeof __obiletSeatRateLimitedUntil !== "undefined" && __obiletSeatRateLimitedUntil > now) ? Math.round((__obiletSeatRateLimitedUntil - now) / 1000) : 0,
+      blockStreak: (typeof __obiletSeatBlockStreak !== "undefined") ? __obiletSeatBlockStreak : 0,
+      queueLen: Array.isArray(obiletPriorityQueue) ? obiletPriorityQueue.length : 0,
+      pendingFullRefresh: !!obiletPendingFullRefresh,
+      intervalMin: Math.round((OBILET_CHECK_INTERVAL_MS || 0) / 60000),
+      logs: __obiletLogBuf.slice(-30),
+      serverNow: nowStamp(),
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Durum alinamadi." });
+  }
+});
+
+// oBilet Takip: BAKIM MODU ac/kapat (admin) — tum oBilet taramasini durdurur/devam ettirir.
+app.post("/api/obilet/maintenance", requireAuth, requireAdmin, (req, res) => {
+  try {
+    obiletMaintenancePaused = !!(req.body && req.body.paused);
+    console.log(`[oBilet] Bakım modu ${obiletMaintenancePaused ? "AÇILDI (tarama durduruldu)" : "KAPANDI (tarama devam)"}.`);
+    res.json({ ok: true, maintenance: obiletMaintenancePaused });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Ayarlanamadi." });
+  }
+});
+
+// oBilet Takip: route_id'yi sehir adlarindan CANLI coz (salt-okuma, yerel istasyon haritasi — oBilet istegi YOK).
+app.get("/api/obilet/resolve-route", requireAuth, (req, res) => {
+  try {
+    const origin = String(req.query.origin || "").trim();
+    const destination = String(req.query.destination || "").trim();
+    if (!origin || !destination) return res.json({ ok: true, routeId: null, reason: "eksik" });
+    const routeId = buildObiletRouteIdLocal(origin, destination);
+    res.json({
+      ok: true, routeId: routeId || null,
+      originId: findObiletStationIdLocal(origin) || null,
+      destId: findObiletStationIdLocal(destination) || null,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Çözülemedi." });
+  }
+});
+
+// oBilet Takip: HAFIF is_active toggle (tek-tik "Geçici Pasife Al") — full PATCH gerektirmeden.
+app.post("/api/obilet/targets/:id/active", requireAuth, (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const t = db.prepare("SELECT id FROM obilet_targets WHERE id = ?").get(id);
+    if (!t) return res.status(404).json({ message: "Hat bulunamadi." });
+    const isActive = (req.body && req.body.isActive) ? 1 : 0;
+    db.prepare("UPDATE obilet_targets SET is_active = ? WHERE id = ?").run(isActive, id);
+    res.json({ ok: true, isActive });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Ayarlanamadi." });
   }
 });
 
@@ -9598,6 +9697,7 @@ async function occupancyForHatDate(target, routeId, ops, dateIso, filterOpKey = 
 }
 
 async function runOccupancyWorker() {
+  if (obiletMaintenancePaused) return; // Bakim modu: doluluk isçisi de yeni tur baslatmaz.
   if (!OCCUPANCY_WORKER_ENABLED || occupancyWorkerRunning) return;
   // GUNCEL (2026-07, 429 rate-limit fixi sonrasi): Fiyat taramasi artik hatlar arasindaki 20sn'lik
   // Cloudflare beklemesinde kilidi GECICI BIRAKIYOR (bkz. refreshObiletPricesTask) — bu isci VE Ana

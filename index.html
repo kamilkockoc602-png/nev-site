@@ -570,9 +570,17 @@
           </section>
 
           <section>
+            <!-- TARAMA SAĞLIĞI ŞERİDİ (salt-okuma; oBilet'e istek yok, 15sn'de bir yenilenir) -->
+            <div id="obiletScanHealth" class="obilet-health-strip" style="display:flex;flex-wrap:wrap;align-items:center;gap:.5rem .9rem;font-size:.82rem;padding:.5rem .7rem;margin-bottom:.6rem;border:1px solid rgba(127,127,127,.25);border-radius:8px;">
+              <span style="opacity:.7;">Tarama durumu yükleniyor…</span>
+            </div>
             <div style="display:flex;justify-content:space-between;align-items:center;gap:0.8rem;flex-wrap:wrap;">
-              <h5 style="margin:0;">Takip Listesi</h5>
-              <button id="obiletBulkDatesBtn" class="btn btn-sm btn-ghost" type="button" title="Tüm hatların tarih aralığını birlikte güncelle">Toplu Tarih Güncelle</button>
+              <h5 style="margin:0;">Takip Listesi <span id="obiletSummary" style="font-size:.8rem;font-weight:400;opacity:.85;margin-left:.5rem;"></span></h5>
+              <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
+                <input id="obiletSearch" type="text" placeholder="Hat / firma ara…" autocomplete="off" style="padding:.35rem .6rem;border-radius:6px;min-width:180px;" />
+                <button id="obiletMaintBtn" class="btn btn-sm btn-ghost" type="button" title="Tüm oBilet taramasını duraklat/başlat (bakım modu)">Bakım Modu</button>
+                <button id="obiletBulkDatesBtn" class="btn btn-sm btn-ghost" type="button" title="Tüm hatların tarih aralığını birlikte güncelle">Toplu Tarih Güncelle</button>
+              </div>
             </div>
             <div id="obiletTargetsList" class="obilet-targets-list">
               <div class="obilet-empty">Takip listesi yukleniyor...</div>
