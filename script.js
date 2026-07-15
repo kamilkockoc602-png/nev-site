@@ -4620,7 +4620,7 @@ async function refreshObiletScanHealth() {
   if (h.occupancyRunning) parts.push(`<span style="opacity:.8">doluluk işçisi aktif</span>`);
   if (h.queueLen > 0) parts.push(`<span style="opacity:.8">kuyruk: ${h.queueLen}</span>`);
   if (h.blockStreak > 0) parts.push(`<span style="color:#e67e22">429 serisi: ${h.blockStreak}</span>`);
-  parts.push(`<span style="opacity:.6">tur aralığı ~${h.intervalMin}dk</span>`);
+  parts.push(`<span style="opacity:.6" title="tüm hatların bir kez taranması ~ bu süre; kontrol ${h.intervalMin}dk'da bir tetiklenir">tam tur ~${obiletCycleMin()}dk</span>`);
   const logs = (h.logs || []).slice(-8).reverse().map(l => `<div style="opacity:.75;">${escapeHtml((l.line || "").slice(0, 140))}</div>`).join("");
   el.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:.5rem .9rem;align-items:center;">${parts.join(" ")}</div>${logs ? `<details style="margin-top:.4rem;"><summary style="cursor:pointer;opacity:.8;">son tarama logları</summary><div style="font-family:monospace;font-size:.72rem;margin-top:.3rem;max-height:180px;overflow:auto;">${logs}</div></details>` : ""}`;
   // Bakim butonu etiketini durumla esitle.
@@ -6449,20 +6449,42 @@ function obiletAgeMin(s) {
   const ms = Date.UTC(+m[3], +m[2] - 1, +m[1], +m[4], +m[5], +m[6]) - 3 * 3600 * 1000;
   return Math.max(0, Math.round((Date.now() - ms) / 60000));
 }
-// Ust ozet seridi: hatlarin tazelik dagilimi (yesil/sari/kirmizi/pasif).
+// Tahmini TAM TUR süresi (dk): aktif hatların gün sayılarıyla ~10sn/gün + 20sn/hat. Tazelik eşikleri sabit
+// 30/120 yerine BUNA göre — çünkü tur süresi hat sayısı+aralığa göre değişir (28 hat ≈ 47 dk).
+function obiletCycleMin() {
+  const perHat = (t) => {
+    let days = 9;
+    const a = Date.parse(t.date), b = Date.parse(t.end_date || t.date);
+    if (Number.isFinite(a) && Number.isFinite(b)) days = Math.max(1, Math.round((b - a) / 86400000) + 1);
+    return days * 10 + 20;
+  };
+  const sec = (obiletState.targets || []).filter((t) => t.is_active).reduce((s, t) => s + perHat(t), 0);
+  return Math.max(10, Math.min(240, Math.round(sec / 60)));
+}
+// Tazelik sınıfı: eşikler tahmini tam tura göre (≤1.3 tur yeşil, ≤3 tur sarı, daha eski/hata kırmızı).
+function obiletFreshClass(t) {
+  if (!t.is_active) return "pasif";
+  const err = /hata|bulunamadi|alinmadi/i.test(String(t.last_sync_status || ""));
+  const age = obiletAgeMin(t.last_sync_at);
+  if (err || age == null) return "kirmizi";
+  const c = obiletCycleMin();
+  if (age <= Math.round(c * 1.3)) return "yesil";
+  if (age <= Math.round(c * 3)) return "sari";
+  return "kirmizi";
+}
+const OBILET_FRESH_COL = { yesil: "#2ecc71", sari: "#f1c40f", kirmizi: "#e74c3c", pasif: "#6b7280" };
+
+// Ust ozet seridi: hatlarin tazelik dagilimi (tahmini tur suresine gore).
 function obiletRenderSummary(all) {
   const el = document.getElementById("obiletSummary");
   if (!el) return;
   let green = 0, yellow = 0, red = 0, passive = 0;
   for (const t of all) {
-    if (!t.is_active) { passive++; continue; }
-    const err = /hata|bulunamadi|alinmadi/i.test(String(t.last_sync_status || ""));
-    const age = obiletAgeMin(t.last_sync_at);
-    if (err || age == null || age > 120) red++;
-    else if (age > 30) yellow++;
-    else green++;
+    const c = obiletFreshClass(t);
+    if (c === "pasif") passive++; else if (c === "yesil") green++; else if (c === "sari") yellow++; else red++;
   }
-  el.innerHTML = `<span title="son 30dk içinde taranmış">🟢${green}</span> · <span title="30dk-2s">🟡${yellow}</span> · <span title="2s+ veya hatalı">🔴${red}</span>${passive ? ` · <span title="pasif" style="opacity:.7">⏸${passive}</span>` : ""} / ${all.length} hat`;
+  const cyc = obiletCycleMin();
+  el.innerHTML = `<span title="son ~1 tur içinde taranmış">🟢${green}</span> · <span title="1-3 tur önce">🟡${yellow}</span> · <span title="3+ tur / hatalı">🔴${red}</span>${passive ? ` · <span title="pasif" style="opacity:.7">⏸${passive}</span>` : ""} / ${all.length} hat · <span style="opacity:.7">tam tur ~${cyc}dk</span>`;
 }
 
 // Ekleme formunda Kalkis/Varis yazilinca route_id'yi YEREL istasyon haritasindan otomatik coz (oBilet istegi
@@ -6545,10 +6567,8 @@ function renderObiletTargetCards(listEl) {
     const syncStatus = String(t.last_sync_status || "").trim();
     const syncAt = String(t.last_sync_at || "").trim();
     const statusClass = /hata|bulunamadi|alinmadi/i.test(syncStatus) ? "obilet-passive" : "obilet-active";
-    // Tazelik noktasi: pasif=gri, hata veya >2s/hiç=kırmızı, 30dk-2s=sarı, <30dk=yeşil.
-    const _err = /hata|bulunamadi|alinmadi/i.test(syncStatus);
-    const _age = obiletAgeMin(syncAt);
-    const _dotCol = !t.is_active ? "#6b7280" : (_err || _age == null || _age > 120) ? "#e74c3c" : _age > 30 ? "#f1c40f" : "#2ecc71";
+    // Tazelik noktası: eşikler tahmini tam tura göre (obiletFreshClass) — sabit 30/120 değil.
+    const _dotCol = OBILET_FRESH_COL[obiletFreshClass(t)];
     const _dot = `<span title="${syncAt ? "son tarama: " + (relativeTime(syncAt) || syncAt) : "henüz taranmadı"}" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${_dotCol};margin-right:7px;vertical-align:middle;"></span>`;
     return `
       <div class="obilet-target-card" data-id="${t.id}">
