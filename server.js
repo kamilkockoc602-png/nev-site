@@ -2469,6 +2469,17 @@ setInterval(cleanupOldPriceHistory, 6 * 60 * 60 * 1000);
 cleanupOldPriceHistory();
 
 app.use(express.json({ limit: "25mb" }));
+// CORS: bagimsiz (file://) "Sefer Takip" HTML'inin API'ye erisebilmesi icin. GUVENLI: kimlik dogrulama
+// Bearer TOKEN ile (cookie DEGIL) yapildigindan Allow-Origin:* zafiyet yaratmaz — token olmadan hicbir
+// korumali uc calismaz, tarayici token'i otomatik gondermez (CSRF yok). Allow-Credentials KAPALI.
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  res.header("Access-Control-Max-Age", "86400");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
 app.use(express.static(__dirname));
 
 function logAttempt({ username, status, reason, ip }) {
