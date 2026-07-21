@@ -8832,6 +8832,27 @@ app.get("/api/obilet/journey-tracking", requireAuth, (req, res) => {
   }
 });
 
+// SALT-OKUMA PAYLASIM UCU: bagimsiz (file://) "Sefer Takip" HTML'i icin — GIRIS GEREKTIRMEZ, yalnizca ?k=<anahtar>
+// ile journey-tracking verisini doner (panel/admin/yazma/kimlik YOK). Anahtar env OBILET_SHARE_KEY, yoksa gomulu
+// varsayilan. Sizsa bile sadece rakip fiyat/doluluk okunur. Iptal: env'i (veya bu sabiti) degistir + deploy.
+const OBILET_SHARE_KEY = process.env.OBILET_SHARE_KEY || "kkstc_7b3f9a2c8e1d4056af2b";
+app.get("/api/obilet/journey-tracking-public", (req, res) => {
+  try {
+    if (String(req.query.k || "") !== OBILET_SHARE_KEY) {
+      return res.status(401).json({ message: "Geçersiz paylaşım anahtarı." });
+    }
+    try { db.prepare("DELETE FROM obilet_market_journeys WHERE journey_date < ?").run(shiftIsoDate(todayIsoInIstanbul(), -10)); } catch (e) {}
+    const { operators, journeys } = computeJourneyTracking({
+      date: String(req.query.date || "").trim(),
+      origin: req.query.origin, destination: req.query.destination, operator: req.query.operator,
+      allFirms: req.query.allFirms,
+    });
+    res.json({ ok: true, operators, count: journeys.length, journeys });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "Sefer takip alınamadı." });
+  }
+});
+
 // "REZERVE YOLCUYU DAHIL ET": Sefer Takip'te SU AN filtrelenen (tarih+kalkis+varis+firma) seferlerin
 // GERCEK dolulugunu (koltuk haritasi: erkek+kadin=dolu, gecis seferlerinde binmis yolcular DAHIL) HEMEN
 // hesaplar ve panele yazar. Arka plan iscisini beklemeye gerek kalmadan, yalnizca BAKILAN seferleri
